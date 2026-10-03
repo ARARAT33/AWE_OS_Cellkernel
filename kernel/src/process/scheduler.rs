@@ -2,8 +2,8 @@
 
 use super::context::ProcessContext;
 use super::context_switch::SwitchFrame;
-use super::dispatch::{prepare_dispatch, DispatchError, DispatchTarget};
-use super::x86_64_backend::{validate_backend_frames, BackendError};
+use super::dispatch::{DispatchError, DispatchTarget, prepare_dispatch};
+use super::x86_64_backend::{BackendError, validate_backend_frames};
 use super::{ProcessDescriptor, ProcessId, ProcessState};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -53,7 +53,10 @@ impl<const N: usize> Scheduler<N> {
     }
 
     pub fn enqueue(&mut self, process: &ProcessDescriptor) -> Result<(), SchedulerError> {
-        if !matches!(process.state, ProcessState::Runnable | ProcessState::Running) {
+        if !matches!(
+            process.state,
+            ProcessState::Runnable | ProcessState::Running
+        ) {
             return Err(SchedulerError::NotRunnable);
         }
         if self.len == N {
@@ -108,8 +111,7 @@ impl<const N: usize> Scheduler<N> {
             state: ProcessState::Runnable,
             budget: super::ResourceBudget::unlimited(),
         };
-        DispatchTarget::from_descriptor(&descriptor, &context.cpu)
-            .map_err(SchedulerError::Dispatch)
+        DispatchTarget::from_descriptor(&descriptor, &context.cpu).map_err(SchedulerError::Dispatch)
     }
 
     pub fn prepare_switch(

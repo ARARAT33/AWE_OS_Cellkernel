@@ -130,7 +130,10 @@ mod tests {
     fn rejects_identical_target() {
         let current = CpuContext::kernel_entry(0x1000, 0x2000, 0);
         let next = current;
-        assert_eq!(prepare_switch(&current, &next), Err(SwitchError::IdenticalTarget));
+        assert_eq!(
+            prepare_switch(&current, &next),
+            Err(SwitchError::IdenticalTarget)
+        );
     }
 
     #[test]

@@ -8,8 +8,8 @@ pub mod dispatch_runtime;
 pub mod scheduler;
 pub mod x86_64_backend;
 
-use core::sync::atomic::{AtomicU64, Ordering};
 use context::ProcessContext;
+use core::sync::atomic::{AtomicU64, Ordering};
 use dispatch::DispatchTarget;
 use scheduler::{Scheduler, SchedulerError};
 
@@ -181,7 +181,12 @@ impl<const N: usize> ProcessManager<N> {
         descriptor: ProcessDescriptor,
         context: ProcessContext,
     ) -> Result<usize, ProcessManagerError> {
-        if self.processes.iter().flatten().any(|p| p.id == descriptor.id) {
+        if self
+            .processes
+            .iter()
+            .flatten()
+            .any(|p| p.id == descriptor.id)
+        {
             return Err(ProcessManagerError::DuplicateProcess);
         }
         if !context.is_valid() {
@@ -199,7 +204,9 @@ impl<const N: usize> ProcessManager<N> {
     }
 
     pub fn make_runnable(&mut self, id: ProcessId) -> Result<(), ProcessManagerError> {
-        let index = self.find_index(id).ok_or(ProcessManagerError::InvalidProcess)?;
+        let index = self
+            .find_index(id)
+            .ok_or(ProcessManagerError::InvalidProcess)?;
         let descriptor = self.processes[index]
             .as_mut()
             .ok_or(ProcessManagerError::InvalidProcess)?;
@@ -212,7 +219,9 @@ impl<const N: usize> ProcessManager<N> {
     }
 
     pub fn mark_running(&mut self, id: ProcessId) -> Result<(), ProcessManagerError> {
-        let index = self.find_index(id).ok_or(ProcessManagerError::InvalidProcess)?;
+        let index = self
+            .find_index(id)
+            .ok_or(ProcessManagerError::InvalidProcess)?;
         let descriptor = self.processes[index]
             .as_mut()
             .ok_or(ProcessManagerError::InvalidProcess)?;
@@ -222,7 +231,9 @@ impl<const N: usize> ProcessManager<N> {
     }
 
     pub fn exit(&mut self, id: ProcessId) -> Result<(), ProcessManagerError> {
-        let index = self.find_index(id).ok_or(ProcessManagerError::InvalidProcess)?;
+        let index = self
+            .find_index(id)
+            .ok_or(ProcessManagerError::InvalidProcess)?;
         let descriptor = self.processes[index]
             .as_mut()
             .ok_or(ProcessManagerError::InvalidProcess)?;
@@ -348,10 +359,8 @@ mod tests {
     fn process_manager_registers_and_enqueues_real_contexts() {
         let mut manager: ProcessManager<4> = ProcessManager::new();
         let descriptor = descriptor();
-        let context = ProcessContext::new(
-            descriptor.id,
-            CpuContext::kernel_entry(0x1000, 0x2000, 0),
-        );
+        let context =
+            ProcessContext::new(descriptor.id, CpuContext::kernel_entry(0x1000, 0x2000, 0));
         manager.register(descriptor, context).unwrap();
         manager.make_runnable(ProcessId(1)).unwrap();
         assert_eq!(manager.len(), 1);

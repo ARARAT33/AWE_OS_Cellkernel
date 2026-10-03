@@ -192,8 +192,12 @@ impl EndUserRuntime {
         id: u16,
         caller: RuntimeContext,
     ) -> Result<RuntimeEvent, EndUserRuntimeError> {
-        let index = self.find_service(id).ok_or(EndUserRuntimeError::InvalidService)?;
-        let record = self.services[index].as_mut().ok_or(EndUserRuntimeError::InvalidService)?;
+        let index = self
+            .find_service(id)
+            .ok_or(EndUserRuntimeError::InvalidService)?;
+        let record = self.services[index]
+            .as_mut()
+            .ok_or(EndUserRuntimeError::InvalidService)?;
         caller.require(record.capabilities)?;
         match record.state {
             ServiceState::Declared | ServiceState::Failed => {
@@ -207,8 +211,12 @@ impl EndUserRuntime {
     }
 
     pub fn fail_service(&mut self, id: u16) -> Result<RuntimeEvent, EndUserRuntimeError> {
-        let index = self.find_service(id).ok_or(EndUserRuntimeError::InvalidService)?;
-        let record = self.services[index].as_mut().ok_or(EndUserRuntimeError::InvalidService)?;
+        let index = self
+            .find_service(id)
+            .ok_or(EndUserRuntimeError::InvalidService)?;
+        let record = self.services[index]
+            .as_mut()
+            .ok_or(EndUserRuntimeError::InvalidService)?;
         if record.state != ServiceState::Starting
             && record.state != ServiceState::Running
             && record.state != ServiceState::Failed
@@ -256,7 +264,9 @@ impl EndUserRuntime {
         caller: RuntimeContext,
     ) -> Result<RuntimeEvent, EndUserRuntimeError> {
         let index = self.find_app(id).ok_or(EndUserRuntimeError::InvalidApp)?;
-        let record = self.apps[index].as_mut().ok_or(EndUserRuntimeError::InvalidApp)?;
+        let record = self.apps[index]
+            .as_mut()
+            .ok_or(EndUserRuntimeError::InvalidApp)?;
         caller
             .require(record.required_capabilities)
             .map_err(EndUserRuntimeError::from)?;
@@ -272,7 +282,9 @@ impl EndUserRuntime {
 
     pub fn stop_app(&mut self, id: u16) -> Result<RuntimeEvent, EndUserRuntimeError> {
         let index = self.find_app(id).ok_or(EndUserRuntimeError::InvalidApp)?;
-        let record = self.apps[index].as_mut().ok_or(EndUserRuntimeError::InvalidApp)?;
+        let record = self.apps[index]
+            .as_mut()
+            .ok_or(EndUserRuntimeError::InvalidApp)?;
         if record.state != AppState::Running {
             return Err(EndUserRuntimeError::InvalidTransition);
         }
@@ -294,7 +306,9 @@ impl EndUserRuntime {
         if self.input_len == 0 {
             return Err(EndUserRuntimeError::InputQueueEmpty);
         }
-        let event = self.input[self.input_head].take().ok_or(EndUserRuntimeError::InputQueueEmpty)?;
+        let event = self.input[self.input_head]
+            .take()
+            .ok_or(EndUserRuntimeError::InputQueueEmpty)?;
         self.input_head = (self.input_head + 1) % MAX_INPUT_EVENTS;
         self.input_len -= 1;
         Ok(event)
@@ -309,11 +323,15 @@ impl EndUserRuntime {
     }
 
     fn find_service(&self, id: u16) -> Option<usize> {
-        self.services.iter().position(|service| service.map(|r| r.id) == Some(id))
+        self.services
+            .iter()
+            .position(|service| service.map(|r| r.id) == Some(id))
     }
 
     fn find_app(&self, id: u16) -> Option<usize> {
-        self.apps.iter().position(|app| app.map(|r| r.id) == Some(id))
+        self.apps
+            .iter()
+            .position(|app| app.map(|r| r.id) == Some(id))
     }
 }
 
@@ -355,9 +373,15 @@ mod tests {
         let mut rt = EndUserRuntime::new();
         rt.declare_service(1, CapabilitySet::IPC, 1).unwrap();
         let caller = RuntimeContext::new(CapabilitySet::IPC);
-        assert_eq!(rt.start_service(1, caller), Ok(RuntimeEvent::ServiceStarted(1)));
+        assert_eq!(
+            rt.start_service(1, caller),
+            Ok(RuntimeEvent::ServiceStarted(1))
+        );
         assert_eq!(rt.fail_service(1), Ok(RuntimeEvent::ServiceFailed(1)));
-        assert_eq!(rt.start_service(1, caller), Ok(RuntimeEvent::ServiceStarted(1)));
+        assert_eq!(
+            rt.start_service(1, caller),
+            Ok(RuntimeEvent::ServiceStarted(1))
+        );
         assert_eq!(rt.fail_service(1), Ok(RuntimeEvent::ServiceFailed(1)));
         assert_eq!(rt.fail_service(1), Ok(RuntimeEvent::ServiceQuarantined(1)));
         assert_eq!(rt.service(1).unwrap().state, ServiceState::Quarantined);
@@ -381,10 +405,32 @@ mod tests {
     #[test]
     fn input_queue_is_fifo_and_bounded() {
         let mut rt = EndUserRuntime::new();
-        rt.push_input(InputEvent::Key { code: 30, pressed: true }).unwrap();
-        rt.push_input(InputEvent::Pointer { x: 20, y: 30, buttons: 1 }).unwrap();
-        assert_eq!(rt.pop_input().unwrap(), InputEvent::Key { code: 30, pressed: true });
-        assert_eq!(rt.pop_input().unwrap(), InputEvent::Pointer { x: 20, y: 30, buttons: 1 });
+        rt.push_input(InputEvent::Key {
+            code: 30,
+            pressed: true,
+        })
+        .unwrap();
+        rt.push_input(InputEvent::Pointer {
+            x: 20,
+            y: 30,
+            buttons: 1,
+        })
+        .unwrap();
+        assert_eq!(
+            rt.pop_input().unwrap(),
+            InputEvent::Key {
+                code: 30,
+                pressed: true
+            }
+        );
+        assert_eq!(
+            rt.pop_input().unwrap(),
+            InputEvent::Pointer {
+                x: 20,
+                y: 30,
+                buttons: 1
+            }
+        );
         assert_eq!(rt.pop_input(), Err(EndUserRuntimeError::InputQueueEmpty));
     }
 
