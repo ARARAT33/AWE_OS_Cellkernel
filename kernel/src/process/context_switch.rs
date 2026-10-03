@@ -103,7 +103,7 @@ pub unsafe fn context_switch(
         unsafe {
             super::x86_64_backend::awe_x86_64_switch(current, next);
         }
-        return Ok(());
+        Ok(())
     }
 
     #[cfg(not(target_arch = "x86_64"))]
