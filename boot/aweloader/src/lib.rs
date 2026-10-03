@@ -55,6 +55,16 @@ impl LoaderState {
     }
 }
 
+/// Architecture-neutral handoff. Platform entry code must populate BootInfo
+/// before transferring control to the kernel.
+///
+/// # Safety
+/// `kernel_entry` must point to a valid AWEOS kernel entry and `info` must be
+/// valid for the lifetime required by the kernel.
+pub unsafe fn handoff(kernel_entry: extern "C" fn(*const BootInfo) -> !, info: &BootInfo) -> ! {
+    kernel_entry(info as *const BootInfo)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -78,14 +88,4 @@ mod tests {
         assert_eq!(loader.info.kernel_base, 0x0010_0000);
         assert!(loader.ready());
     }
-}
-
-/// Architecture-neutral handoff. Platform entry code must populate BootInfo
-/// before transferring control to the kernel.
-///
-/// # Safety
-/// `kernel_entry` must point to a valid AWEOS kernel entry and `info` must be
-/// valid for the lifetime required by the kernel.
-pub unsafe fn handoff(kernel_entry: extern "C" fn(*const BootInfo) -> !, info: &BootInfo) -> ! {
-    kernel_entry(info as *const BootInfo)
 }
