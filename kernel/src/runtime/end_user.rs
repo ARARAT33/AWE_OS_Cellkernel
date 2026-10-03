@@ -110,7 +110,10 @@ pub enum EndUserRuntimeError {
 
 impl From<RuntimeError> for EndUserRuntimeError {
     fn from(value: RuntimeError) -> Self {
-        Self::Core(value)
+        match value {
+            RuntimeError::CapabilityDenied => Self::CapabilityDenied,
+            other => Self::Core(other),
+        }
     }
 }
 
@@ -206,7 +209,10 @@ impl EndUserRuntime {
     pub fn fail_service(&mut self, id: u16) -> Result<RuntimeEvent, EndUserRuntimeError> {
         let index = self.find_service(id).ok_or(EndUserRuntimeError::InvalidService)?;
         let record = self.services[index].as_mut().ok_or(EndUserRuntimeError::InvalidService)?;
-        if record.state != ServiceState::Running {
+        if record.state != ServiceState::Starting
+            && record.state != ServiceState::Running
+            && record.state != ServiceState::Failed
+        {
             return Err(EndUserRuntimeError::InvalidTransition);
         }
         record.failures = record.failures.saturating_add(1);
