@@ -33,6 +33,14 @@ impl Rect {
             && py >= self.y
             && py < self.y + (self.height as i32)
     }
+
+    pub fn snap_to_grid(&mut self, grid_size: u32) {
+        if grid_size > 0 {
+            let gs = grid_size as i32;
+            self.x = ((self.x + gs / 2) / gs) * gs;
+            self.y = ((self.y + gs / 2) / gs) * gs;
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -188,6 +196,43 @@ impl Theme {
                 a: 255,
             },
             dark_mode: true,
+        }
+    }
+
+    pub const fn default_light() -> Self {
+        Self {
+            bg_color: Color {
+                r: 240,
+                g: 242,
+                b: 245,
+                a: 255,
+            },
+            window_border: Color {
+                r: 200,
+                g: 205,
+                b: 212,
+                a: 255,
+            },
+            titlebar_active: Color {
+                r: 0,
+                g: 120,
+                b: 215,
+                a: 255,
+            },
+            titlebar_inactive: Color {
+                r: 210,
+                g: 215,
+                b: 220,
+                a: 255,
+            },
+            text_color: Color::BLACK,
+            accent_color: Color {
+                r: 0,
+                g: 120,
+                b: 215,
+                a: 255,
+            },
+            dark_mode: false,
         }
     }
 }
@@ -769,6 +814,29 @@ impl Compositor {
         }
     }
 
+    pub fn apply_theme(&mut self, theme: Theme) {
+        self.theme = theme;
+        for win in self.windows.iter_mut().flatten() {
+            win.bg_color = theme.bg_color;
+        }
+    }
+
+    pub fn center_window(
+        &mut self,
+        id: WindowId,
+        screen_width: u32,
+        screen_height: u32,
+    ) -> Result<(), UiError> {
+        for win in self.windows.iter_mut().flatten() {
+            if win.id == id {
+                win.bounds.x = ((screen_width as i32) - (win.bounds.width as i32)) / 2;
+                win.bounds.y = ((screen_height as i32) - (win.bounds.height as i32)) / 2;
+                return Ok(());
+            }
+        }
+        Err(UiError::InvalidWindow)
+    }
+
     pub fn toggle_start_menu(&mut self) {
         self.start_menu_open = !self.start_menu_open;
     }
@@ -1224,6 +1292,41 @@ mod tests {
         // 'A' row 0 has bits 0x18 at cols 3 and 4 -> x = 13, 14, y = 10
         let offset_13_10 = ((10 * 100 + 13) * 4) as usize;
         assert_eq!(buf[offset_13_10], 255); // Color::WHITE b = 255
+    }
+
+    #[test]
+    fn test_theme_switching_and_window_layout() {
+        let mut c = Compositor::new();
+        assert!(c.theme.dark_mode);
+
+        let win_id = c
+            .create_window(Rect {
+                x: 0,
+                y: 0,
+                width: 400,
+                height: 300,
+            })
+            .unwrap();
+
+        c.center_window(win_id, 800, 600).unwrap();
+        let win = c.windows.iter().flatten().find(|w| w.id == win_id).unwrap();
+        assert_eq!(win.bounds.x, 200);
+        assert_eq!(win.bounds.y, 150);
+
+        let mut rect = Rect {
+            x: 13,
+            y: 27,
+            width: 100,
+            height: 100,
+        };
+        rect.snap_to_grid(10);
+        assert_eq!(rect.x, 10);
+        assert_eq!(rect.y, 30);
+
+        c.apply_theme(Theme::default_light());
+        assert!(!c.theme.dark_mode);
+        let win_after = c.windows.iter().flatten().find(|w| w.id == win_id).unwrap();
+        assert_eq!(win_after.bg_color, Theme::default_light().bg_color);
     }
 
     #[test]
