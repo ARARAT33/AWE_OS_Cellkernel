@@ -16,7 +16,7 @@ pub struct CpuContext {
 }
 impl CpuContext {
     pub const REQUIRED_RFLAGS: u64 = 1 << 1;
-    pub const ALLOWED_RFLAGS: u64 = 0x0000_0000_003f_fffd;
+    pub const ALLOWED_RFLAGS: u64 = 0x0000_0000_003f_ffff;
     pub const fn kernel_entry(rip: u64, rsp: u64, cr3: u64) -> Self {
         Self {
             rip,

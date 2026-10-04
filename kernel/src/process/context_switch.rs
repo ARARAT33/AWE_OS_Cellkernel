@@ -103,7 +103,7 @@ pub unsafe fn context_switch(
         unsafe {
             super::x86_64_backend::awe_x86_64_switch(current, next);
         }
-        return Ok(());
+        Ok(())
     }
 
     #[cfg(not(target_arch = "x86_64"))]
@@ -130,7 +130,10 @@ mod tests {
     fn rejects_identical_target() {
         let current = CpuContext::kernel_entry(0x1000, 0x2000, 0);
         let next = current;
-        assert_eq!(prepare_switch(&current, &next), Err(SwitchError::IdenticalTarget));
+        assert_eq!(
+            prepare_switch(&current, &next),
+            Err(SwitchError::IdenticalTarget)
+        );
     }
 
     #[test]

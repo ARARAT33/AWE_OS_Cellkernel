@@ -1,6 +1,6 @@
 #![no_std]
 
-use awe_boot_protocol::{validate, BootInfo};
+use awe_boot_protocol::{BootInfo, validate};
 
 use crate::boot_phase::{BootPhase, BootProgress};
 use crate::memory::PhysicalFrameAllocator;
@@ -158,21 +158,36 @@ pub extern "C" fn userspace_entry() -> ! {
     let mut compositor = Compositor::new();
     let term_win = compositor
         .create_app_window(
-            Rect { x: 40, y: 40, width: 500, height: 340 },
+            Rect {
+                x: 40,
+                y: 40,
+                width: 500,
+                height: 340,
+            },
             AppType::Terminal,
             b"AWETerminal v1.0",
         )
         .unwrap_or(awe_ayui::WindowId(1));
     let sysinfo_win = compositor
         .create_app_window(
-            Rect { x: 300, y: 100, width: 440, height: 320 },
+            Rect {
+                x: 300,
+                y: 100,
+                width: 440,
+                height: 320,
+            },
             AppType::SystemMonitor,
             b"System Information",
         )
         .unwrap_or(awe_ayui::WindowId(2));
     let about_win = compositor
         .create_app_window(
-            Rect { x: 180, y: 160, width: 360, height: 220 },
+            Rect {
+                x: 180,
+                y: 160,
+                width: 360,
+                height: 220,
+            },
             AppType::Generic,
             b"About AWEOS",
         )

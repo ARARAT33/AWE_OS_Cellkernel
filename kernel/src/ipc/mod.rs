@@ -133,7 +133,11 @@ impl<const N: usize> AuthorizedMailbox<N> {
         if self.is_full() {
             return Err(IpcError::Full);
         }
-        let index = if N == 0 { 0 } else { (self.head + self.len) % N };
+        let index = if N == 0 {
+            0
+        } else {
+            (self.head + self.len) % N
+        };
         if N == 0 {
             return Err(IpcError::Full);
         }
