@@ -1,8 +1,7 @@
 [package]
 name = "awe-app-pkgcenter"
 version = "0.1.0"
-edition = "2021"
+edition.workspace = true
 
 [dependencies]
-awe-ayui = { path = "../../services/ayui" }
-awe-nexus = { path = "../../services/nexus" }
+awe-ayui = { workspace = true }

@@ -21,7 +21,6 @@ name = "awe-app-filemanager"
 version = "0.1.0"
 dependencies = [
  "awe-ayui",
- "awe-storaged",
 ]
 
 [[package]]
@@ -29,7 +28,6 @@ name = "awe-app-pkgcenter"
 version = "0.1.0"
 dependencies = [
  "awe-ayui",
- "awe-nexus",
 ]
 
 [[package]]
@@ -37,7 +35,6 @@ name = "awe-app-recovery"
 version = "0.1.0"
 dependencies = [
  "awe-ayui",
- "awe-nexus",
 ]
 
 [[package]]
@@ -45,7 +42,6 @@ name = "awe-app-settings"
 version = "0.1.0"
 dependencies = [
  "awe-ayui",
- "awe-netd",
 ]
 
 [[package]]
@@ -53,7 +49,6 @@ name = "awe-app-sysmon"
 version = "0.1.0"
 dependencies = [
  "awe-ayui",
- "awe-nexus",
 ]
 
 [[package]]
@@ -61,7 +56,6 @@ name = "awe-app-terminal"
 version = "0.1.0"
 dependencies = [
  "awe-ayui",
- "awe-nexus",
 ]
 
 [[package]]
@@ -69,7 +63,6 @@ name = "awe-app-texteditor"
 version = "0.1.0"
 dependencies = [
  "awe-ayui",
- "awe-nexus",
 ]
 
 [[package]]
@@ -161,7 +154,6 @@ version = "0.1.0"
 dependencies = [
  "ed25519-dalek",
  "hmac",
- "sha1",
  "sha2",
 ]
 
@@ -429,17 +421,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 3.0.3",
-]
-
-[[package]]
-name = "sha1"
-version = "0.11.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "aacc4cc499359472b4abe1bf11d0b12e688af9a805fa5e3016f9a386dc2d0214"
-dependencies = [
- "cfg-if",
- "cpufeatures",
- "digest",
 ]
 
 [[package]]

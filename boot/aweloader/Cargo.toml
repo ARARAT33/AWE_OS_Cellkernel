@@ -1,8 +1,8 @@
 [package]
 name = "aweloader"
 version = "0.1.0"
-edition = "2024"
+edition.workspace = true
 publish = false
 
 [dependencies]
-awe-boot-protocol = { path = "../protocol" }
+awe-boot-protocol = { workspace = true }

@@ -1,20 +1,20 @@
 [package]
 name = "awe-product-core-tests"
 version = "0.1.0"
-edition = "2024"
+edition.workspace = true
 publish = false
 
-[dependencies]
-awe-driverd = { path = "../../services/driverd" }
-awe-appd = { path = "../../services/appd" }
-awe-update = { path = "../../services/update" }
-awe-ayui = { path = "../../services/ayui" }
-awe-identityd = { path = "../../services/identityd" }
-awe-initd = { path = "../../services/initd" }
-awe-nexus = { path = "../../services/nexus" }
-awe-netd = { path = "../../services/netd" }
-awe-storaged = { path = "../../services/storaged" }
-awe-securityd = { path = "../../services/securityd" }
+[dev-dependencies]
+awe-driverd = { workspace = true }
+awe-appd = { workspace = true }
+awe-update = { workspace = true }
+awe-ayui = { workspace = true }
+awe-identityd = { workspace = true }
+awe-initd = { workspace = true }
+awe-nexus = { workspace = true }
+awe-netd = { workspace = true }
+awe-storaged = { workspace = true }
+awe-securityd = { workspace = true }
 aweos-kernel = { path = "../../kernel" }
 awe-app-pkgcenter = { path = "../../apps/pkgcenter" }
 awe-app-filemanager = { path = "../../apps/filemanager" }
