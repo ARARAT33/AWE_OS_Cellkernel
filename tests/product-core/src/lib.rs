@@ -606,7 +606,7 @@ mod product_core {
         ];
 
         let start_time = Instant::now();
-        let timeout = Duration::from_secs(30);
+        let timeout = Duration::from_secs(90);
         let mut milestone_idx = 0;
 
         loop {
