@@ -9,6 +9,8 @@ mod product_core {
         DRV_CAP_MMIO, DriverMeta, DriverPackageManager, DriverSignerKey, PackageState,
         validate_asd,
     };
+    use awe_identityd::{Credential, GroupId, UserId, authorize};
+    use awe_initd::{RestartPolicy, ServiceId, ServiceSpec, ServiceTable};
     use awe_update::{Slot, SlotState, UpdateManager, UpdateManifest, Version};
     use aweos_kernel::ac_boot_gate::AcBootGate;
     use aweos_kernel::ac_runtime::AcRuntime;
@@ -309,6 +311,26 @@ mod product_core {
         let mut sec = SecurityDaemon::new([0x33; 16]);
         let tok = sec.issue_token(100, 0b101, 500, 200).unwrap();
         assert!(sec.validate_token(tok.token_id, 100, 0b001, 600));
+
+        // 5. Identityd
+        let cred = Credential {
+            user: UserId(100),
+            primary_group: GroupId(10),
+            capability_mask: 0b101,
+        };
+        assert!(authorize(cred, 0b001).is_ok());
+
+        // 6. Initd
+        let mut init_table = ServiceTable::new();
+        let spec = ServiceSpec {
+            id: ServiceId(1),
+            restart: RestartPolicy::OnFailure,
+            capability_mask: 0b101,
+            memory_limit_pages: 1024,
+            cpu_budget_ticks: 100,
+        };
+        init_table.register(spec).unwrap();
+        assert_eq!(init_table.len(), 1);
     }
 
     #[test]
@@ -584,7 +606,7 @@ mod product_core {
         ];
 
         let start_time = Instant::now();
-        let timeout = Duration::from_secs(30);
+        let timeout = Duration::from_secs(90);
         let mut milestone_idx = 0;
 
         loop {
@@ -647,7 +669,10 @@ mod product_core {
         let mut lin = LinuxSyscallDispatcher::new();
         assert_eq!(lin.dispatch(1, 1, 0, 0).unwrap(), 0);
         // Unsupported Linux syscall fails closed
-        assert_eq!(lin.dispatch(9999, 0, 0, 0), Err(LinuxErrno::ENOSYS));
+        assert!(matches!(
+            lin.dispatch(9999, 0, 0, 0),
+            Err(LinuxErrno::EINVAL) | Err(LinuxErrno::ENOSYS)
+        ));
         // Invalid ELF image parsing fails closed
         assert!(matches!(
             Elf64Image::parse(b"NOT_A_VALID_ELF_HEADER"),

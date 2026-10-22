@@ -1,8 +1,7 @@
 [package]
 name = "awe-app-filemanager"
 version = "0.1.0"
-edition = "2024"
+edition.workspace = true
 
 [dependencies]
-awe-ayui = { path = "../../services/ayui" }
-awe-storaged = { path = "../../services/storaged" }
+awe-ayui = { workspace = true }

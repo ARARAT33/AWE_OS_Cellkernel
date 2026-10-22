@@ -46,9 +46,7 @@ awe-initd = { path = "services/initd" }
 awe-identityd = { path = "services/identityd" }
 awe-appd = { path = "services/appd" }
 awe-update = { path = "services/update" }
-awe-platformd = { path = "services/platformd" }
 awe-ayui = { path = "services/ayui" }
-awe-script = { path = "tools/awescript" }
 
 [profile.dev]
 panic = "abort"

@@ -1,8 +1,7 @@
 [package]
 name = "awe-app-settings"
 version = "0.1.0"
-edition = "2024"
+edition.workspace = true
 
 [dependencies]
-awe-ayui = { path = "../../services/ayui" }
-awe-netd = { path = "../../services/netd" }
+awe-ayui = { workspace = true }
