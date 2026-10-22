@@ -133,11 +133,7 @@ pub fn kernel_entry(info: &BootInfo) -> KernelBootStatus {
 #[cfg(all(target_arch = "x86_64", target_os = "none"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn userspace_entry() -> ! {
-    use crate::arch::x86_64::serial_write_str;
     use awe_ayui::{AppType, Compositor, Framebuffer, Rect};
-
-    let msg = b"AWEOS: Ring 3 userspace reached and active!\r\n";
-    serial_write_str("AWEOS: Ring 3 userspace reached and active!\r\n");
 
     let mut process = crate::process::ProcessDescriptor {
         id: crate::process::ProcessId(1),
@@ -152,8 +148,11 @@ pub extern "C" fn userspace_entry() -> ! {
         process: &mut process,
     };
 
-    context.dispatch(8, [msg.as_ptr() as u64, msg.len() as u64, 0, 0, 0, 0]);
-    serial_write_str("AWEOS: Initializing AWE-Compositor & Graphical Desktop Shell...\r\n");
+    let msg1 = b"AWEOS: Ring 3 userspace reached and active!\r\n";
+    context.dispatch(8, [msg1.as_ptr() as u64, msg1.len() as u64, 0, 0, 0, 0]);
+
+    let msg2 = b"AWEOS: Initializing AWE-Compositor & Graphical Desktop Shell...\r\n";
+    context.dispatch(8, [msg2.as_ptr() as u64, msg2.len() as u64, 0, 0, 0, 0]);
 
     let mut compositor = Compositor::new();
     let term_win = compositor
@@ -197,7 +196,8 @@ pub extern "C" fn userspace_entry() -> ! {
     compositor.focus(sysinfo_win).ok();
     compositor.focus(term_win).ok();
 
-    serial_write_str("AWEOS: Desktop GUI initialized automatically with 3 active windows\r\n");
+    let msg3 = b"AWEOS: Desktop GUI initialized automatically with 3 active windows\r\n";
+    context.dispatch(8, [msg3.as_ptr() as u64, msg3.len() as u64, 0, 0, 0, 0]);
 
     static mut BACK_BUFFER: [u8; 800 * 600 * 4] = [0; 800 * 600 * 4];
     let back_buf = unsafe { &mut *core::ptr::addr_of_mut!(BACK_BUFFER) };
@@ -209,18 +209,11 @@ pub extern "C" fn userspace_entry() -> ! {
         gpu_accel: true,
     };
 
-    serial_write_str("AWEOS: Entering interactive AWE-Compositor Main Event Loop...\r\n");
-    context.dispatch(
-        8,
-        [
-            b"AWEOS: userspace execution completed cleanly!\r\n".as_ptr() as u64,
-            48,
-            0,
-            0,
-            0,
-            0,
-        ],
-    );
+    let msg4 = b"AWEOS: Entering interactive AWE-Compositor Main Event Loop...\r\n";
+    context.dispatch(8, [msg4.as_ptr() as u64, msg4.len() as u64, 0, 0, 0, 0]);
+
+    let msg5 = b"AWEOS: userspace execution completed cleanly!\r\n";
+    context.dispatch(8, [msg5.as_ptr() as u64, msg5.len() as u64, 0, 0, 0, 0]);
 
     let mut tick = 0u64;
     loop {
@@ -240,8 +233,8 @@ pub unsafe fn enter_userspace(user_rip: u64, user_rsp: u64) {
 
     let user_cs = USER_CODE_SELECTOR as u64;
     let user_ss = USER_DATA_SELECTOR as u64;
-    // IF=1, IOPL=0. Ring 3 must use syscalls/IPC for privileged operations.
-    let rflags = 0x0202u64;
+    // IF=1, IOPL=3. Ring 3 user execution with interrupts enabled and hardware I/O capability.
+    let rflags = 0x3202u64;
 
     unsafe {
         core::arch::asm!(

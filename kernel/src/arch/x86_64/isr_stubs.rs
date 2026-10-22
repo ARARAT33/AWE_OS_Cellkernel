@@ -190,6 +190,11 @@ pub extern "C" fn awe_interrupt_handler(frame: &mut InterruptFrame) {
         serial_write_str(" ss=");
         print_u64_hex(frame.ss);
         serial_write_str("\r\n");
+        loop {
+            unsafe {
+                core::arch::asm!("hlt");
+            }
+        }
     }
 }
 
