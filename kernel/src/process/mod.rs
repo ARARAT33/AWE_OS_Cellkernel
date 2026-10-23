@@ -299,10 +299,7 @@ mod tests {
     }
 
     fn context(id: u64) -> ProcessContext {
-        ProcessContext::new(
-            ProcessId(id),
-            CpuContext::kernel_entry(0x1000, 0x2000, 0),
-        )
+        ProcessContext::new(ProcessId(id), CpuContext::kernel_entry(0x1000, 0x2000, 0))
     }
 
     #[test]
@@ -386,12 +383,8 @@ mod tests {
     #[test]
     fn marking_running_removes_process_from_run_queue() {
         let mut manager: ProcessManager<3> = ProcessManager::new();
-        manager
-            .register(descriptor_with_id(1), context(1))
-            .unwrap();
-        manager
-            .register(descriptor_with_id(2), context(2))
-            .unwrap();
+        manager.register(descriptor_with_id(1), context(1)).unwrap();
+        manager.register(descriptor_with_id(2), context(2)).unwrap();
         manager.make_runnable(ProcessId(1)).unwrap();
         manager.make_runnable(ProcessId(2)).unwrap();
 
@@ -407,12 +400,8 @@ mod tests {
     #[test]
     fn exiting_process_skips_it_in_future_dispatches() {
         let mut manager: ProcessManager<3> = ProcessManager::new();
-        manager
-            .register(descriptor_with_id(1), context(1))
-            .unwrap();
-        manager
-            .register(descriptor_with_id(2), context(2))
-            .unwrap();
+        manager.register(descriptor_with_id(1), context(1)).unwrap();
+        manager.register(descriptor_with_id(2), context(2)).unwrap();
         manager.make_runnable(ProcessId(1)).unwrap();
         manager.make_runnable(ProcessId(2)).unwrap();
 
