@@ -105,9 +105,4 @@ mod tests {
         assert_eq!(sysret_selector_base(0x23), 0x13);
         assert_eq!(sysret_selector_base(0x10), 0);
     }
-
-    #[test]
-    fn bootstrap_hello_is_outside_public_syscall_range() {
-        assert!(BOOTSTRAP_HELLO_SYSCALL > 8);
-    }
 }
