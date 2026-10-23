@@ -614,10 +614,19 @@ mod product_core {
         let required_milestones = [
             "AWEOS CellKernel",
             "AWEOS boot:",
+            "AWEOS: GDT & TSS initialized",
+            "AWEOS: SYSCALL/SYSRET MSRs initialized",
+            "AWEOS: IDT initialized",
+            "AWEOS: Kernel Heap initialized",
+            "AWEOS: PCI Bus 0 enumerated",
+            "AWEOS: Interrupts & PIC/PIT initialized",
+            "AWEOS: Preemptive Scheduler initialized",
             "AWEOS: boot protocol validated",
-            "AWEOS: x86_64 bootstrap paging = ACTIVE",
             "AWEOS: kernel state = RUNNING",
             "AWEOS: kernel is alive",
+            "AWEOS: Entering Ring 3 Userspace...",
+            "AWEOS: Ring 3 userspace reached and active!",
+            "AWEOS: userspace execution completed cleanly!",
         ];
 
         let start_time = Instant::now();
@@ -652,6 +661,14 @@ mod product_core {
 
             std::thread::sleep(Duration::from_millis(100));
         }
+
+        // Allow a short settling period to catch immediate privilege/return faults.
+        std::thread::sleep(Duration::from_millis(100));
+        let final_log = std::fs::read_to_string(&log_file).unwrap_or_default();
+        assert!(
+            !final_log.contains("AWEOS EXCEPTION"),
+            "QEMU reached the expected milestones but raised a CPU exception:\n{final_log}"
+        );
 
         let _ = child.kill();
         let _ = child.wait();
