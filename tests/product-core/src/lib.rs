@@ -568,7 +568,10 @@ mod product_core {
             .arg(&kernel_bin)
             .status()
             .expect("failed to run grub-file");
-        assert!(multiboot_status.success(), "kernel lacks a valid Multiboot2 header");
+        assert!(
+            multiboot_status.success(),
+            "kernel lacks a valid Multiboot2 header"
+        );
 
         let iso_root = workspace_root.join("target/aweos-qemu-smoke-iso");
         let iso_path = workspace_root.join("target/aweos-qemu-smoke.iso");
