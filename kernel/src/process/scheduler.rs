@@ -59,9 +59,8 @@ impl<const N: usize> Scheduler<N> {
         ) {
             return Err(SchedulerError::NotRunnable);
         }
-        if self.len == N {
-            return Err(SchedulerError::QueueFull);
-        }
+        // Check for an existing entry before capacity: re-enqueuing an already
+        // queued process is idempotent, even when the queue is full.
         if self
             .queue
             .iter()
@@ -70,13 +69,37 @@ impl<const N: usize> Scheduler<N> {
         {
             return Ok(());
         }
-        if N == 0 {
+        if self.len == N || N == 0 {
             return Err(SchedulerError::QueueFull);
         }
         let index = (self.head + self.len) % N;
         self.queue[index] = Some(process.id);
         self.len += 1;
         Ok(())
+    }
+
+    /// Remove a process from the circular run queue without changing the
+    /// relative order of the other entries. Returns false when it was absent.
+    pub fn remove(&mut self, id: ProcessId) -> bool {
+        let Some(offset) =
+            (0..self.len).find(|&offset| self.queue[(self.head + offset) % N] == Some(id))
+        else {
+            return false;
+        };
+
+        for current_offset in offset..self.len - 1 {
+            let destination = (self.head + current_offset) % N;
+            let source = (self.head + current_offset + 1) % N;
+            self.queue[destination] = self.queue[source];
+        }
+
+        let tail = (self.head + self.len - 1) % N;
+        self.queue[tail] = None;
+        self.len -= 1;
+        if self.len == 0 {
+            self.head = 0;
+        }
+        true
     }
 
     pub fn dequeue(&mut self) -> Result<ProcessId, SchedulerError> {
@@ -87,6 +110,9 @@ impl<const N: usize> Scheduler<N> {
         self.head = (self.head + 1) % N;
         self.len -= 1;
         self.ticks = self.ticks.wrapping_add(1);
+        if self.len == 0 {
+            self.head = 0;
+        }
         Ok(id)
     }
 
@@ -151,5 +177,57 @@ impl<const N: usize> Scheduler<N> {
         let _ = current;
         let _ = contexts;
         Err(SchedulerError::Backend(BackendError::InvalidCurrent))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn process(id: u64) -> ProcessDescriptor {
+        ProcessDescriptor {
+            id: ProcessId(id),
+            state: ProcessState::Runnable,
+            budget: super::super::ResourceBudget::unlimited(),
+        }
+    }
+
+    #[test]
+    fn remove_preserves_fifo_order_across_wraparound() {
+        let mut scheduler = Scheduler::<3>::new();
+        scheduler.enqueue(&process(1)).unwrap();
+        scheduler.enqueue(&process(2)).unwrap();
+        scheduler.enqueue(&process(3)).unwrap();
+        assert_eq!(scheduler.dequeue(), Ok(ProcessId(1)));
+        scheduler.enqueue(&process(4)).unwrap();
+
+        assert!(scheduler.remove(ProcessId(3)));
+        assert_eq!(scheduler.len(), 2);
+        assert_eq!(scheduler.dequeue(), Ok(ProcessId(2)));
+        assert_eq!(scheduler.dequeue(), Ok(ProcessId(4)));
+        assert_eq!(scheduler.dequeue(), Err(SchedulerError::Empty));
+    }
+
+    #[test]
+    fn duplicate_enqueue_is_idempotent_even_when_full() {
+        let mut scheduler = Scheduler::<2>::new();
+        scheduler.enqueue(&process(1)).unwrap();
+        scheduler.enqueue(&process(2)).unwrap();
+
+        assert_eq!(scheduler.enqueue(&process(1)), Ok(()));
+        assert_eq!(scheduler.len(), 2);
+        assert_eq!(scheduler.dequeue(), Ok(ProcessId(1)));
+        assert_eq!(scheduler.dequeue(), Ok(ProcessId(2)));
+    }
+
+    #[test]
+    fn zero_capacity_queue_fails_safely() {
+        let mut scheduler = Scheduler::<0>::new();
+        assert_eq!(
+            scheduler.enqueue(&process(1)),
+            Err(SchedulerError::QueueFull)
+        );
+        assert!(!scheduler.remove(ProcessId(1)));
+        assert_eq!(scheduler.dequeue(), Err(SchedulerError::Empty));
     }
 }
