@@ -207,39 +207,45 @@ impl<const N: usize> ProcessManager<N> {
         let index = self
             .find_index(id)
             .ok_or(ProcessManagerError::InvalidProcess)?;
-        let descriptor = self.processes[index]
-            .as_mut()
-            .ok_or(ProcessManagerError::InvalidProcess)?;
-        descriptor
+        // Work on a copy first: a scheduler error must not leave the registry
+        // claiming the process is runnable when it was not queued.
+        let mut candidate = self.processes[index].ok_or(ProcessManagerError::InvalidProcess)?;
+        candidate
             .transition(ProcessState::Runnable)
             .map_err(|_| ProcessManagerError::InvalidProcess)?;
         self.scheduler
-            .enqueue(descriptor)
-            .map_err(ProcessManagerError::Scheduler)
+            .enqueue(&candidate)
+            .map_err(ProcessManagerError::Scheduler)?;
+        self.processes[index] = Some(candidate);
+        Ok(())
     }
 
     pub fn mark_running(&mut self, id: ProcessId) -> Result<(), ProcessManagerError> {
         let index = self
             .find_index(id)
             .ok_or(ProcessManagerError::InvalidProcess)?;
-        let descriptor = self.processes[index]
-            .as_mut()
-            .ok_or(ProcessManagerError::InvalidProcess)?;
-        descriptor
+        let mut candidate = self.processes[index].ok_or(ProcessManagerError::InvalidProcess)?;
+        candidate
             .transition(ProcessState::Running)
-            .map_err(|_| ProcessManagerError::InvalidProcess)
+            .map_err(|_| ProcessManagerError::InvalidProcess)?;
+        // This method can be called either before or after dequeue/dispatch.
+        // Removing an absent entry is harmless and avoids stale queued copies.
+        self.scheduler.remove(id);
+        self.processes[index] = Some(candidate);
+        Ok(())
     }
 
     pub fn exit(&mut self, id: ProcessId) -> Result<(), ProcessManagerError> {
         let index = self
             .find_index(id)
             .ok_or(ProcessManagerError::InvalidProcess)?;
-        let descriptor = self.processes[index]
-            .as_mut()
-            .ok_or(ProcessManagerError::InvalidProcess)?;
-        descriptor
+        let mut candidate = self.processes[index].ok_or(ProcessManagerError::InvalidProcess)?;
+        candidate
             .transition(ProcessState::Exited)
-            .map_err(|_| ProcessManagerError::InvalidProcess)
+            .map_err(|_| ProcessManagerError::InvalidProcess)?;
+        self.scheduler.remove(id);
+        self.processes[index] = Some(candidate);
+        Ok(())
     }
 
     pub fn next_dispatch(&mut self) -> Result<DispatchTarget, ProcessManagerError> {
@@ -277,8 +283,12 @@ mod tests {
     use context::CpuContext;
 
     fn descriptor() -> ProcessDescriptor {
+        descriptor_with_id(1)
+    }
+
+    fn descriptor_with_id(id: u64) -> ProcessDescriptor {
         ProcessDescriptor {
-            id: ProcessId(1),
+            id: ProcessId(id),
             state: ProcessState::Created,
             budget: ResourceBudget {
                 cpu_ticks: 10,
@@ -286,6 +296,13 @@ mod tests {
                 ipc_messages: 2,
             },
         }
+    }
+
+    fn context(id: u64) -> ProcessContext {
+        ProcessContext::new(
+            ProcessId(id),
+            CpuContext::kernel_entry(0x1000, 0x2000, 0),
+        )
     }
 
     #[test]
@@ -359,11 +376,52 @@ mod tests {
     fn process_manager_registers_and_enqueues_real_contexts() {
         let mut manager: ProcessManager<4> = ProcessManager::new();
         let descriptor = descriptor();
-        let context =
-            ProcessContext::new(descriptor.id, CpuContext::kernel_entry(0x1000, 0x2000, 0));
-        manager.register(descriptor, context).unwrap();
+        let process_context = context(descriptor.id.0);
+        manager.register(descriptor, process_context).unwrap();
         manager.make_runnable(ProcessId(1)).unwrap();
         assert_eq!(manager.len(), 1);
         assert_eq!(manager.scheduler_ticks(), 0);
+    }
+
+    #[test]
+    fn marking_running_removes_process_from_run_queue() {
+        let mut manager: ProcessManager<3> = ProcessManager::new();
+        manager
+            .register(descriptor_with_id(1), context(1))
+            .unwrap();
+        manager
+            .register(descriptor_with_id(2), context(2))
+            .unwrap();
+        manager.make_runnable(ProcessId(1)).unwrap();
+        manager.make_runnable(ProcessId(2)).unwrap();
+
+        manager.mark_running(ProcessId(1)).unwrap();
+
+        assert_eq!(
+            manager.descriptor(ProcessId(1)).map(|p| p.state),
+            Some(ProcessState::Running)
+        );
+        assert_eq!(manager.next_dispatch().unwrap().process, ProcessId(2));
+    }
+
+    #[test]
+    fn exiting_process_skips_it_in_future_dispatches() {
+        let mut manager: ProcessManager<3> = ProcessManager::new();
+        manager
+            .register(descriptor_with_id(1), context(1))
+            .unwrap();
+        manager
+            .register(descriptor_with_id(2), context(2))
+            .unwrap();
+        manager.make_runnable(ProcessId(1)).unwrap();
+        manager.make_runnable(ProcessId(2)).unwrap();
+
+        manager.exit(ProcessId(1)).unwrap();
+
+        assert_eq!(
+            manager.descriptor(ProcessId(1)).map(|p| p.state),
+            Some(ProcessState::Exited)
+        );
+        assert_eq!(manager.next_dispatch().unwrap().process, ProcessId(2));
     }
 }
