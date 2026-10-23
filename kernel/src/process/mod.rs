@@ -189,7 +189,10 @@ impl<const N: usize> ProcessManager<N> {
         {
             return Err(ProcessManagerError::DuplicateProcess);
         }
-        if !context.is_valid() {
+        // The descriptor and execution context must identify the same process.
+        // Otherwise it could be queued under one ID but never find its context
+        // during dispatch, silently consuming a scheduler slot.
+        if context.process_id != descriptor.id || !context.is_valid() {
             return Err(ProcessManagerError::InvalidContext);
         }
         let slot = (self.next_slot..N)
@@ -378,6 +381,22 @@ mod tests {
         manager.make_runnable(ProcessId(1)).unwrap();
         assert_eq!(manager.len(), 1);
         assert_eq!(manager.scheduler_ticks(), 0);
+    }
+
+    #[test]
+    fn registration_rejects_mismatched_context_without_consuming_a_slot() {
+        let mut manager: ProcessManager<1> = ProcessManager::new();
+
+        assert_eq!(
+            manager.register(descriptor_with_id(1), context(2)),
+            Err(ProcessManagerError::InvalidContext)
+        );
+        assert_eq!(manager.len(), 0);
+        assert_eq!(manager.descriptor(ProcessId(1)), None);
+
+        // A rejected registration must leave the slot available.
+        assert_eq!(manager.register(descriptor_with_id(1), context(1)), Ok(0));
+        assert_eq!(manager.len(), 1);
     }
 
     #[test]
