@@ -143,8 +143,8 @@ impl<const N: usize> Scheduler<N> {
             state: ProcessState::Runnable,
             budget: super::ResourceBudget::unlimited(),
         };
-        let target =
-            DispatchTarget::from_descriptor(&descriptor, &context.cpu).map_err(SchedulerError::Dispatch)?;
+        let target = DispatchTarget::from_descriptor(&descriptor, &context.cpu)
+            .map_err(SchedulerError::Dispatch)?;
         // Only remove the queue head after all validation has succeeded.
         self.dequeue()?;
         Ok(target)
