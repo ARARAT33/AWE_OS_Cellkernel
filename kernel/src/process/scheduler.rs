@@ -124,7 +124,12 @@ impl<const N: usize> Scheduler<N> {
         &mut self,
         contexts: &[Option<ProcessContext>; N],
     ) -> Result<DispatchTarget, SchedulerError> {
-        let id = self.dequeue()?;
+        // Validate the queue head and its context before consuming the entry.
+        // A broken/missing context must not silently drop a runnable process.
+        if self.len == 0 {
+            return Err(SchedulerError::Empty);
+        }
+        let id = self.queue[self.head].ok_or(SchedulerError::Empty)?;
         let context = contexts
             .iter()
             .flatten()
@@ -138,7 +143,11 @@ impl<const N: usize> Scheduler<N> {
             state: ProcessState::Runnable,
             budget: super::ResourceBudget::unlimited(),
         };
-        DispatchTarget::from_descriptor(&descriptor, &context.cpu).map_err(SchedulerError::Dispatch)
+        let target =
+            DispatchTarget::from_descriptor(&descriptor, &context.cpu).map_err(SchedulerError::Dispatch)?;
+        // Only remove the queue head after all validation has succeeded.
+        self.dequeue()?;
+        Ok(target)
     }
 
     pub fn prepare_switch(
@@ -238,7 +247,7 @@ mod tests {
     }
 
     #[test]
-    fn dispatch_rejects_missing_context_instead_of_fabricating_one() {
+    fn dispatch_rejects_missing_context_without_consuming_queue_entry() {
         let mut scheduler = Scheduler::<2>::new();
         scheduler.enqueue(&process(7)).unwrap();
 
@@ -246,6 +255,15 @@ mod tests {
             scheduler.prepare_next(&[None, None]),
             Err(SchedulerError::UnknownProcess)
         ));
+        assert_eq!(scheduler.len(), 1);
+
+        let real_context = ProcessContext::new(
+            ProcessId(7),
+            super::super::context::CpuContext::kernel_entry(0x3000, 0x4000, 0),
+        );
+        let target = scheduler.prepare_next(&[Some(real_context), None]).unwrap();
+        assert_eq!(target.process, ProcessId(7));
+        assert_eq!(scheduler.len(), 0);
     }
 
     #[test]

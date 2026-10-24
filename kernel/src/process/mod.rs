@@ -275,7 +275,6 @@ impl<const N: usize> ProcessManager<N> {
             .iter()
             .position(|p| p.map(|d| d.id) == Some(id))
     }
-
 }
 
 #[cfg(test)]
