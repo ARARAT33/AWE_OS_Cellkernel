@@ -147,6 +147,7 @@ pub enum ProcessManagerError {
     Full,
     DuplicateProcess,
     InvalidProcess,
+    InvalidState,
     InvalidContext,
     Scheduler(SchedulerError),
 }
@@ -192,6 +193,14 @@ impl<const N: usize> ProcessManager<N> {
         // The descriptor and execution context must identify the same process.
         // Otherwise it could be queued under one ID but never find its context
         // during dispatch, silently consuming a scheduler slot.
+        // ID zero is reserved for "no process" in runtime contracts.
+        if descriptor.id.0 == 0 {
+            return Err(ProcessManagerError::InvalidProcess);
+        }
+        // A newly registered process must enter the lifecycle through Created.
+        if descriptor.state != ProcessState::Created {
+            return Err(ProcessManagerError::InvalidState);
+        }
         if context.process_id != descriptor.id || !context.is_valid() {
             return Err(ProcessManagerError::InvalidContext);
         }
@@ -252,9 +261,8 @@ impl<const N: usize> ProcessManager<N> {
     }
 
     pub fn next_dispatch(&mut self) -> Result<DispatchTarget, ProcessManagerError> {
-        let contexts = self.context_snapshot();
         self.scheduler
-            .prepare_next(&contexts)
+            .prepare_next(&self.contexts)
             .map_err(ProcessManagerError::Scheduler)
     }
 
@@ -268,16 +276,6 @@ impl<const N: usize> ProcessManager<N> {
             .position(|p| p.map(|d| d.id) == Some(id))
     }
 
-    fn context_snapshot(&self) -> [ProcessContext; N] {
-        core::array::from_fn(|i| {
-            self.contexts[i].unwrap_or_else(|| {
-                ProcessContext::new(
-                    ProcessId(u64::MAX),
-                    context::CpuContext::kernel_entry(1, 1, 0),
-                )
-            })
-        })
-    }
 }
 
 #[cfg(test)]
@@ -397,6 +395,31 @@ mod tests {
         // A rejected registration must leave the slot available.
         assert_eq!(manager.register(descriptor_with_id(1), context(1)), Ok(0));
         assert_eq!(manager.len(), 1);
+    }
+
+    #[test]
+    fn registration_rejects_non_created_state_without_consuming_a_slot() {
+        let mut manager: ProcessManager<1> = ProcessManager::new();
+        let mut not_created = descriptor_with_id(1);
+        not_created.state = ProcessState::Runnable;
+
+        assert_eq!(
+            manager.register(not_created, context(1)),
+            Err(ProcessManagerError::InvalidState)
+        );
+        assert_eq!(manager.len(), 0);
+        assert_eq!(manager.register(descriptor_with_id(1), context(1)), Ok(0));
+    }
+
+    #[test]
+    fn registration_rejects_reserved_zero_process_id() {
+        let mut manager: ProcessManager<1> = ProcessManager::new();
+
+        assert_eq!(
+            manager.register(descriptor_with_id(0), context(0)),
+            Err(ProcessManagerError::InvalidProcess)
+        );
+        assert_eq!(manager.len(), 0);
     }
 
     #[test]

@@ -122,11 +122,12 @@ impl<const N: usize> Scheduler<N> {
 
     pub fn prepare_next(
         &mut self,
-        contexts: &[ProcessContext; N],
+        contexts: &[Option<ProcessContext>; N],
     ) -> Result<DispatchTarget, SchedulerError> {
         let id = self.dequeue()?;
         let context = contexts
             .iter()
+            .flatten()
             .find(|ctx| ctx.process_id == id)
             .ok_or(SchedulerError::UnknownProcess)?;
         if !context.is_valid() {
@@ -143,7 +144,7 @@ impl<const N: usize> Scheduler<N> {
     pub fn prepare_switch(
         &mut self,
         current: &SwitchFrame,
-        contexts: &[ProcessContext; N],
+        contexts: &[Option<ProcessContext>; N],
     ) -> Result<DispatchTarget, SchedulerError> {
         let target = self.prepare_next(contexts)?;
         prepare_dispatch(current, &target).map_err(SchedulerError::Dispatch)?;
@@ -156,7 +157,7 @@ impl<const N: usize> Scheduler<N> {
     pub unsafe fn switch_next(
         &mut self,
         current: &mut SwitchFrame,
-        contexts: &[ProcessContext; N],
+        contexts: &[Option<ProcessContext>; N],
     ) -> Result<DispatchTarget, SchedulerError> {
         let target = self.prepare_switch(current, contexts)?;
         validate_backend_frames(current, &target.frame).map_err(SchedulerError::Backend)?;
@@ -172,7 +173,7 @@ impl<const N: usize> Scheduler<N> {
     pub unsafe fn switch_next(
         &mut self,
         current: &mut SwitchFrame,
-        contexts: &[ProcessContext; N],
+        contexts: &[Option<ProcessContext>; N],
     ) -> Result<DispatchTarget, SchedulerError> {
         let _ = current;
         let _ = contexts;
@@ -218,6 +219,33 @@ mod tests {
         assert_eq!(scheduler.len(), 2);
         assert_eq!(scheduler.dequeue(), Ok(ProcessId(1)));
         assert_eq!(scheduler.dequeue(), Ok(ProcessId(2)));
+    }
+
+    #[test]
+    fn dispatch_uses_registered_context_for_max_process_id_with_sparse_slots() {
+        let id = ProcessId(u64::MAX);
+        let mut scheduler = Scheduler::<2>::new();
+        scheduler.enqueue(&process(id.0)).unwrap();
+        let real_context = ProcessContext::new(
+            id,
+            super::super::context::CpuContext::kernel_entry(0x3000, 0x4000, 0),
+        );
+        let contexts = [None, Some(real_context)];
+
+        let target = scheduler.prepare_next(&contexts).unwrap();
+        assert_eq!(target.process, id);
+        assert_eq!(target.frame.rip, 0x3000);
+    }
+
+    #[test]
+    fn dispatch_rejects_missing_context_instead_of_fabricating_one() {
+        let mut scheduler = Scheduler::<2>::new();
+        scheduler.enqueue(&process(7)).unwrap();
+
+        assert!(matches!(
+            scheduler.prepare_next(&[None, None]),
+            Err(SchedulerError::UnknownProcess)
+        ));
     }
 
     #[test]

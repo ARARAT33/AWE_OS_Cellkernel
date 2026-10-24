@@ -13,7 +13,7 @@ pub enum RuntimeDispatchError {
 pub fn prepare_runtime_switch<const N: usize>(
     scheduler: &mut Scheduler<N>,
     current: &SwitchFrame,
-    contexts: &[ProcessContext; N],
+    contexts: &[Option<ProcessContext>; N],
 ) -> Result<DispatchTarget, RuntimeDispatchError> {
     let target = scheduler
         .prepare_next(contexts)
