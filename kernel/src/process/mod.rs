@@ -31,8 +31,29 @@ impl ProcessTable {
             next_id: AtomicU64::new(1),
         }
     }
-    pub fn allocate_id(&self) -> ProcessId {
-        ProcessId(self.next_id.fetch_add(1, Ordering::Relaxed))
+    /// Allocate a unique non-zero process ID.
+    ///
+    /// Returns `None` after the ID space is exhausted. Zero is used as the
+    /// exhausted sentinel so the atomic counter never wraps back to an ID that
+    /// may already have been issued.
+    pub fn allocate_id(&self) -> Option<ProcessId> {
+        let mut current = self.next_id.load(Ordering::Relaxed);
+        loop {
+            if current == 0 {
+                return None;
+            }
+
+            let next = current.wrapping_add(1);
+            match self.next_id.compare_exchange_weak(
+                current,
+                next,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => return Some(ProcessId(current)),
+                Err(observed) => current = observed,
+            }
+        }
     }
 }
 
@@ -305,9 +326,22 @@ mod tests {
     #[test]
     fn process_ids_are_monotonic() {
         let table = ProcessTable::new();
-        assert_eq!(table.allocate_id(), ProcessId(1));
-        assert_eq!(table.allocate_id(), ProcessId(2));
-        assert_eq!(table.allocate_id(), ProcessId(3));
+        assert_eq!(table.allocate_id(), Some(ProcessId(1)));
+        assert_eq!(table.allocate_id(), Some(ProcessId(2)));
+        assert_eq!(table.allocate_id(), Some(ProcessId(3)));
+    }
+
+    #[test]
+    fn process_id_allocator_stops_at_u64_exhaustion_without_wrapping() {
+        let table = ProcessTable {
+            next_id: AtomicU64::new(u64::MAX - 1),
+        };
+
+        assert_eq!(table.allocate_id(), Some(ProcessId(u64::MAX - 1)));
+        assert_eq!(table.allocate_id(), Some(ProcessId(u64::MAX)));
+        assert_eq!(table.allocate_id(), None);
+        assert_eq!(table.allocate_id(), None);
+        assert_eq!(table.next_id.load(Ordering::Relaxed), 0);
     }
 
     #[test]
