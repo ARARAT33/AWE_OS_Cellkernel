@@ -51,8 +51,42 @@ impl<const N: usize> RunQueue<N> {
         let id = self.items[self.head].take();
         self.head = (self.head + 1) % N;
         self.len -= 1;
+        if self.len == 0 {
+            self.head = 0;
+            self.tail = 0;
+        }
         id
     }
+
+    /// Remove a queued process while preserving the order of the remaining
+    /// entries. This is used when a process blocks or exits before dispatch.
+    pub fn remove(&mut self, id: ProcessId) -> bool {
+        let mut offset = 0;
+        while offset < self.len && self.items[(self.head + offset) % N] != Some(id) {
+            offset += 1;
+        }
+        if offset == self.len {
+            return false;
+        }
+
+        for current_offset in offset..self.len - 1 {
+            let destination = (self.head + current_offset) % N;
+            let source = (self.head + current_offset + 1) % N;
+            self.items[destination] = self.items[source];
+        }
+
+        let last = (self.head + self.len - 1) % N;
+        self.items[last] = None;
+        self.len -= 1;
+        if self.len == 0 {
+            self.head = 0;
+            self.tail = 0;
+        } else {
+            self.tail = (self.head + self.len) % N;
+        }
+        true
+    }
+
     fn contains(&self, id: ProcessId) -> bool {
         let mut i = 0;
         while i < self.len {
@@ -148,6 +182,18 @@ impl<const N: usize> Scheduler<N> {
     pub fn enqueue(&mut self, id: ProcessId) -> bool {
         self.queue.push(id)
     }
+
+    /// Remove a process from both the runnable queue and the current slot.
+    /// Returns true if either location contained the process.
+    pub fn remove(&mut self, id: ProcessId) -> bool {
+        let mut removed = self.queue.remove(id);
+        if self.current == Some(id) {
+            self.current = None;
+            removed = true;
+        }
+        removed
+    }
+
     pub fn request_reschedule(&mut self) {
         self.reschedule_pending = true;
     }
@@ -191,6 +237,23 @@ mod tests {
         assert!(q.push(ProcessId(1)));
         assert!(!q.push(ProcessId(1)));
     }
+
+    #[test]
+    fn remove_preserves_fifo_order_across_wraparound() {
+        let mut q: RunQueue<3> = RunQueue::new();
+        assert!(q.push(ProcessId(1)));
+        assert!(q.push(ProcessId(2)));
+        assert!(q.push(ProcessId(3)));
+        assert_eq!(q.pop(), Some(ProcessId(1)));
+        assert!(q.push(ProcessId(4)));
+
+        assert!(q.remove(ProcessId(3)));
+        assert_eq!(q.len(), 2);
+        assert_eq!(q.pop(), Some(ProcessId(2)));
+        assert_eq!(q.pop(), Some(ProcessId(4)));
+        assert!(q.pop().is_none());
+        assert!(!q.remove(ProcessId(9)));
+    }
     #[test]
     fn scheduler_clock_requests_reschedule_at_quantum_boundary() {
         let mut clock = SchedulerClock::new(3);
@@ -220,6 +283,26 @@ mod tests {
     fn no_request_keeps_current() {
         let mut scheduler: Scheduler<2> = Scheduler::new();
         assert_eq!(scheduler.schedule_boundary(), DispatchAction::KeepCurrent);
+    }
+
+    #[test]
+    fn removing_current_clears_it_and_preserves_other_runnable_processes() {
+        let mut scheduler: Scheduler<2> = Scheduler::new();
+        assert!(scheduler.enqueue(ProcessId(1)));
+        assert!(scheduler.enqueue(ProcessId(2)));
+        scheduler.request_reschedule();
+        assert_eq!(
+            scheduler.schedule_boundary(),
+            DispatchAction::SwitchTo(ProcessId(1))
+        );
+
+        assert!(scheduler.remove(ProcessId(1)));
+        assert_eq!(scheduler.current(), None);
+        scheduler.request_reschedule();
+        assert_eq!(
+            scheduler.schedule_boundary(),
+            DispatchAction::SwitchTo(ProcessId(2))
+        );
     }
     #[test]
     fn zero_quantum_fails_safe() {
