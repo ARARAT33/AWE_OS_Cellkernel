@@ -379,6 +379,10 @@ mod tests {
             unblock_core.find(blocked).map(|p| p.state),
             Some(ProcessState::Blocked)
         );
+        assert_eq!(
+            unblock_core.find(other).map(|p| p.state),
+            Some(ProcessState::Runnable)
+        );
 
         let mut yield_core: ExecutionCore<2> = ExecutionCore::new();
         let first = yield_core.create_process(budget()).unwrap();
@@ -395,7 +399,6 @@ mod tests {
             Some(ProcessState::Running)
         );
         assert_eq!(yield_core.current(), Some(running));
-        let _ = other;
     }
 
     #[test]
