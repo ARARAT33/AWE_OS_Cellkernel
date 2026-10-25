@@ -1,18 +1,18 @@
-# CellKernel hardening cycle — 2026-10-24
+# CellKernel hardening cycle — 2026-10-25
 
-This plan is based on the current `main` tree at `bed1b2d17848624db69f58fbb0d4d6a61dc9104e`. All implementation work stays on `main`; no feature branches or pull requests.
+This plan is based on the current `main` tree at `d55cda8a5c2beb9c30c7f5ef96191efdb0d4c9ca`. All implementation work stays directly on `main`; do not create feature branches or pull requests.
 
 ## Prioritized work
 
-1. **P0 — Remove fabricated scheduler contexts.** `ProcessManager::context_snapshot` currently fills empty slots with a synthetic context using `ProcessId(u64::MAX)`. Because process IDs are plain `u64`, that sentinel can collide with a real process and let dispatch select a fake context. Pass optional contexts through scheduler dispatch and only match registered entries.
-2. **P0 — Enforce process admission invariants.** Registration should accept only a fresh `Created` descriptor with a valid, non-reserved ID and a valid matching CPU context. Failed registration must not consume a slot or change the manager count.
-3. **P1 — Add regression tests.** Cover sparse context arrays, a process whose ID is `u64::MAX`, invalid initial states, reserved IDs, and existing FIFO/exit behavior.
-4. **P1 — Validate evidence.** Run the available CI suite after the code commits; distinguish unit/static checks from QEMU runtime evidence. Do not claim tests that were not executed.
+1. **P0 — Prevent process-ID allocator wraparound.** `ProcessTable::allocate_id` currently uses `AtomicU64::fetch_add`; at exhaustion it wraps through the reserved ID 0 and can eventually issue duplicate IDs. Replace this with a non-wrapping compare/exchange allocator that returns an explicit exhaustion result, and add boundary regression tests.
+2. **P1 — Verify call-site compatibility.** Search the repository for allocator consumers before changing its return type; update every real call site and tests as needed.
+3. **P1 — Process lifecycle and slot reclamation.** Review the manager's exit/reap behavior and fixed-capacity slot reuse. Only introduce reclamation if it can preserve the intended observable `Exited` state and cannot free a live context.
+4. **P1 — Validate evidence.** Run formatting, workspace tests, Clippy, and available QEMU boot/ VirtIO workflows after the code change. Clearly distinguish current-run evidence from prior successful CI.
 
 ## Acceptance criteria
 
-- Empty slots cannot impersonate a real process context.
-- Invalid registrations leave the process table unchanged.
-- Scheduler only dispatches an explicitly registered, valid context matching the queued process ID.
-- Changes and commits are made directly on `main`, preserving the current branch head as parent.
-- If the GitHub write or CI path blocks a step, record the blocker rather than bypassing it.
+- ID 0 remains reserved and is never returned as a valid allocated ID.
+- Every successful allocation is unique, including the final `u64::MAX` ID.
+- Exhaustion is explicit and does not wrap back to an earlier ID.
+- All changes and commits are made directly on `main`, preserving its current head as parent.
+- If a write or CI action is blocked, report the blocker instead of bypassing it.
