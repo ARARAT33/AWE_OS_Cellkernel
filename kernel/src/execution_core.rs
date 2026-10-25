@@ -7,6 +7,7 @@ use crate::scheduler::{DispatchAction, Scheduler};
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum CoreError {
     ProcessTableFull,
+    ProcessIdExhausted,
     InvalidTransition,
     BudgetExceeded,
 }
@@ -51,8 +52,13 @@ impl<const N: usize> ExecutionCore<N> {
         let mut slot = 0;
         while slot < N {
             if self.processes[slot].is_none() {
+                // Zero is the exhausted sentinel. Unlike saturating_add,
+                // this prevents repeatedly issuing u64::MAX after exhaustion.
+                if self.next_id == 0 {
+                    return Err(CoreError::ProcessIdExhausted);
+                }
                 let id = ProcessId(self.next_id);
-                self.next_id = self.next_id.saturating_add(1);
+                self.next_id = self.next_id.checked_add(1).unwrap_or(0);
                 let mut descriptor = ProcessDescriptor {
                     id,
                     state: ProcessState::Created,
@@ -259,6 +265,27 @@ mod tests {
         assert_eq!(core.current(), Some(first));
         assert_eq!(core.schedule(), DispatchAction::SwitchTo(second));
         assert_eq!(core.current(), Some(second));
+    }
+
+    #[test]
+    fn process_id_exhaustion_does_not_reissue_max_id() {
+        let mut core: ExecutionCore<3> = ExecutionCore::new();
+        core.next_id = u64::MAX - 1;
+
+        let penultimate = core.create_process(budget()).unwrap();
+        let final_id = core.create_process(budget()).unwrap();
+
+        assert_eq!(penultimate, ProcessId(u64::MAX - 1));
+        assert_eq!(final_id, ProcessId(u64::MAX));
+        assert_eq!(
+            core.create_process(budget()),
+            Err(CoreError::ProcessIdExhausted)
+        );
+        assert_eq!(
+            core.create_process(budget()),
+            Err(CoreError::ProcessIdExhausted)
+        );
+        assert_eq!(core.processes.iter().flatten().count(), 2);
     }
 
     #[test]
