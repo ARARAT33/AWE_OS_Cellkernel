@@ -268,11 +268,39 @@ impl<const N: usize> ProcessManager<N> {
         candidate
             .transition(ProcessState::Running)
             .map_err(|_| ProcessManagerError::InvalidProcess)?;
-        // This method can be called either before or after dequeue/dispatch.
-        // Removing an absent entry is harmless and avoids stale queued copies.
+
+        // A single-core manager may track only one running process. Once the
+        // selected context has actually begun running, return the previous
+        // running process to the runnable queue before publishing the switch.
+        let previous = self.current;
+        let mut previous_update = None;
+        if let Some(previous_id) = previous {
+            if previous_id != id {
+                let previous_index = self
+                    .find_index(previous_id)
+                    .ok_or(ProcessManagerError::InvalidProcess)?;
+                let mut previous_candidate = self.processes[previous_index]
+                    .ok_or(ProcessManagerError::InvalidProcess)?;
+                if previous_candidate.state == ProcessState::Running {
+                    previous_candidate
+                        .transition(ProcessState::Runnable)
+                        .map_err(|_| ProcessManagerError::InvalidProcess)?;
+                    // The previous process is not current any more; enqueue it
+                    // before committing either descriptor change.
+                    self.scheduler
+                        .enqueue(&previous_candidate)
+                        .map_err(ProcessManagerError::Scheduler)?;
+                    previous_update = Some((previous_index, previous_candidate));
+                }
+            }
+        }
+
+        // Removing an absent target is harmless (dispatch may already dequeue it).
         self.scheduler.remove(id);
+        if let Some((previous_index, previous_candidate)) = previous_update {
+            self.processes[previous_index] = Some(previous_candidate);
+        }
         self.processes[index] = Some(candidate);
-        // Callers use this after the selected context has actually begun running.
         self.current = Some(id);
         Ok(())
     }
@@ -512,6 +540,12 @@ mod tests {
             Some(ProcessState::Running)
         );
         assert_eq!(manager.next_dispatch().unwrap().process, ProcessId(2));
+        manager.mark_running(ProcessId(2)).unwrap();
+        assert_eq!(
+            manager.descriptor(ProcessId(1)).map(|p| p.state),
+            Some(ProcessState::Runnable)
+        );
+        assert_eq!(manager.next_dispatch().unwrap().process, ProcessId(1));
     }
 
     #[test]
