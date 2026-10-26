@@ -194,6 +194,11 @@ impl<const N: usize> Scheduler<N> {
         removed
     }
 
+    /// Report whether an ID is queued or currently selected for execution.
+    pub fn contains(&self, id: ProcessId) -> bool {
+        self.current == Some(id) || self.queue.contains(id)
+    }
+
     pub fn request_reschedule(&mut self) {
         self.reschedule_pending = true;
     }
