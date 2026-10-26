@@ -553,7 +553,10 @@ mod tests {
         let mut manager: ProcessManager<1> = ProcessManager::new();
         manager.register(descriptor_with_id(1), context(1)).unwrap();
 
-        assert_eq!(manager.reap(ProcessId(1)), Err(ProcessManagerError::NotExited));
+        assert_eq!(
+            manager.reap(ProcessId(1)),
+            Err(ProcessManagerError::NotExited)
+        );
         manager.make_runnable(ProcessId(1)).unwrap();
         assert_eq!(manager.next_dispatch().unwrap().process, ProcessId(1));
         manager.mark_running(ProcessId(1)).unwrap();
