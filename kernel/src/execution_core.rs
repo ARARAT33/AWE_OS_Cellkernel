@@ -11,6 +11,8 @@ pub enum CoreError {
     RunQueueFull,
     InvalidTransition,
     BudgetExceeded,
+    NotExited,
+    StillScheduled,
 }
 
 /// Trace record for execution core event diagnostics.
@@ -214,6 +216,23 @@ impl<const N: usize> ExecutionCore<N> {
         Ok(())
     }
 
+    /// Release the fixed-capacity process slot after exit and scheduler removal.
+    /// IDs are deliberately not reused when the slot is reclaimed.
+    pub fn reap(&mut self, id: ProcessId) -> Result<(), CoreError> {
+        let index = self.find_index(id).ok_or(CoreError::InvalidTransition)?;
+        let descriptor = self.processes[index].ok_or(CoreError::InvalidTransition)?;
+
+        if descriptor.state != ProcessState::Exited {
+            return Err(CoreError::NotExited);
+        }
+        if self.scheduler.contains(id) {
+            return Err(CoreError::StillScheduled);
+        }
+
+        self.processes[index] = None;
+        Ok(())
+    }
+
     pub const fn current(&self) -> Option<ProcessId> {
         self.scheduler.current()
     }
@@ -335,6 +354,22 @@ mod tests {
         );
         assert!(core.consume_cpu(id, 4).is_ok());
         assert_eq!(core.consume_cpu(id, 1), Err(CoreError::BudgetExceeded));
+    }
+
+    #[test]
+    fn reap_rejects_live_process_and_recovers_capacity_after_exit() {
+        let mut core: ExecutionCore<1> = ExecutionCore::new();
+        let first = core.create_process(budget()).unwrap();
+
+        assert_eq!(core.reap(first), Err(CoreError::NotExited));
+        assert_eq!(core.schedule(), DispatchAction::SwitchTo(first));
+        core.exit(first).unwrap();
+        assert_eq!(core.reap(first), Ok(()));
+
+        // The registry slot is reusable, but the old process ID is not.
+        let second = core.create_process(budget()).unwrap();
+        assert_eq!(second, ProcessId(2));
+        assert_eq!(core.schedule(), DispatchAction::SwitchTo(second));
     }
 
     #[test]
