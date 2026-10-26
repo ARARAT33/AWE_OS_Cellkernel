@@ -274,24 +274,22 @@ impl<const N: usize> ProcessManager<N> {
         // running process to the runnable queue before publishing the switch.
         let previous = self.current;
         let mut previous_update = None;
-        if let Some(previous_id) = previous {
-            if previous_id != id {
-                let previous_index = self
-                    .find_index(previous_id)
-                    .ok_or(ProcessManagerError::InvalidProcess)?;
-                let mut previous_candidate =
-                    self.processes[previous_index].ok_or(ProcessManagerError::InvalidProcess)?;
-                if previous_candidate.state == ProcessState::Running {
-                    previous_candidate
-                        .transition(ProcessState::Runnable)
-                        .map_err(|_| ProcessManagerError::InvalidProcess)?;
-                    // The previous process is not current any more; enqueue it
-                    // before committing either descriptor change.
-                    self.scheduler
-                        .enqueue(&previous_candidate)
-                        .map_err(ProcessManagerError::Scheduler)?;
-                    previous_update = Some((previous_index, previous_candidate));
-                }
+        if let Some(previous_id) = previous.filter(|previous_id| *previous_id != id) {
+            let previous_index = self
+                .find_index(previous_id)
+                .ok_or(ProcessManagerError::InvalidProcess)?;
+            let mut previous_candidate =
+                self.processes[previous_index].ok_or(ProcessManagerError::InvalidProcess)?;
+            if previous_candidate.state == ProcessState::Running {
+                previous_candidate
+                    .transition(ProcessState::Runnable)
+                    .map_err(|_| ProcessManagerError::InvalidProcess)?;
+                // The previous process is not current any more; enqueue it
+                // before committing either descriptor change.
+                self.scheduler
+                    .enqueue(&previous_candidate)
+                    .map_err(ProcessManagerError::Scheduler)?;
+                previous_update = Some((previous_index, previous_candidate));
             }
         }
 
