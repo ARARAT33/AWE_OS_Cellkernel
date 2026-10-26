@@ -279,8 +279,8 @@ impl<const N: usize> ProcessManager<N> {
                 let previous_index = self
                     .find_index(previous_id)
                     .ok_or(ProcessManagerError::InvalidProcess)?;
-                let mut previous_candidate = self.processes[previous_index]
-                    .ok_or(ProcessManagerError::InvalidProcess)?;
+                let mut previous_candidate =
+                    self.processes[previous_index].ok_or(ProcessManagerError::InvalidProcess)?;
                 if previous_candidate.state == ProcessState::Running {
                     previous_candidate
                         .transition(ProcessState::Runnable)
