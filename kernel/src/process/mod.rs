@@ -161,6 +161,9 @@ pub struct ProcessManager<const N: usize> {
     count: usize,
     next_slot: usize,
     scheduler: Scheduler<N>,
+    // Tracks the process known to be executing after mark_running is called.
+    // Exited contexts cannot be reclaimed until execution has switched away.
+    current: Option<ProcessId>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -170,6 +173,9 @@ pub enum ProcessManagerError {
     InvalidProcess,
     InvalidState,
     InvalidContext,
+    NotExited,
+    CurrentlyRunning,
+    StillQueued,
     Scheduler(SchedulerError),
 }
 
@@ -187,6 +193,7 @@ impl<const N: usize> ProcessManager<N> {
             count: 0,
             next_slot: 0,
             scheduler: Scheduler::new(),
+            current: None,
         }
     }
 
@@ -265,6 +272,8 @@ impl<const N: usize> ProcessManager<N> {
         // Removing an absent entry is harmless and avoids stale queued copies.
         self.scheduler.remove(id);
         self.processes[index] = Some(candidate);
+        // Callers use this after the selected context has actually begun running.
+        self.current = Some(id);
         Ok(())
     }
 
@@ -278,7 +287,40 @@ impl<const N: usize> ProcessManager<N> {
             .map_err(|_| ProcessManagerError::InvalidProcess)?;
         self.scheduler.remove(id);
         self.processes[index] = Some(candidate);
+        // Keep current set to an exiting process until the architecture layer
+        // confirms that execution has switched away from it.
         Ok(())
+    }
+
+    /// Reclaim an exited process only after it is no longer current or queued.
+    /// This releases both the descriptor and its CPU context as one operation.
+    pub fn reap(&mut self, id: ProcessId) -> Result<(), ProcessManagerError> {
+        let index = self
+            .find_index(id)
+            .ok_or(ProcessManagerError::InvalidProcess)?;
+        let descriptor = self.processes[index].ok_or(ProcessManagerError::InvalidProcess)?;
+
+        if descriptor.state != ProcessState::Exited {
+            return Err(ProcessManagerError::NotExited);
+        }
+        if self.current == Some(id) {
+            return Err(ProcessManagerError::CurrentlyRunning);
+        }
+        if self.scheduler.contains(id) {
+            return Err(ProcessManagerError::StillQueued);
+        }
+
+        self.processes[index] = None;
+        self.contexts[index] = None;
+        self.count -= 1;
+        self.next_slot = index;
+        Ok(())
+    }
+
+    /// Confirm that the architecture layer has completed a switch to the idle
+    /// context. Call only after the old process is no longer executing.
+    pub fn confirm_switched_to_idle(&mut self) {
+        self.current = None;
     }
 
     pub fn next_dispatch(&mut self) -> Result<DispatchTarget, ProcessManagerError> {
@@ -469,6 +511,35 @@ mod tests {
             manager.descriptor(ProcessId(1)).map(|p| p.state),
             Some(ProcessState::Running)
         );
+        assert_eq!(manager.next_dispatch().unwrap().process, ProcessId(2));
+    }
+
+    #[test]
+    fn reap_requires_exit_and_switch_away_then_reuses_slot_without_stale_context() {
+        let mut manager: ProcessManager<1> = ProcessManager::new();
+        manager.register(descriptor_with_id(1), context(1)).unwrap();
+
+        assert_eq!(manager.reap(ProcessId(1)), Err(ProcessManagerError::NotExited));
+        manager.make_runnable(ProcessId(1)).unwrap();
+        assert_eq!(manager.next_dispatch().unwrap().process, ProcessId(1));
+        manager.mark_running(ProcessId(1)).unwrap();
+        manager.exit(ProcessId(1)).unwrap();
+
+        // The exiting task must not have its context reclaimed while it is current.
+        assert_eq!(
+            manager.reap(ProcessId(1)),
+            Err(ProcessManagerError::CurrentlyRunning)
+        );
+        assert_eq!(manager.len(), 1);
+
+        manager.confirm_switched_to_idle();
+        assert_eq!(manager.reap(ProcessId(1)), Ok(()));
+        assert_eq!(manager.len(), 0);
+        assert_eq!(manager.descriptor(ProcessId(1)), None);
+
+        // Reusing the fixed-capacity slot must not retain the old context.
+        assert_eq!(manager.register(descriptor_with_id(2), context(2)), Ok(0));
+        manager.make_runnable(ProcessId(2)).unwrap();
         assert_eq!(manager.next_dispatch().unwrap().process, ProcessId(2));
     }
 
