@@ -102,6 +102,11 @@ impl<const N: usize> Scheduler<N> {
         true
     }
 
+    /// Return whether a process is still present in the runnable queue.
+    pub fn contains(&self, id: ProcessId) -> bool {
+        self.queue.iter().flatten().any(|queued| *queued == id)
+    }
+
     pub fn dequeue(&mut self) -> Result<ProcessId, SchedulerError> {
         if self.len == 0 {
             return Err(SchedulerError::Empty);
@@ -264,6 +269,19 @@ mod tests {
         let target = scheduler.prepare_next(&[Some(real_context), None]).unwrap();
         assert_eq!(target.process, ProcessId(7));
         assert_eq!(scheduler.len(), 0);
+    }
+
+    #[test]
+    fn contains_tracks_queue_membership_after_remove_and_dequeue() {
+        let mut scheduler = Scheduler::<2>::new();
+        scheduler.enqueue(&process(11)).unwrap();
+        scheduler.enqueue(&process(12)).unwrap();
+        assert!(scheduler.contains(ProcessId(11)));
+        assert!(scheduler.remove(ProcessId(11)));
+        assert!(!scheduler.contains(ProcessId(11)));
+        assert!(scheduler.contains(ProcessId(12)));
+        assert_eq!(scheduler.dequeue(), Ok(ProcessId(12)));
+        assert!(!scheduler.contains(ProcessId(12)));
     }
 
     #[test]
