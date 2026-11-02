@@ -1135,6 +1135,10 @@ pub extern "C" fn awe_interrupt_handler(frame: &mut InterruptFrame) {
     // initialized a local-APIC MMIO mapping/EOI backend. Returning without
     // an EOI could wedge delivery, so fail visibly instead of pretending
     // that the interrupt was acknowledged.
+    if vector == u8::MAX {
+        // The architectural APIC spurious vector does not require an EOI.
+        return;
+    }
     if vector >= 48 {
         serial_write_str("AWEOS: APIC vector arrived without an EOI backend: 0x");
         print_u64_hex(vector as u64);
@@ -1174,7 +1178,7 @@ pub extern "C" fn awe_interrupt_handler(frame: &mut InterruptFrame) {
                 print_u64_hex(frame.rip);
                 serial_write_str(" CS: 0x");
                 print_u64_hex(frame.cs);
-    print_stack_context(frame);
+                print_stack_context(frame);
                 
                 loop {
                     unsafe {
