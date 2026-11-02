@@ -24,9 +24,9 @@
 
 #### IDT (Interrupt Descriptor Table)
 - [x] **Added all 256 interrupt vectors** (0-255)
-  - CPU Exceptions (0-31): All implemented
-  - PIC IRQs (32-47): All implemented
-  - APIC IRQs (48-255): All implemented
+  - CPU Exceptions (0-31): stubs installed; selected exceptions have dedicated diagnostics
+  - PIC IRQs (32-47): stubs installed; timer and keyboard paths are wired
+  - Vectors 48-255: common stubs installed; APIC routing/EOI is not initialized
 - [x] Enhanced ISR stubs with proper assembly
 - [x] Added extern "C" declarations for all 256 ISRs
 - [x] Updated init_idt_stubs to initialize all vectors
@@ -60,8 +60,8 @@
   - Timer (IRQ 0) with EOI
   - Keyboard (IRQ 1) with EOI
   - Other IRQs with proper EOI
-- [x] APIC interrupt support (vectors 48+)
-- [x] Timer tick counting and scheduling integration
+- [ ] APIC/IOAPIC runtime initialization and EOI backend (vector stubs are present)
+- [x] Timer tick accounting; [ ] preemptive scheduler/context-switch integration
 
 ---
 
