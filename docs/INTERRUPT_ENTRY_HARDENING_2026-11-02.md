@@ -25,3 +25,34 @@
 ## Completion rule
 
 A change is considered validated only when the corresponding GitHub Actions run for the resulting `main` commit has completed. A successful compile or unit test does not by itself certify hardware interrupt behavior.
+
+## Implemented on `main`
+
+- `kernel/src/arch/x86_64/isr.rs`: ring-aware interrupted RSP/SS accessors; same-ring RSP is derived from the hardware frame boundary instead of reading a non-existent CPU-pushed field. Error-code classification covers #DF, #TS, #NP, #SS, #GP, #PF, #AC, #CP, #VC and #SX; #VE remains no-error-code.
+- `kernel/src/arch/x86_64/isr_stubs.rs`: the common ISR aligns RSP to 16 bytes before the Rust ABI call, clears DF for Rust, and restores the original saved-register frame before `iretq`. #DE now has its own diagnostic path; #UD no longer dereferences an arbitrary faulting RIP. #CP/#VC stubs now preserve the CPU-pushed error-code layout.
+- The APIC path now fails visibly for vectors 48-254 when no EOI backend is initialized; vector 255 is treated as the APIC spurious vector and returns without EOI. This is fail-closed behavior, **not** APIC runtime support.
+- Added regression tests for ring-0/ring-3 stack interpretation, exception error-code classification, assembly stub/error-code agreement, all 256 IDT entries, and common ISR ABI alignment/restoration.
+- Corrected dated change/progress and hardware-matrix documentation so it no longer claims APIC/IOAPIC runtime support or physical interrupt certification.
+
+## Commits from this hardening pass
+
+- `dab418b` — plan
+- `36bd25a` — ring-aware interrupt frame
+- `e11a6bc` — ISR ABI and exception stubs
+- `731ae4c` — interrupt diagnostics and APIC fail-closed behavior
+- `9331cbe` — interrupt frame layout documentation
+- `206a550` — ISR ABI regression test
+- `d92a575`, `b6e270b`, `1208f15` — APIC readiness documentation corrections
+
+## Validation status for this pass
+
+- Source and workflow definitions were inspected through GitHub.
+- This environment has no `cargo`, `rustc`, or QEMU executable available locally.
+- The repository's push workflows are configured for `main`, but the GitHub connector did not return check/status records for the new commit at the time of this report. Therefore Rust tests, Clippy, formatting and QEMU results for these exact changes remain **pending**, not passed.
+
+## Remaining high-priority risks
+
+1. **IST stacks:** #DF/NMI/machine-check still need dedicated TSS IST stacks and IDT IST selectors. The current RSP/SS accessor explicitly assumes no IST switch.
+2. **APIC/IOAPIC:** initialize and map the local APIC, implement EOI, configure IOAPIC routing, and test timer/IPI delivery before enabling APIC vectors.
+3. **FPU/SIMD state:** define per-task XSAVE/FPU ownership and interrupt save/restore before enabling SIMD-heavy user workloads.
+4. **Runtime validation:** add QEMU tests that deliberately exercise #DE/#UD/#PF and a real timer interrupt counter, then validate on physical hardware separately.
