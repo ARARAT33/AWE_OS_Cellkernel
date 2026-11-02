@@ -1237,4 +1237,22 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn common_entry_aligns_rust_call_and_restores_interrupt_frame() {
+        let source = include_str!("isr_stubs.rs");
+        let common = source
+            .split("awe_isr_common:")
+            .nth(1)
+            .expect("common ISR label")
+            .split(".macro ISR_NOERR")
+            .next()
+            .expect("common ISR body");
+
+        assert!(common.contains("mov rbx, rsp"));
+        assert!(common.contains("and rsp, -16"));
+        assert!(common.contains("cld"));
+        assert!(common.contains("call awe_interrupt_handler"));
+        assert!(common.contains("mov rsp, rbx"));
+    }
 }
