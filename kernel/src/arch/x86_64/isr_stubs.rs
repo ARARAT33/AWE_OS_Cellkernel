@@ -31,8 +31,14 @@ awe_isr_common:
     push r14
     push r15
 
+    // Keep the original frame pointer in a callee-saved register.
+    // The Rust ABI requires RSP to be 16-byte aligned immediately before CALL.
+    mov rbx, rsp
     mov rdi, rsp
+    and rsp, -16
+    cld
     call awe_interrupt_handler
+    mov rsp, rbx
 
     pop r15
     pop r14
@@ -90,7 +96,7 @@ ISR_ERR   17  // Alignment Check
 ISR_NOERR 18  // Machine Check
 ISR_NOERR 19  // SIMD Floating-Point Exception
 ISR_NOERR 20  // Virtualization Exception
-ISR_NOERR 21  // Reserved
+ISR_ERR   21  // Control Protection (#CP)
 ISR_NOERR 22  // Reserved
 ISR_NOERR 23  // Reserved
 ISR_NOERR 24  // Reserved
@@ -98,7 +104,7 @@ ISR_NOERR 25  // Reserved
 ISR_NOERR 26  // Reserved
 ISR_NOERR 27  // Reserved
 ISR_NOERR 28  // Hypervisor Injection Exception
-ISR_NOERR 29  // VMM Communication Exception
+ISR_ERR   29  // VMM Communication Exception (#VC)
 ISR_ERR   30  // Security Exception
 ISR_NOERR 31  // Reserved
 
@@ -875,6 +881,24 @@ fn print_u64_hex(mut val: u64) {
     }
 }
 
+fn print_stack_context(frame: &InterruptFrame) {
+    serial_write_str("  RSP: 0x");
+    print_u64_hex(frame.interrupted_stack_pointer());
+    if let Some(ss) = frame.interrupted_stack_segment() {
+        serial_write_str(" SS: 0x");
+        print_u64_hex(ss);
+    }
+    serial_write_str("\r\n");
+}
+
+fn halt_after_exception() -> ! {
+    loop {
+        unsafe {
+            core::arch::asm!("hlt", options(nomem, nostack, preserves_flags));
+        }
+    }
+}
+
 // Exception names for debugging
 const EXCEPTION_NAMES: [&str; 32] = [
     "Divide-by-zero",
@@ -898,7 +922,7 @@ const EXCEPTION_NAMES: [&str; 32] = [
     "Machine Check",
     "SIMD Floating-Point Exception",
     "Virtualization Exception",
-    "Reserved",
+    "Control Protection",
     "Reserved",
     "Reserved",
     "Reserved",
@@ -910,6 +934,16 @@ const EXCEPTION_NAMES: [&str; 32] = [
     "Security Exception",
     "Reserved",
 ];
+
+/// Handle divide error (#DE, vector 0). It has no CPU error-code word.
+fn handle_divide_error(frame: &InterruptFrame) -> ! {
+    serial_write_str("AWEOS: Divide Error (#DE)\r\n");
+    serial_write_str("  RIP: 0x");
+    print_u64_hex(frame.rip);
+    serial_write_str("\r\n");
+    print_stack_context(frame);
+    halt_after_exception()
+}
 
 /// Handle page fault exception (vector 14)
 /// The error code contains information about the fault:
@@ -949,11 +983,7 @@ fn handle_page_fault(frame: &mut InterruptFrame) {
     print_u64_hex(frame.rip);
     serial_write_str(" CS: 0x");
     print_u64_hex(frame.cs);
-    serial_write_str(" RSP: 0x");
-    print_u64_hex(frame.rsp);
-    serial_write_str(" SS: 0x");
-    print_u64_hex(frame.ss);
-    serial_write_str("\r\n");
+    print_stack_context(frame);
     
     // For now, just panic. In the future, we'll handle page faults by:
     // 1. Checking if it's a demand paging request
@@ -979,11 +1009,7 @@ fn handle_gpf(frame: &mut InterruptFrame) {
     print_u64_hex(frame.rip);
     serial_write_str(" CS: 0x");
     print_u64_hex(frame.cs);
-    serial_write_str(" RSP: 0x");
-    print_u64_hex(frame.rsp);
-    serial_write_str(" SS: 0x");
-    print_u64_hex(frame.ss);
-    serial_write_str("\r\n");
+    print_stack_context(frame);
     
     loop {
         unsafe {
@@ -1021,11 +1047,9 @@ fn handle_invalid_opcode(frame: &mut InterruptFrame) {
     print_u64_hex(frame.rip);
     serial_write_str("\r\n");
     
-    // Try to read the instruction
-    let opcode = unsafe { core::ptr::read_volatile(frame.rip as *const u8) };
-    serial_write_str("  Opcode byte: 0x");
-    print_u64_hex(opcode as u64);
-    serial_write_str("\r\n");
+    // Do not dereference the faulting RIP here: it may be unmapped or
+    // otherwise unsafe to read, which could recursively fault in the handler.
+    print_stack_context(frame);
     
     loop {
         unsafe {
@@ -1107,11 +1131,15 @@ pub extern "C" fn awe_interrupt_handler(frame: &mut InterruptFrame) {
         return;
     }
     
-    // Handle APIC interrupts (48+)
+    // APIC vectors are reserved here, but this boot path has not yet
+    // initialized a local-APIC MMIO mapping/EOI backend. Returning without
+    // an EOI could wedge delivery, so fail visibly instead of pretending
+    // that the interrupt was acknowledged.
     if vector >= 48 {
-        // For now, just send EOI to APIC
-        // In the future, handle IPIs, local timer, etc.
-        return;
+        serial_write_str("AWEOS: APIC vector arrived without an EOI backend: 0x");
+        print_u64_hex(vector as u64);
+        serial_write_str("\r\n");
+        halt_after_exception();
     }
     
     // Handle CPU exceptions
@@ -1130,7 +1158,7 @@ pub extern "C" fn awe_interrupt_handler(frame: &mut InterruptFrame) {
         
         // Call specific handlers for common exceptions
         match vector {
-            0 => handle_invalid_opcode(frame), // Divide by zero - treat as invalid for now
+            0 => handle_divide_error(frame), // Divide Error (#DE)
             6 => handle_invalid_opcode(frame), // Invalid Opcode
             8 => handle_double_fault(frame),   // Double Fault
             11 => handle_segment_not_present(frame), // Segment Not Present
@@ -1146,11 +1174,7 @@ pub extern "C" fn awe_interrupt_handler(frame: &mut InterruptFrame) {
                 print_u64_hex(frame.rip);
                 serial_write_str(" CS: 0x");
                 print_u64_hex(frame.cs);
-                serial_write_str(" RSP: 0x");
-                print_u64_hex(frame.rsp);
-                serial_write_str(" SS: 0x");
-                print_u64_hex(frame.ss);
-                serial_write_str("\r\n");
+    print_stack_context(frame);
                 
                 loop {
                     unsafe {
@@ -1170,4 +1194,43 @@ pub extern "C" fn awe_interrupt_handler(frame: &mut InterruptFrame) {
 
 pub fn timer_irq_count() -> u64 {
     TIMER_IRQ_COUNT.load(Ordering::Acquire)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::arch::x86_64::isr::is_exception_with_error_code;
+
+    fn has_stub(source: &str, kind: &str, vector: u8) -> bool {
+        source.lines().any(|line| {
+            let mut parts = line.split_whitespace();
+            parts.next() == Some(kind)
+                && parts.next().and_then(|value| value.parse::<u8>().ok()) == Some(vector)
+        })
+    }
+
+    #[test]
+    fn all_256_idt_vectors_are_installed() {
+        let mut idt = super::super::idt::Idt::new();
+        init_idt_stubs(&mut idt, super::super::gdt::KERNEL_CODE_SELECTOR);
+        for vector in 0..=u8::MAX {
+            assert!(idt.is_present(vector), "IDT vector {vector} is missing");
+        }
+    }
+
+    #[test]
+    fn assembly_error_code_stubs_match_x86_exception_contract() {
+        let source = include_str!("isr_stubs.rs");
+        for vector in 0..32 {
+            let kind = if is_exception_with_error_code(vector) {
+                "ISR_ERR"
+            } else {
+                "ISR_NOERR"
+            };
+            assert!(
+                has_stub(source, kind, vector),
+                "vector {vector} must use {kind}"
+            );
+        }
+    }
 }
