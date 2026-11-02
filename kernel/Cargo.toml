@@ -9,4 +9,3 @@ path = "src/lib.rs"
 
 [dependencies]
 awe-boot-protocol = { workspace = true }
-awe-ayui = { workspace = true }

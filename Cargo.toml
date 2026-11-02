@@ -32,9 +32,6 @@ members = [
 ]
 resolver = "2"
 
-[workspace.package]
-edition = "2024"
-
 [workspace.dependencies]
 awe-boot-protocol = { path = "boot/protocol" }
 awe-nexus = { path = "services/nexus" }
