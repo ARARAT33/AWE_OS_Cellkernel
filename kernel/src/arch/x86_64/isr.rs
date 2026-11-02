@@ -62,9 +62,42 @@ impl InterruptFrame {
         (upper == 0 || upper == 0xffff) && self.rip != 0
     }
 
-    pub const fn stack_pointer_valid(&self) -> bool {
-        let upper = self.rsp >> 48;
-        (upper == 0 || upper == 0xffff) && (self.rsp & 0x7) == 0
+    /// Whether the interrupted code was running outside ring 0.
+    ///
+    /// The CPU only pushes RSP/SS when an interrupt changes privilege level.
+    /// For a same-ring interrupt, the original RSP is the address immediately
+    /// after the three-word hardware return frame (RIP, CS, RFLAGS).
+    pub const fn interrupted_from_user(&self) -> bool {
+        self.cs & 0x3 != 0
+    }
+
+    /// Return the interrupted stack pointer without assuming that the CPU
+    /// pushed an RSP field for a same-privilege interrupt.
+    ///
+    /// The current x86_64 entry path does not assign IST stacks. If IST is
+    /// introduced, its vector-specific frame shape must be represented here
+    /// before those handlers use this accessor.
+    pub fn interrupted_stack_pointer(&self) -> u64 {
+        if self.interrupted_from_user() {
+            self.rsp
+        } else {
+            (self as *const Self as usize + core::mem::offset_of!(Self, rsp)) as u64
+        }
+    }
+
+    /// The interrupted SS is hardware-saved only after a privilege transition.
+    pub const fn interrupted_stack_segment(&self) -> Option<u64> {
+        if self.interrupted_from_user() {
+            Some(self.ss)
+        } else {
+            None
+        }
+    }
+
+    pub fn stack_pointer_valid(&self) -> bool {
+        let rsp = self.interrupted_stack_pointer();
+        let upper = rsp >> 48;
+        (upper == 0 || upper == 0xffff) && (rsp & 0x7) == 0
     }
 
     pub const fn rflags_valid(&self) -> bool {
@@ -73,11 +106,13 @@ impl InterruptFrame {
         self.rflags & 0x2 != 0 && self.rflags & (1 << 17) == 0
     }
 
-    pub const fn validate(&self) -> bool {
+    pub fn validate(&self) -> bool {
         self.instruction_pointer_valid() && self.stack_pointer_valid() && self.rflags_valid()
     }
 }
 
+/// Architectural x86 exception vectors for which the CPU pushes an
+/// error-code word before entering the handler.
 pub const fn is_exception_with_error_code(vector: u8) -> bool {
     matches!(vector, 8 | 10 | 11 | 12 | 13 | 14 | 17 | 21 | 29 | 30)
 }
@@ -106,8 +141,43 @@ mod tests {
 
     #[test]
     fn error_code_vectors_are_explicit() {
-        assert!(is_exception_with_error_code(14));
-        assert!(is_exception_with_error_code(13));
-        assert!(!is_exception_with_error_code(32));
+        for vector in [8, 10, 11, 12, 13, 14, 17, 21, 29, 30] {
+            assert!(is_exception_with_error_code(vector), "vector {vector}");
+        }
+        for vector in [0, 1, 2, 3, 4, 5, 6, 7, 9, 15, 16, 18, 19, 20, 28, 31, 32, 255] {
+            assert!(!is_exception_with_error_code(vector), "vector {vector}");
+        }
+    }
+
+    #[test]
+    fn ring_zero_frame_derives_rsp_from_the_hardware_frame() {
+        let mut f = InterruptFrame::empty();
+        f.rip = 0x0040_0000;
+        f.cs = 0x08;
+        f.rflags = 0x202;
+        // These fields are not present in a same-ring hardware frame.
+        f.rsp = 0x1;
+        f.ss = 0xffff;
+
+        let expected_rsp =
+            (&f as *const InterruptFrame as usize + core::mem::offset_of!(InterruptFrame, rsp))
+                as u64;
+        assert_eq!(f.interrupted_stack_pointer(), expected_rsp);
+        assert_eq!(f.interrupted_stack_segment(), None);
+        assert!(f.validate());
+    }
+
+    #[test]
+    fn ring_three_frame_uses_hardware_saved_rsp_and_ss() {
+        let mut f = InterruptFrame::empty();
+        f.rip = 0x0040_0000;
+        f.cs = 0x1b;
+        f.rflags = 0x202;
+        f.rsp = 0x0080_0000;
+        f.ss = 0x23;
+
+        assert_eq!(f.interrupted_stack_pointer(), 0x0080_0000);
+        assert_eq!(f.interrupted_stack_segment(), Some(0x23));
+        assert!(f.validate());
     }
 }
