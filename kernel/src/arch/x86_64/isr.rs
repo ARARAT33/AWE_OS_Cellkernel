@@ -1,7 +1,11 @@
 #![no_std]
 
-/// CPU state captured at an interrupt boundary. The layout is intentionally
-/// explicit so the eventual assembly ISR stubs have one stable Rust ABI.
+/// CPU state captured by the x86_64 common ISR entry.
+///
+/// The register/vector/error/RIP/CS/RFLAGS prefix is always present. The
+/// trailing RSP/SS words are pushed by hardware only when the interrupt
+/// changes privilege level; same-ring handlers must use the accessors below
+/// instead of reading those fields as though hardware had populated them.
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct InterruptFrame {
