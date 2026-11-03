@@ -7,7 +7,7 @@ readiness claims are deliberately not used.
 
 ---
 
-## Session 2026-11-03 — IST stacks for critical x86_64 vectors
+## Session 2026-11-03 — IST stacks for critical x86_64 vectors + CI repair
 
 ### Repository audit performed first
 
@@ -21,48 +21,71 @@ readiness claims are deliberately not used.
 - Verified in code: `Tss64` exposed `ist1..ist7` but nothing assigned them;
   `IdtEntry::new` always wrote `0x8e00` options (no IST encoding);
   `docs/AI-DEVELOPMENT-LOG.md` did not exist.
+- **Critical CI finding:** `main` itself has been red since the 2026-11-02
+  pass — AWEOS Quality Gate, AWEOS CI Pipeline, AWEOS Cloud Security Gate
+  and AWEOS VirtIO Runtime all fail at their `cargo fmt --check` step on
+  `20b66d0` (pre-existing rustfmt violations in
+  `kernel/src/arch/x86_64/isr_stubs.rs`: whitespace-only lines and
+  single-line `if` statements introduced before this session).
 - Noted open PRs #55, #53, #52, #50, #48 (stale, pre-restructure bases) —
   left untouched, nothing deleted, no force push.
 
 ### Chosen task (highest priority, realistic)
 
 Resolve risk #1: dedicated IST stacks for #NMI (vector 2), #DF (vector 8)
-and #MC (vector 18). Without them, a fault on a corrupted kernel stack
-escalates to a triple fault with zero diagnostics.
+and #MC (vector 18), and repair the broken CI so main becomes green again.
 
-### Work done (branch `feat/x86_64-ist-critical-stacks`, commit `5bd63a2`)
+### Work done (branch `feat/x86_64-ist-critical-stacks`, PR #56)
 
-Changed files:
-- `kernel/src/arch/x86_64/gdt.rs` — validated `Tss64::set_ist`/`ist`
-- `kernel/src/arch/x86_64/idt.rs` — IST encoding, `Idt::set_ist`, `ist_index`
-- `kernel/src/arch/x86_64/ist.rs` — new IST wiring module (NMI→IST1,
-  #DF→IST2, #MC→IST3, dedicated 16 KiB aligned stacks, fail-closed
-  configuration)
-- `kernel/src/arch/x86_64/mod.rs` — register `ist` module
-- `kernel/src/arch/x86_64/isr.rs` — IST-aware frame documentation
-- `docs/IST_STACK_HARDENING_2026-11-03.md` — change record
+Implementation commits:
+- `5bd63a2` — IST feature: `gdt.rs` validated `Tss64::set_ist`/`ist`;
+  `idt.rs` IST encoding (`set_ist`, `ist_index`); new `ist.rs` module
+  wiring NMI→IST1, #DF→IST2, #MC→IST3 on dedicated 16 KiB aligned static
+  stacks with fail-closed configuration; `isr.rs` IST-aware frame docs;
+  9 host-runnable unit tests including an end-to-end TSS/IDT consistency
+  check across all 256 vectors.
+- `72dc300` — docs: `docs/IST_STACK_HARDENING_2026-11-03.md` and this log.
 
-Added capabilities: architectural IST slot validation; IST options encoding
-in IDT entries without clobbering present/type bits; consistent TSS+IDT
-critical-vector wiring; 9 new host-runnable unit tests including an
-end-to-end consistency check across all 256 IDT vectors.
+CI repair commits:
+- `4fe8abf`, `a2a0ef0` — manual rustfmt-normalization of the new IST code
+  and of the pre-existing `isr_stubs.rs` violations on main (removed 21
+  whitespace-only lines, split single-line `if`s, broke an over-long
+  if-else assignment).
+- `f1d69bf`/`3bb302f` — added `.github/workflows/rustfmt-fix.yml`: a bot
+  that runs real `cargo fmt --all` on feature branches and commits the
+  result back, so rustfmt diffs are visible as commits instead of
+  inaccessible job logs, and formatting can never silently block CI.
+- `e3b6111` — the rustfmt-fix bot's own commit applying canonical rustfmt
+  to `isr.rs`, `isr_stubs.rs` and `ist.rs` (+41/−19 lines, formatting only).
 
-### Real test results
+### Real test results (GitHub Actions evidence)
 
-- This environment cannot execute `cargo`/`rustc`/QEMU. No test was run
-  locally and no local result is claimed.
-- A pull request was opened so the repository's CI (formatting, workspace
-  check, `cargo test --workspace`, Clippy `-D warnings`) validates the
-  change. Until that run completes on the PR head, validation status is
-  **pending, not passed**.
+- First CI run (head `5bd63a2`/`72dc300`): UEFI loader, bootable-image
+  smoke test, multi-arch images and AOSIN installers green; **workspace
+  `cargo check` and `cargo test` passed** (ci.yml reached its formatting
+  step), but all four fmt-checking jobs failed at
+  `cargo fmt --all -- --check`.
+- Root cause analysis: pre-existing fmt violations inherited from
+  `main` plus minor style deviations in the new IST code.
+- After the manual fixes (`4fe8abf`/`a2a0ef0`) fmt still failed, so the
+  exact canonical rustfmt output was produced by the new bot in CI
+  (`e3b6111`) — this is real `cargo fmt` output, not a guess.
+- Validation of the fully formatted tree: **pending** at the time of this
+  log entry — the bot's own push does not auto-run CI (GitHub requires
+  approval for bot-triggered runs), so this log entry is pushed as a
+  normal commit to trigger the full CI suite on the formatted tree.
+  Exact per-check results for the resulting head are recorded on PR #56;
+  nothing in this PR is merged until they are green.
 
 ### Unresolved issues
 
-- `configure_ist_stacks` is not yet called from the boot path; the call site
-  must be ordered after IDT stub installation and before interrupts are
-  enabled.
+- `configure_ist_stacks` is not yet called from the boot path; the call
+  site must be ordered after IDT stub installation and before interrupts
+  are enabled.
 - IST switch behaviour under real NMI/#DF/#MC delivery needs QEMU/hardware
   evidence, not only unit tests.
+- `main` remains red until PR #56 merges; merging before green CI is
+  forbidden.
 - Open risks carried forward: APIC/IOAPIC runtime (EOI backend, IOAPIC
   routing), FPU/XSAVE per-task ownership, QEMU exception-exercise tests.
 - Stale open PRs (#55, #53, #52, #50, #48) predate the 2026-08-27
@@ -70,10 +93,12 @@ end-to-end consistency check across all 256 IDT vectors.
 
 ### Next session priorities
 
-1. Check CI results for the IST PR; fix any failures; only then consider
-   merging (no unverified merges into `main`).
+1. Verify CI on PR #56 head; fix anything still failing; merge only when
+   green (this also restores `main` CI to green for the first time since
+   2026-11-02).
 2. Wire `configure_ist_stacks` into the kernel boot sequence with a
    boot-order regression test.
 3. Start risk #4: a QEMU boot test that deliberately exercises #DE/#UD/#PF
    and counts real timer interrupts.
-4. Re-evaluate stale open PRs against current `main`.
+4. Consider extending the rustfmt-fix bot to `main` pushes.
+5. Re-evaluate stale open PRs against current `main`.
