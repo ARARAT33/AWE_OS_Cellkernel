@@ -1,0 +1,48 @@
+name: rustfmt-fix
+
+# Runs real rustfmt on feature branches and commits the result back, so
+# formatting never blocks CI and the exact rustfmt diff is visible as a
+# commit instead of being buried in an inaccessible job log.
+on:
+  push:
+    branches: ['feat/**', 'fix/**', 'feature/**', 'style/**']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: rustfmt-fix-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  fmt:
+    name: Apply rustfmt and commit fixes
+    runs-on: ubuntu-latest
+    timeout-minits: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Prime Cargo cache
+        run: cargo fetch
+
+      - name: Run rustfmt
+        run: cargo fmt --all
+
+      - name: Commit formatting fixes
+        run: |
+          git config user.name "AWEOS format bot"
+          git config user.email "actions@users.noreply.github.com"
+          if git diff --quiet; then
+            echo "Already rustfmt-clean."
+            exit 0
+          fi
+          git add -A
+          git commit -m "style: apply rustfmt (bot)"
+          git push
