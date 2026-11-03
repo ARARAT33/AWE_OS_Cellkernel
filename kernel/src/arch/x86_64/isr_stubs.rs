@@ -1157,13 +1157,13 @@ pub extern "C" fn awe_interrupt_handler(frame: &mut InterruptFrame) {
         serial_write_str(")\r\n");
         // Call specific handlers for common exceptions
         match vector {
-            0 => handle_divide_error(frame), // Divide Error (#DE)
-            6 => handle_invalid_opcode(frame), // Invalid Opcode
-            8 => handle_double_fault(frame),   // Double Fault
+            0 => handle_divide_error(frame),         // Divide Error (#DE)
+            6 => handle_invalid_opcode(frame),       // Invalid Opcode
+            8 => handle_double_fault(frame),         // Double Fault
             11 => handle_segment_not_present(frame), // Segment Not Present
-            12 => handle_stack_fault(frame),     // Stack Segment Fault
-            13 => handle_gpf(frame),             // General Protection Fault
-            14 => handle_page_fault(frame),      // Page Fault
+            12 => handle_stack_fault(frame),         // Stack Segment Fault
+            13 => handle_gpf(frame),                 // General Protection Fault
+            14 => handle_page_fault(frame),          // Page Fault
             _ => {
                 // Generic exception handler
                 serial_write_str("  Error Code: 0x");

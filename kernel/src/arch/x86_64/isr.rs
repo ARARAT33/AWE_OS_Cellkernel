@@ -150,7 +150,9 @@ mod tests {
         for vector in [8, 10, 11, 12, 13, 14, 17, 21, 29, 30] {
             assert!(is_exception_with_error_code(vector), "vector {vector}");
         }
-        for vector in [0, 1, 2, 3, 4, 5, 6, 7, 9, 15, 16, 18, 19, 20, 28, 31, 32, 255] {
+        for vector in [
+            0, 1, 2, 3, 4, 5, 6, 7, 9, 15, 16, 18, 19, 20, 28, 31, 32, 255,
+        ] {
             assert!(!is_exception_with_error_code(vector), "vector {vector}");
         }
     }
@@ -165,9 +167,8 @@ mod tests {
         f.rsp = 0x1;
         f.ss = 0xffff;
 
-        let expected_rsp =
-            (&f as *const InterruptFrame as usize + core::mem::offset_of!(InterruptFrame, rsp))
-                as u64;
+        let expected_rsp = (&f as *const InterruptFrame as usize
+            + core::mem::offset_of!(InterruptFrame, rsp)) as u64;
         assert_eq!(f.interrupted_stack_pointer(), expected_rsp);
         assert_eq!(f.interrupted_stack_segment(), None);
         assert!(f.validate());
