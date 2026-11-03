@@ -19,7 +19,7 @@ jobs:
   fmt:
     name: Apply rustfmt and commit fixes
     runs-on: ubuntu-latest
-    timeout-minits: 10
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
         with:
