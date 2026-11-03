@@ -955,7 +955,7 @@ fn handle_divide_error(frame: &InterruptFrame) -> ! {
 /// - Bit 5 (PK): Protection key violation
 /// - Bit 15 (SGX): SGX violation
 fn handle_page_fault(frame: &mut InterruptFrame) {
-    let error_code = frame.error_code as u64;
+    let error_code = frame.error_code;
     let fault_address: u64;
     unsafe {
         // Read the CR2 register which contains the faulting address
@@ -1104,7 +1104,7 @@ fn handle_stack_fault(frame: &mut InterruptFrame) {
 pub extern "C" fn awe_interrupt_handler(frame: &mut InterruptFrame) {
     let vector = frame.vector as u8;
     // Handle hardware interrupts (IRQs)
-    if vector >= 32 && vector < 48 {
+    if (32..48).contains(&vector) {
         // PIC interrupts
         if vector == 32 {
             unsafe {
