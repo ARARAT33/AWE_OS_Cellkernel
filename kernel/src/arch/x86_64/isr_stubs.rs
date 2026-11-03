@@ -957,41 +957,46 @@ fn handle_divide_error(frame: &InterruptFrame) -> ! {
 fn handle_page_fault(frame: &mut InterruptFrame) {
     let error_code = frame.error_code as u64;
     let fault_address: u64;
-    
     unsafe {
         // Read the CR2 register which contains the faulting address
         core::arch::asm!("mov {}, cr2", out(reg) fault_address, options(nomem, nostack, preserves_flags));
     }
-    
     let present = (error_code & 0x01) != 0;
     let write = (error_code & 0x02) != 0;
     let user = (error_code & 0x04) != 0;
     let reserved = (error_code & 0x08) != 0;
     let instruction = (error_code & 0x10) != 0;
-    
     serial_write_str("AWEOS: Page Fault at address: 0x");
     print_u64_hex(fault_address);
     serial_write_str("\r\n");
     serial_write_str("  Error: ");
-    if !present { serial_write_str("Not Present "); }
-    if write { serial_write_str("Write "); }
-    if user { serial_write_str("User "); }
-    if reserved { serial_write_str("Reserved "); }
-    if instruction { serial_write_str("Instruction "); }
+    if !present {
+        serial_write_str("Not Present ");
+    }
+    if write {
+        serial_write_str("Write ");
+    }
+    if user {
+        serial_write_str("User ");
+    }
+    if reserved {
+        serial_write_str("Reserved ");
+    }
+    if instruction {
+        serial_write_str("Instruction ");
+    }
     serial_write_str("\r\n");
     serial_write_str("  RIP: 0x");
     print_u64_hex(frame.rip);
     serial_write_str(" CS: 0x");
     print_u64_hex(frame.cs);
     print_stack_context(frame);
-    
     // For now, just panic. In the future, we'll handle page faults by:
     // 1. Checking if it's a demand paging request
     // 2. Checking if it's a copy-on-write request
     // 3. Handling stack growth
     // 4. Returning from the fault if handled
     serial_write_str("AWEOS: Page fault not handled - halting\r\n");
-    
     loop {
         unsafe {
             core::arch::asm!("hlt", options(nomem, nostack, preserves_flags));
@@ -1010,7 +1015,6 @@ fn handle_gpf(frame: &mut InterruptFrame) {
     serial_write_str(" CS: 0x");
     print_u64_hex(frame.cs);
     print_stack_context(frame);
-    
     loop {
         unsafe {
             core::arch::asm!("hlt", options(nomem, nostack, preserves_flags));
@@ -1029,10 +1033,8 @@ fn handle_double_fault(frame: &mut InterruptFrame) {
     serial_write_str(" CS: 0x");
     print_u64_hex(frame.cs);
     serial_write_str("\r\n");
-    
     // Double fault is unrecoverable - reboot
     serial_write_str("AWEOS: Double fault - system reboot required\r\n");
-    
     loop {
         unsafe {
             core::arch::asm!("hlt", options(nomem, nostack, preserves_flags));
@@ -1046,11 +1048,9 @@ fn handle_invalid_opcode(frame: &mut InterruptFrame) {
     serial_write_str("  RIP: 0x");
     print_u64_hex(frame.rip);
     serial_write_str("\r\n");
-    
     // Do not dereference the faulting RIP here: it may be unmapped or
     // otherwise unsafe to read, which could recursively fault in the handler.
     print_stack_context(frame);
-    
     loop {
         unsafe {
             core::arch::asm!("hlt", options(nomem, nostack, preserves_flags));
@@ -1064,12 +1064,14 @@ fn handle_segment_not_present(frame: &mut InterruptFrame) {
     serial_write_str("  Error Code: 0x");
     print_u64_hex(frame.error_code);
     serial_write_str("\r\n");
-    
     // Error code contains segment selector index
     let segment_selector = frame.error_code & 0xFFF;
     let external = (frame.error_code & (1 << 1)) != 0;
-    let table = if (frame.error_code & (1 << 2)) != 0 { "LDT" } else { "GDT" };
-    
+    let table = if (frame.error_code & (1 << 2)) != 0 {
+        "LDT"
+    } else {
+        "GDT"
+    };
     serial_write_str("  Segment: ");
     print_u64_hex(segment_selector);
     serial_write_str(" in ");
@@ -1078,7 +1080,6 @@ fn handle_segment_not_present(frame: &mut InterruptFrame) {
         serial_write_str(" (External)");
     }
     serial_write_str("\r\n");
-    
     loop {
         unsafe {
             core::arch::asm!("hlt", options(nomem, nostack, preserves_flags));
@@ -1092,7 +1093,6 @@ fn handle_stack_fault(frame: &mut InterruptFrame) {
     serial_write_str("  Error Code: 0x");
     print_u64_hex(frame.error_code);
     serial_write_str("\r\n");
-    
     loop {
         unsafe {
             core::arch::asm!("hlt", options(nomem, nostack, preserves_flags));
@@ -1103,7 +1103,6 @@ fn handle_stack_fault(frame: &mut InterruptFrame) {
 #[unsafe(no_mangle)]
 pub extern "C" fn awe_interrupt_handler(frame: &mut InterruptFrame) {
     let vector = frame.vector as u8;
-    
     // Handle hardware interrupts (IRQs)
     if vector >= 32 && vector < 48 {
         // PIC interrupts
@@ -1130,7 +1129,6 @@ pub extern "C" fn awe_interrupt_handler(frame: &mut InterruptFrame) {
         }
         return;
     }
-    
     // APIC vectors are reserved here, but this boot path has not yet
     // initialized a local-APIC MMIO mapping/EOI backend. Returning without
     // an EOI could wedge delivery, so fail visibly instead of pretending
@@ -1145,7 +1143,6 @@ pub extern "C" fn awe_interrupt_handler(frame: &mut InterruptFrame) {
         serial_write_str("\r\n");
         halt_after_exception();
     }
-    
     // Handle CPU exceptions
     if vector < 32 {
         let name = if (vector as usize) < EXCEPTION_NAMES.len() {
@@ -1153,13 +1150,11 @@ pub extern "C" fn awe_interrupt_handler(frame: &mut InterruptFrame) {
         } else {
             "Unknown Exception"
         };
-        
         serial_write_str("AWEOS: ");
         serial_write_str(name);
         serial_write_str(" (vector ");
         print_u64_hex(vector as u64);
         serial_write_str(")\r\n");
-        
         // Call specific handlers for common exceptions
         match vector {
             0 => handle_divide_error(frame), // Divide Error (#DE)
@@ -1179,7 +1174,6 @@ pub extern "C" fn awe_interrupt_handler(frame: &mut InterruptFrame) {
                 serial_write_str(" CS: 0x");
                 print_u64_hex(frame.cs);
                 print_stack_context(frame);
-                
                 loop {
                     unsafe {
                         core::arch::asm!("hlt", options(nomem, nostack, preserves_flags));
@@ -1189,7 +1183,6 @@ pub extern "C" fn awe_interrupt_handler(frame: &mut InterruptFrame) {
         }
         return;
     }
-    
     // Unknown interrupt
     serial_write_str("AWEOS: Unknown interrupt vector=");
     print_u64_hex(frame.vector);
