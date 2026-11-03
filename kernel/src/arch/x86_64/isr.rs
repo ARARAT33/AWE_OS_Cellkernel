@@ -78,9 +78,11 @@ impl InterruptFrame {
     /// Return the interrupted stack pointer without assuming that the CPU
     /// pushed an RSP field for a same-privilege interrupt.
     ///
-    /// The current x86_64 entry path does not assign IST stacks. If IST is
-    /// introduced, its vector-specific frame shape must be represented here
-    /// before those handlers use this accessor.
+    /// IST-backed vectors (NMI, #DF, #MC) switch RSP to the TSS IST stack
+    /// before the frame is built, but the CPU still does not push RSP/SS for
+    /// a same-privilege interrupt, so the derivation below stays valid: the
+    /// same-ring RSP is the address immediately after the three-word hardware
+    /// return frame (RIP, CS, RFLAGS) on whichever stack the entry used.
     pub fn interrupted_stack_pointer(&self) -> u64 {
         if self.interrupted_from_user() {
             self.rsp
