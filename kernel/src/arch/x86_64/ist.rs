@@ -117,9 +117,12 @@ mod tests {
             Some(MACHINE_CHECK_IST_INDEX)
         );
         // Three distinct vectors must occupy three distinct IST slots.
-        assert!(NMI_IST_INDEX != DOUBLE_FAULT_IST_INDEX);
-        assert!(NMI_IST_INDEX != MACHINE_CHECK_IST_INDEX);
-        assert!(DOUBLE_FAULT_IST_INDEX != MACHINE_CHECK_IST_INDEX);
+        // Checked at compile time per clippy::assertions_on_constants.
+        const {
+            assert!(NMI_IST_INDEX != DOUBLE_FAULT_IST_INDEX);
+            assert!(NMI_IST_INDEX != MACHINE_CHECK_IST_INDEX);
+            assert!(DOUBLE_FAULT_IST_INDEX != MACHINE_CHECK_IST_INDEX);
+        }
         // Non-critical vectors are not managed by this module.
         assert_eq!(ist_index_for_vector(0), None);
         assert_eq!(ist_index_for_vector(14), None);
