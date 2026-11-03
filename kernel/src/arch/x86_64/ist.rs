@@ -40,9 +40,7 @@ struct IstStack {
 }
 
 impl IstStack {
-    const EMPTY: IstStack = IstStack {
-        _bytes: [0; IST_STACK_SIZE],
-    };
+    const EMPTY: IstStack = IstStack { _bytes: [0; IST_STACK_SIZE] };
 }
 
 static mut NMI_STACK: IstStack = IstStack::EMPTY;
@@ -80,12 +78,9 @@ pub const fn ist_index_for_vector(vector: u8) -> Option<u8> {
 pub fn configure_ist_stacks(tss: &mut Tss64, idt: &mut Idt) -> Result<(), &'static str> {
     let tops = critical_stack_tops();
 
-    tss.set_ist(NMI_IST_INDEX, tops[0])
-        .map_err(|_| "NMI IST slot rejected")?;
-    tss.set_ist(DOUBLE_FAULT_IST_INDEX, tops[1])
-        .map_err(|_| "double-fault IST slot rejected")?;
-    tss.set_ist(MACHINE_CHECK_IST_INDEX, tops[2])
-        .map_err(|_| "machine-check IST slot rejected")?;
+    tss.set_ist(NMI_IST_INDEX, tops[0]).map_err(|_| "NMI IST slot rejected")?;
+    tss.set_ist(DOUBLE_FAULT_IST_INDEX, tops[1]).map_err(|_| "double-fault IST slot rejected")?;
+    tss.set_ist(MACHINE_CHECK_IST_INDEX, tops[2]).map_err(|_| "machine-check IST slot rejected")?;
 
     for (vector, ist) in [
         (NMI_VECTOR, NMI_IST_INDEX),
@@ -108,14 +103,8 @@ mod tests {
     #[test]
     fn critical_vectors_map_to_distinct_ist_slots() {
         assert_eq!(ist_index_for_vector(NMI_VECTOR), Some(NMI_IST_INDEX));
-        assert_eq!(
-            ist_index_for_vector(DOUBLE_FAULT_VECTOR),
-            Some(DOUBLE_FAULT_IST_INDEX)
-        );
-        assert_eq!(
-            ist_index_for_vector(MACHINE_CHECK_VECTOR),
-            Some(MACHINE_CHECK_IST_INDEX)
-        );
+        assert_eq!(ist_index_for_vector(DOUBLE_FAULT_VECTOR), Some(DOUBLE_FAULT_IST_INDEX));
+        assert_eq!(ist_index_for_vector(MACHINE_CHECK_VECTOR), Some(MACHINE_CHECK_IST_INDEX));
         // Three distinct vectors must occupy three distinct IST slots.
         assert!(NMI_IST_INDEX != DOUBLE_FAULT_IST_INDEX);
         assert!(NMI_IST_INDEX != MACHINE_CHECK_IST_INDEX);
@@ -156,19 +145,12 @@ mod tests {
 
         assert_eq!(idt.ist_index(NMI_VECTOR), Some(NMI_IST_INDEX));
         assert_eq!(idt.ist_index(DOUBLE_FAULT_VECTOR), Some(DOUBLE_FAULT_IST_INDEX));
-        assert_eq!(
-            idt.ist_index(MACHINE_CHECK_VECTOR),
-            Some(MACHINE_CHECK_IST_INDEX)
-        );
+        assert_eq!(idt.ist_index(MACHINE_CHECK_VECTOR), Some(MACHINE_CHECK_IST_INDEX));
 
         // Every other installed vector must remain on the interrupted stack.
         for vector in 0..=255u8 {
             if ist_index_for_vector(vector).is_none() {
-                assert_eq!(
-                    idt.ist_index(vector),
-                    None,
-                    "vector {vector} must not use an IST slot"
-                );
+                assert_eq!(idt.ist_index(vector), None, "vector {vector} must not use an IST slot");
             }
         }
     }
