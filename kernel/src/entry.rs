@@ -96,8 +96,7 @@ pub fn kernel_entry(info: &BootInfo) -> KernelBootStatus {
             // and before the IDT is loaded. Failing closed is the only
             // safe option: continuing without IST would let a fault on a
             // broken kernel stack escalate to a triple fault.
-            if crate::arch::x86_64::ist::configure_ist_stacks(&mut *tss_ptr, &mut *idt_ptr)
-                .is_err()
+            if crate::arch::x86_64::ist::configure_ist_stacks(&mut *tss_ptr, &mut *idt_ptr).is_err()
             {
                 serial_write_str("AWEOS: FATAL: critical IST stack setup failed\r\n");
                 crate::arch::x86_64::boot::halt();
