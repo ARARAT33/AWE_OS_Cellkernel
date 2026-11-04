@@ -88,11 +88,23 @@ pub fn kernel_entry(info: &BootInfo) -> KernelBootStatus {
         serial_write_str("AWEOS: SYSCALL/SYSRET MSRs initialized\r\n");
 
         let idt_ptr = core::ptr::addr_of_mut!(IDT);
+        let tss_ptr = core::ptr::addr_of_mut!(crate::arch::x86_64::gdt::TSS);
         unsafe {
             init_idt_stubs(&mut *idt_ptr, KERNEL_CODE_SELECTOR);
+            // Boot-order contract: the critical #NMI/#DF/#MC vectors get
+            // their dedicated IST stacks after the handlers are installed
+            // and before the IDT is loaded. Failing closed is the only
+            // safe option: continuing without IST would let a fault on a
+            // broken kernel stack escalate to a triple fault.
+            if crate::arch::x86_64::ist::configure_ist_stacks(&mut *tss_ptr, &mut *idt_ptr)
+                .is_err()
+            {
+                serial_write_str("AWEOS: FATAL: critical IST stack setup failed\r\n");
+                crate::arch::x86_64::boot::halt();
+            }
             (*idt_ptr).load();
         }
-        serial_write_str("AWEOS: IDT initialized\r\n");
+        serial_write_str("AWEOS: IDT & critical IST stacks initialized\r\n");
 
         init_kernel_heap();
         serial_write_str("AWEOS: Kernel Heap initialized\r\n");
@@ -114,7 +126,9 @@ pub fn kernel_entry(info: &BootInfo) -> KernelBootStatus {
         }
         serial_write_str("AWEOS: Interrupts & PIC/PIT initialized\r\n");
 
-        serial_write_str("AWEOS: Preemptive Scheduler initialized\r\n");
+        // No scheduler exists yet: timer ticks terminate in the ISR stubs.
+        // This line previously claimed a running scheduler; it does not.
+        serial_write_str("AWEOS: timer programmed (no scheduler yet)\r\n");
         serial_write_str("AWEOS: boot protocol validated\r\n");
         serial_write_str("AWEOS: kernel state = RUNNING\r\n");
         serial_write_str("AWEOS: kernel is alive\r\n");

@@ -133,3 +133,85 @@ merging it also restores `main` to green.
    and counts real timer interrupts.
 4. Consider extending the rustfmt-fix bot to `main` pushes.
 5. Re-evaluate stale open PRs against current `main`.
+
+
+---
+
+## Session 2026-11-04 — Wire critical IST stacks into the boot path
+
+### Repository audit performed first
+
+- Confirmed PR #56 (IST stacks for #NMI/#DF/#MC) was merged to `main`
+  (`6b77c7b`, merge commit 2026-11-04), restoring the CI-green state the
+  previous session achieved.
+- Re-read the carried-forward unresolved issues: `configure_ist_stacks`
+  was still not called from any boot path, and early boot serial output in
+  `kernel-bin/src/main.rs` printed fabricated readiness claims
+  ("100% Ready", "APIC initialized", "Preemptive Scheduler running",
+  "System Core Status = 100% COMPLETE") before any of those subsystems ran,
+  which violates the no-false-readiness-claims rule.
+- Verified the correct wiring point in `kernel_entry`
+  (`kernel/src/entry.rs`): after `init_idt_stubs` (so the critical
+  vectors have handlers) and before `Idt::load` (so the IST-marked entries
+  are what the CPU sees). TSS mutation after `ltr` is safe: the CPU reads
+  the TSS from memory at interrupt delivery.
+
+### Chosen task (top priority from the previous session log)
+
+1. Wire `configure_ist_stacks` into `kernel_entry` with a fail-closed
+   fatal path, between IDT stub installation and `Idt::load`.
+2. Add a host-runnable boot-order regression test pinning the contract
+   ("configure fails before stubs are installed, succeeds after").
+3. Remove the fabricated readiness claims from the early boot banner and
+   the false "Preemptive Scheduler initialized" line; keep the real
+   subsystem status lines that report actual initialization.
+
+### Work done (branch `feat/x86_64-ist-boot-wiring`)
+
+- `kernel/src/entry.rs`: after `init_idt_stubs`, the boot path now calls
+  `ist::configure_ist_stacks(&mut TSS, &mut IDT)`; on failure it prints a
+  FATAL diagnostic and halts instead of booting without IST protection.
+  Success is reported as "IDT & critical IST stacks initialized". The
+  false "Preemptive Scheduler initialized" line was replaced with an
+  accurate "timer programmed (no scheduler yet)" message.
+- `kernel/src/arch/x86_64/ist.rs`: new
+  `boot_order_contract_configure_after_stub_install` test — fails closed
+  on an empty IDT, succeeds after handlers are installed, and verifies
+  every critical vector is IST-marked afterwards.
+- `kernel-bin/src/main.rs`: the fabricated banner (fake 100%/50%
+  percentages, phantom APIC/IPC/VFS/scheduler claims) was replaced with a
+  factual early-boot banner; real subsystem status is printed only by the
+  code that actually initializes each subsystem.
+- `docs/AI-DEVELOPMENT-LOG.md`: this entry.
+
+### Test results
+
+- The new host-runnable test plus the 9 existing IST unit tests and the
+  GDT/IDT/entry/interrupts unit suites are exercised by the workspace
+  `cargo test` job in CI on this PR head.
+- The QEMU boot smoke and VirtIO runtime jobs exercise the real boot
+  image built from the modified `kernel_entry`; IST delivery under real
+  #NMI/#DF/#MC injection remains a separate QEMU exception-exercise test
+  that does not exist yet (carried forward, not claimed).
+- Exact CI results for this PR head are recorded in the PR checks; the
+  PR is left open for review per the no-unverified-merge rule.
+
+### Unresolved issues
+
+- QEMU exception-exercise test (#DE/#UD/#PF plus timer interrupt counts)
+  still missing — next session's primary target.
+- APIC/IOAPIC runtime (EOI backend, IOAPIC routing) still absent; the
+  system still boots with the legacy 8259 PIC only.
+- FPU/XSAVE per-task ownership not designed yet.
+- Stale open PRs (#55, #53, #52, #50, #48) still need re-evaluation
+  against current `main`.
+- IST behaviour under real NMI/#DF/#MC delivery still needs QEMU/hardware
+  evidence (unit + boot-order tests cover the wiring contract only).
+
+### Next session priorities
+
+1. Verify this PR's CI is green and merge it after review.
+2. Build the QEMU exception-exercise boot test (risk #4) using the
+   existing `build-and-smoke-test-image` pipeline.
+3. Begin APIC/IOAPIC runtime design (EOI backend first, then IOAPIC
+   routing), replacing the legacy PIC path in a follow-up PR.

@@ -210,28 +210,15 @@ fn main() {}
 pub extern "C" fn rust_main(boot_magic: u32, boot_info_addr: u64) -> ! {
     serial_init();
     serial_write(b"============================================================\r\n");
-    serial_write(b"  AWEOS Bootloader (AWELoader v1.0 - 100% Ready)\r\n");
+    serial_write(b"  AWEOS Bootloader (AWELoader v1.0)\r\n");
     serial_write(b"============================================================\r\n");
-    serial_write(b"AWELoader: Parsing ELF64 Kernel image... Done.\r\n");
-    serial_write(b"AWELoader: Memory map constructed (Total RAM detected: 2048 MB).\r\n");
-    serial_write(b"AWELoader: Passing execution control to CellKernel...\r\n\r\n");
+    serial_write(b"AWELoader: Handing boot information to CellKernel...\r\n\r\n");
 
-    serial_write(b"============================================================\r\n");
-    serial_write(b"  AWEOS CellKernel x86_64 (Kernel Infrastructure 100%)\r\n");
-    serial_write(b"============================================================\r\n");
-    serial_write(b"CellKernel: x86_64 Paging (PML4) initialized.\r\n");
-    serial_write(b"CellKernel: Physical & Virtual Memory Allocator active.\r\n");
-    serial_write(b"CellKernel: Kernel Heap (Slab Allocator) ready.\r\n");
-    serial_write(b"CellKernel: GDT, IDT (0-255 exception vectors) & APIC initialized.\r\n");
-    serial_write(b"CellKernel: SYSCALL/SYSRET MSRs registered.\r\n");
-    serial_write(b"CellKernel: Microkernel Cell IPC Subsystem initialized.\r\n");
-    serial_write(b"CellKernel: Virtual File System (AWEFS RAMDisk) mounted.\r\n");
-    serial_write(b"CellKernel: Preemptive Scheduler running (APIC Timer).\r\n");
-    serial_write(b"CellKernel: System Core Status = 100% COMPLETE.\r\n");
-    serial_write(
-        b"CellKernel: Overall OS Readiness = 50% (Core Finished, Pending GUI/Ecosystem).\r\n",
-    );
-    serial_write(b"CellKernel: Spawning Userspace Cell -> AWETerminal (Ring 3)...\r\n\r\n");
+    // The banner below used to claim paging, allocators, APIC, IPC, VFS and
+    // a running scheduler before they existed. Subsystems report their own
+    // real status as they are initialized in kernel_entry; this early path
+    // only does serial setup and boot-info validation.
+    serial_write(b"  AWEOS CellKernel x86_64 (early boot)\r\n");
 
     serial_write(b"AWEOS CellKernel\r\n");
 

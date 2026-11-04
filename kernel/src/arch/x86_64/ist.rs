@@ -186,4 +186,26 @@ mod tests {
         // Empty IDT: the critical vectors have no handler to mark.
         assert!(configure_ist_stacks(&mut tss, &mut idt).is_err());
     }
+
+    #[test]
+    fn boot_order_contract_configure_after_stub_install() {
+        // Boot-order contract for kernel_entry: configure_ist_stacks runs
+        // after init_idt_stubs and before Idt::load. Pin the "after" half on
+        // the host: without installed handlers it must fail closed, and
+        // once stubs are installed it must succeed and leave every critical
+        // vector IST-marked.
+        let mut tss = Tss64::new();
+        let mut idt = Idt::new();
+        assert!(
+            configure_ist_stacks(&mut tss, &mut idt).is_err(),
+            "must fail before handlers are installed"
+        );
+        for vector in 0..=255u8 {
+            idt.set_handler(vector, stub as *const () as usize as u64, 0x08);
+        }
+        assert!(configure_ist_stacks(&mut tss, &mut idt).is_ok());
+        for vector in [NMI_VECTOR, DOUBLE_FAULT_VECTOR, MACHINE_CHECK_VECTOR] {
+            assert_eq!(idt.ist_index(vector), ist_index_for_vector(vector));
+        }
+    }
 }
