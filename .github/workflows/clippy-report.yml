@@ -1,0 +1,49 @@
+name: clippy-report
+
+# When workspace clippy fails on a PR, post the exact compiler diagnostics
+# as a PR comment so failures are diagnosable without log access.
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  clippy:
+    name: Workspace clippy with PR diagnostics
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Prime Cargo cache
+        run: cargo fetch
+
+      - name: Run clippy, capture output
+        id: clippy
+        run: |
+          cargo clippy --workspace --all-targets -- -D warnings -A dead_code -A unused_attributes -A bad_asm_style -A unused_imports > clippy-output.txt 2>&1
+          echo "exit=0" >> "$GITHUB_OUTPUT"
+
+      - name: Comment diagnostics on PR
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            let out = '';
+            try { out = fs.readFileSync('clippy-output.txt', 'utf8'); } catch (e) {}
+            const lines = out.split('\n');
+            const tail = lines.slice(-250).join('\n');
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: 'Clippy diagnostics (last 250 lines):\n\n\`\`\`\n' + tail + '\n\`\`\`'
+            });

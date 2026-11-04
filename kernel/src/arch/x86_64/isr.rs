@@ -78,9 +78,11 @@ impl InterruptFrame {
     /// Return the interrupted stack pointer without assuming that the CPU
     /// pushed an RSP field for a same-privilege interrupt.
     ///
-    /// The current x86_64 entry path does not assign IST stacks. If IST is
-    /// introduced, its vector-specific frame shape must be represented here
-    /// before those handlers use this accessor.
+    /// IST-backed vectors (NMI, #DF, #MC) switch RSP to the TSS IST stack
+    /// before the frame is built, but the CPU still does not push RSP/SS for
+    /// a same-privilege interrupt, so the derivation below stays valid: the
+    /// same-ring RSP is the address immediately after the three-word hardware
+    /// return frame (RIP, CS, RFLAGS) on whichever stack the entry used.
     pub fn interrupted_stack_pointer(&self) -> u64 {
         if self.interrupted_from_user() {
             self.rsp
@@ -148,7 +150,9 @@ mod tests {
         for vector in [8, 10, 11, 12, 13, 14, 17, 21, 29, 30] {
             assert!(is_exception_with_error_code(vector), "vector {vector}");
         }
-        for vector in [0, 1, 2, 3, 4, 5, 6, 7, 9, 15, 16, 18, 19, 20, 28, 31, 32, 255] {
+        for vector in [
+            0, 1, 2, 3, 4, 5, 6, 7, 9, 15, 16, 18, 19, 20, 28, 31, 32, 255,
+        ] {
             assert!(!is_exception_with_error_code(vector), "vector {vector}");
         }
     }
@@ -163,9 +167,8 @@ mod tests {
         f.rsp = 0x1;
         f.ss = 0xffff;
 
-        let expected_rsp =
-            (&f as *const InterruptFrame as usize + core::mem::offset_of!(InterruptFrame, rsp))
-                as u64;
+        let expected_rsp = (&f as *const InterruptFrame as usize
+            + core::mem::offset_of!(InterruptFrame, rsp)) as u64;
         assert_eq!(f.interrupted_stack_pointer(), expected_rsp);
         assert_eq!(f.interrupted_stack_segment(), None);
         assert!(f.validate());
