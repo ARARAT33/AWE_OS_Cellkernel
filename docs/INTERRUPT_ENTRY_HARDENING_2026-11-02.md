@@ -1,5 +1,12 @@
 # x86_64 Interrupt Entry Hardening — 2026-11-02
 
+> **2026-11-05 alignment correction:** Long mode aligns the new interrupt
+> frame to a 16-byte boundary before pushing it, but the old/interrupted RSP
+> is saved unconditionally and may be byte-unaligned. The frame validator
+> checks that saved RSP is nonzero and canonical; it must not require
+> eight-byte alignment. This follows Intel SDM Vol. 3A §6.14.2 and AMD64
+> APM Vol. 2 §8.9.3.
+
 > **2026-11-05 architecture correction:** The original same-ring stack-frame
 > statement below was incorrect for 64-bit mode. Intel SDM Vol. 3A
 > §6.14.2 states that long mode unconditionally pushes the interrupted
