@@ -141,7 +141,6 @@ pub fn kernel_entry(info: &BootInfo) -> KernelBootStatus {
     KernelBootStatus::Ready
 }
 
-
 /// Enter a user-mode bootstrap context.
 ///
 /// # Safety

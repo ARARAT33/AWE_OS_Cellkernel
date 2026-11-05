@@ -210,7 +210,10 @@ fn main() {}
 
 #[cfg(test)]
 mod bootstrap_paging_tests {
-    use aweos_kernel::memory::{PageFlags, x86_64::{BOOTSTRAP_LEAF_FLAGS, BOOTSTRAP_TABLE_FLAGS}};
+    use aweos_kernel::memory::{
+        PageFlags,
+        x86_64::{BOOTSTRAP_LEAF_FLAGS, BOOTSTRAP_TABLE_FLAGS},
+    };
 
     #[test]
     fn bootstrap_page_table_flags_never_grant_user_access() {
