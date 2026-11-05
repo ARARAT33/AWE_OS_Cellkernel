@@ -91,7 +91,9 @@ impl InterruptFrame {
     pub fn stack_pointer_valid(&self) -> bool {
         let rsp = self.interrupted_stack_pointer();
         let upper = rsp >> 48;
-        (upper == 0 || upper == 0xffff) && (rsp & 0x7) == 0
+        // Long mode aligns the new interrupt frame, not the interrupted
+        // program's saved RSP. The old RSP may therefore be byte-unaligned.
+        rsp != 0 && (upper == 0 || upper == 0xffff)
     }
 
     pub const fn rflags_valid(&self) -> bool {
@@ -157,6 +159,20 @@ mod tests {
 
         assert_eq!(f.interrupted_stack_pointer(), 0x0080_0000);
         assert_eq!(f.interrupted_stack_segment(), 0x10);
+        assert!(f.validate());
+    }
+
+    #[test]
+    fn unaligned_interrupted_rsp_is_valid_in_long_mode() {
+        let mut f = InterruptFrame::empty();
+        f.vector = 32;
+        f.rip = 0x0040_0000;
+        f.cs = 0x08;
+        f.rflags = 0x202;
+        f.rsp = 0x0080_0001;
+        f.ss = 0x10;
+
+        assert!(f.stack_pointer_valid());
         assert!(f.validate());
     }
 
