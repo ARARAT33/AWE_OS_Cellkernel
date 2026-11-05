@@ -1,3 +1,4 @@
+successfully downloaded text file (SHA: 6484e1bf6af8d318111e75d6f7c12c8d3d645200)
 successfully downloaded text file (SHA: bb52958fc90612e9a51964eb104215e964c829aa)
 # AI Development Log
 
@@ -482,3 +483,47 @@ Workflow run references:
 4. Continue with per-process page tables/user-only mappings before any
    Ring 3 re-enable, then the persistent physical-frame allocator
    integration, then APIC/IOAPIC EOI/routing and the bounded CellManager.
+
+
+---
+
+## Session 2026-11-05 (follow-up) — CI failure diagnosis and revalidation
+
+### Audit of the latest PR head
+- PR #57 head `bd4226d` (exception/IST injection self-test pass) ran its
+  full check set at 2026-11-05T20:17Z and every executing job failed
+  within ~20-45 seconds: the Quality Gate jobs ("Rust workspace" and
+  "UEFI loader") both failed at the `cargo fetch` "Prime Cargo cache" step
+  with exit 101, and the CI workspace check, Clippy diagnostics,
+  cloud-security, virtio, multi-arch images and AOSIN installer jobs all
+  failed equally fast.
+- The bootable-image workflow produced no check runs at all for this head.
+
+### Diagnosis
+- `cargo fetch` performs no compilation: an exit-101 failure there is a
+  manifest-resolution or registry/network failure, not a code error.
+- All changed manifests on this head were re-verified as valid TOML:
+  `kernel/Cargo.toml` adds only the `kernel-selftest` feature and
+  `kernel-bin/Cargo.toml` only the `selftest` feature forwarding to it.
+  Features do not participate in dependency resolution, so the fetch graph
+  is unchanged from the previously green heads.
+- All kernel/boot workspace dependencies are path dependencies; the only
+  registry traffic `cargo fetch` can make concerns host-side apps/tools
+  crates that are unchanged since the green runs.
+- All ten jobs failed in the same wall-clock minute after seconds of
+  runtime, across jobs whose first cargo command differs. The most
+  probable cause is a transient registry/network outage on the runners,
+  not a defect in the pushed tree.
+- No code was changed in response: nothing in the failure pattern points
+  at the tree, and speculative "fixes" without evidence would violate the
+  protocol.
+
+### Action
+- This documentation-only commit triggers a fresh full validation run on
+  the same tree. Results will be recorded honestly in the next entry:
+  if the same jobs fail again at `cargo fetch`/workspace check, the
+  failure is deterministic and will be investigated at manifest/lockfile
+  level with exact diagnostics; if they pass, the 20:17Z red set is
+  confirmed as transient infrastructure noise.
+- The bootable-image workflow's missing check runs for head `bd4226d`
+  remain unexplained and will be rechecked on the new head.
