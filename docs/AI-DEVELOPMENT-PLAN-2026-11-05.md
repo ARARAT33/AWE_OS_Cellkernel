@@ -11,9 +11,10 @@ AI development log, and a review of the open IST boot-wiring change.
    `lidt`; halt with a diagnostic if configuration fails.
 2. Correct `InterruptFrame` interpretation using Intel SDM Vol. 3A
    §6.14.2: in 64-bit mode the CPU unconditionally saves SS:RSP for every
-   interrupt/exception, including same-CPL events with IST=0. Use the
-   hardware-saved fields for every vector and add same-ring, IST and Ring 3
-   regression tests.
+   interrupt/exception, including same-CPL events with IST=0. Long mode
+   aligns the new interrupt frame, not the saved interrupted RSP, so do not
+   reject a valid byte-unaligned old RSP. Use the hardware-saved fields for
+   every vector and test same-ring, IST, Ring 3 and unaligned saved-RSP cases.
 3. Make IST configuration preflight all required IDT gates and stack tops
    before mutating TSS/IDT state.
 
