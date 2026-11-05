@@ -14,7 +14,10 @@ pub mod x86_64;
 pub use address::{PhysicalAddress, VirtualAddress};
 pub use allocator::BumpAllocator;
 pub use boot_mapper::{BootMapError, BootMapper};
-pub use frame::{Frame, PAGE_SIZE, PhysicalFrameAllocator, frame_at, frame_end};
+pub use frame::{
+    BitmapFrameAllocator, BitmapFrameError, Frame, FrameAllocatorError, PAGE_SIZE,
+    PhysicalFrameAllocator, frame_at, frame_end,
+};
 pub use mapper::{MapError, PageMapper};
 pub use paging::{
     PageFlags, PageTable, PageTableEntry, indices as page_indices, page_offset, valid_mapping,
