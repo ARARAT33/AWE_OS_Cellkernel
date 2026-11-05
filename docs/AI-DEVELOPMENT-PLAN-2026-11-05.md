@@ -18,6 +18,14 @@ AI development log, and a review of the open IST boot-wiring change.
 3. Make IST configuration preflight all required IDT gates and stack tops
    before mutating TSS/IDT state.
 
+## P0 — Capability handles must never be reused
+
+1. Replace wrapping capability-ID allocation with a checked, exhausted state.
+2. Preserve the final `u64::MAX` ID exactly once; subsequent inserts must
+   fail with an explicit error rather than returning an old handle.
+3. Add a regression test that verifies existing capabilities remain
+   addressable and no stale ID is reissued after exhaustion.
+
 ## P0 — Do not expose the kernel through the bootstrap user map
 
 1. Audit both bootstrap page-table builders (the 32-bit entry assembly and
