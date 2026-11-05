@@ -13,6 +13,7 @@ pub enum KernelBootStatus {
     UnsupportedArchitecture = 2,
     NoCpu = 3,
     NoUsableMemory = 4,
+    InvalidMemoryMap = 5,
 }
 
 pub struct KernelContext {
@@ -54,7 +55,10 @@ pub fn kernel_entry(info: &BootInfo) -> KernelBootStatus {
         return KernelBootStatus::NoUsableMemory;
     }
 
-    let mut frames = unsafe { PhysicalFrameAllocator::from_boot_info(info) };
+    let mut frames = match unsafe { PhysicalFrameAllocator::from_boot_info(info) } {
+        Ok(allocator) => allocator,
+        Err(_) => return KernelBootStatus::InvalidMemoryMap,
+    };
     if frames.allocate().is_none() {
         return KernelBootStatus::NoUsableMemory;
     }
@@ -222,4 +226,86 @@ mod tests {
         let info = BootInfo::empty(Architecture::X86_64);
         assert_eq!(kernel_entry(&info), KernelBootStatus::NoUsableMemory);
     }
+
+    #[test]
+    fn rejects_overlapping_memory_map() {
+        let regions = [
+            MemoryRegion { base: 0x1000, length: 0x3000, kind: 1, reserved: 0 },
+            MemoryRegion { base: 0x3000, length: 0x1000, kind: 2, reserved: 0 },
+        ];
+        let info = BootInfo {
+            magic: awe_boot_protocol::AWE_BOOT_MAGIC,
+            version: awe_boot_protocol::AWE_BOOT_VERSION,
+            size: core::mem::size_of::<BootInfo>() as u32,
+            architecture: Architecture::X86_64,
+            cpu_count: 1,
+            memory_regions: regions.as_ptr(),
+            memory_region_count: regions.len() as u32,
+            framebuffer_address: 0,
+            framebuffer_size: 0,
+            framebuffer_width: 0,
+            framebuffer_height: 0,
+            framebuffer_pitch: 0,
+            acpi_rsdp: 0,
+            device_tree: 0,
+            kernel_base: 0,
+            kernel_size: 0,
+        };
+        assert_eq!(kernel_entry(&info), KernelBootStatus::InvalidMemoryMap);
+    }
+
+    #[test]
+    fn rejects_overflowing_memory_map_region() {
+        let regions = [MemoryRegion {
+            base: u64::MAX - 0xfff,
+            length: 0x2000,
+            kind: 1,
+            reserved: 0,
+        }];
+        let info = BootInfo {
+            magic: awe_boot_protocol::AWE_BOOT_MAGIC,
+            version: awe_boot_protocol::AWE_BOOT_VERSION,
+            size: core::mem::size_of::<BootInfo>() as u32,
+            architecture: Architecture::X86_64,
+            cpu_count: 1,
+            memory_regions: regions.as_ptr(),
+            memory_region_count: 1,
+            framebuffer_address: 0,
+            framebuffer_size: 0,
+            framebuffer_width: 0,
+            framebuffer_height: 0,
+            framebuffer_pitch: 0,
+            acpi_rsdp: 0,
+            device_tree: 0,
+            kernel_base: 0,
+            kernel_size: 0,
+        };
+        assert_eq!(kernel_entry(&info), KernelBootStatus::InvalidMemoryMap);
+    }
+
+    #[test]
+    fn rejects_misaligned_memory_map_pointer_before_reading_it() {
+        let storage = [0u8; core::mem::size_of::<MemoryRegion>() + 1];
+        let misaligned = unsafe { storage.as_ptr().add(1).cast::<MemoryRegion>() };
+        let info = BootInfo {
+            magic: awe_boot_protocol::AWE_BOOT_MAGIC,
+            version: awe_boot_protocol::AWE_BOOT_VERSION,
+            size: core::mem::size_of::<BootInfo>() as u32,
+            architecture: Architecture::X86_64,
+            cpu_count: 1,
+            memory_regions: misaligned,
+            memory_region_count: 1,
+            framebuffer_address: 0,
+            framebuffer_size: 0,
+            framebuffer_width: 0,
+            framebuffer_height: 0,
+            framebuffer_pitch: 0,
+            acpi_rsdp: 0,
+            device_tree: 0,
+            kernel_base: 0,
+            kernel_size: 0,
+        };
+        assert_eq!(kernel_entry(&info), KernelBootStatus::InvalidMemoryMap);
+    }
+
 }
