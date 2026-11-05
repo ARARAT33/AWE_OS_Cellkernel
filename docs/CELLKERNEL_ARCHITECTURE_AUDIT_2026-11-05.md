@@ -11,7 +11,7 @@ AWE_OS has a substantial Rust `no_std` foundation and a QEMU-tested x86_64 boot 
 
 A critical security issue was found in the bootstrap page tables: the initial Multiboot assembly used U/S=1 at PML4/PDPT and 2 MiB leaves (`0x87`), and the Rust identity-map helper also included `PageFlags::USER`. The boot path additionally attempted to enter Ring 3 without a per-process address space. That would expose the bootstrap identity-mapped kernel memory to CPL3. This development pass changes the bootstrap maps to supervisor-only and defers Ring 3 until isolated user mappings exist.
 
-A second correctness issue was found in interrupt-frame accessors: an IST stack switch saves the interrupted SS:RSP even when CPL remains zero. The prior accessor treated every same-CPL interrupt as if those words were absent. This pass makes frame interpretation aware of the same IST-vector map used by IDT configuration.
+A second correctness issue was found in interrupt-frame accessors. Intel SDM Vol. 3A §6.14.2 specifies that 64-bit mode unconditionally pushes the interrupted SS:RSP for every interrupt/exception, including same-CPL events with IST=0. The prior accessor incorrectly derived RSP for same-ring/no-IST events and omitted SS. This pass now consumes the hardware-saved fields for all vectors; the IST field controls which handler stack is selected, not whether the saved SS:RSP fields exist.
 
 ## Repository and workspace map
 
