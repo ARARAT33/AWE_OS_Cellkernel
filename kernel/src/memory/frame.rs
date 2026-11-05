@@ -364,7 +364,7 @@ mod tests {
         }];
         let info = boot_info(&regions);
         assert_eq!(
-            unsafe { PhysicalFrameAllocator::from_boot_info(&info) }.err(),
+            unsafe { PhysicalFrameAllocator::try_from_boot_info(&info) }.err(),
             Some(FrameAllocatorError::RegionAddressOverflow)
         );
     }
@@ -406,11 +406,11 @@ mod tests {
         assert_eq!(second.start, 0x101000);
         allocator.try_free_frame(first).unwrap();
         assert_eq!(
-            allocator.free_frame(first),
+            allocator.try_free_frame(first),
             Err(BitmapFrameError::DoubleFree)
         );
         assert_eq!(
-            allocator.free_frame(Frame {
+            allocator.try_free_frame(Frame {
                 start: second.start + 1
             }),
             Err(BitmapFrameError::InvalidFrame)
