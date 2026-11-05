@@ -75,9 +75,17 @@ pub const EFI_CONVENTIONAL_MEMORY: u32 = 7;
 
 /// Converts a UEFI memory descriptor into the AWEOS normalized memory-region form.
 pub fn descriptor_to_region(d: &UefiMemoryDescriptor) -> Option<MemoryRegion> {
-    if d.typ != EFI_CONVENTIONAL_MEMORY { return None; }
+    if d.typ != EFI_CONVENTIONAL_MEMORY || d.number_of_pages == 0 {
+        return None;
+    }
     let length = d.number_of_pages.checked_mul(4096)?;
-    Some(MemoryRegion { base: d.physical_start, length, kind: 1, reserved: 0 })
+    d.physical_start.checked_add(length)?;
+    Some(MemoryRegion {
+        base: d.physical_start,
+        length,
+        kind: 1,
+        reserved: 0,
+    })
 }
 
 pub const fn initial_boot_info() -> BootInfo {
@@ -98,5 +106,36 @@ pub const fn initial_boot_info() -> BootInfo {
         device_tree: 0,
         kernel_base: 0,
         kernel_size: 0,
+    }
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn descriptor(physical_start: u64, number_of_pages: u64) -> UefiMemoryDescriptor {
+        UefiMemoryDescriptor {
+            typ: EFI_CONVENTIONAL_MEMORY,
+            pad: 0,
+            physical_start,
+            virtual_start: 0,
+            number_of_pages,
+            attribute: 0,
+        }
+    }
+
+    #[test]
+    fn conventional_memory_descriptor_is_normalized() {
+        let region = descriptor_to_region(&descriptor(0x1000, 4)).unwrap();
+        assert_eq!(region.base, 0x1000);
+        assert_eq!(region.length, 0x4000);
+        assert_eq!(region.kind, 1);
+    }
+
+    #[test]
+    fn zero_page_and_overflowing_descriptors_are_rejected() {
+        assert!(descriptor_to_region(&descriptor(0x1000, 0)).is_none());
+        assert!(descriptor_to_region(&descriptor(u64::MAX - 0xfff, 2)).is_none());
     }
 }
