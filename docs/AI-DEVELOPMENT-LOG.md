@@ -303,3 +303,40 @@ PR #57 remains open and unmerged pending the remaining VirtIO check and review.
 - The earlier VirtIO Runtime failure is recorded as 9 passed / 1 failed; the failing test was the stale QEMU milestone contract. The updated test has not yet completed on the formatted head.
 
 **Current validation state:** CI workspace compilation/tests passed on `fa7c254b`; formatting was corrected in `7824f4d`; full CI, Clippy, Cloud Security, Bootable Image, Multi-Architecture and VirtIO validation on the final formatted tree is pending. No physical hardware or injected NMI/#DF/#MC test was performed.
+
+
+---
+
+## Session 2026-11-05 — full audit continuation and CI lint remediation
+
+### Repository / branch state
+- Re-checked repository metadata: default branch is `main`; current `main` head is merge commit `6b77c7b` (PR #56, IST stack primitives). No change was made to `main` in this session.
+- Reviewed the existing open PR #57 (`feat/x86_64-ist-boot-wiring` → `main`) and its 21 changed files, architecture audit, prioritized plan, boot entry, IST wiring, bootstrap page tables, memory-map validation, capability allocator, context-switch assembly and product-core tests.
+- Continued the existing PR branch; did not create or delete branches, force-push, or merge unverified work.
+
+### Current implementation review
+- Confirmed PR #57 wires `configure_ist_stacks` after IDT stub installation and before `Idt::load`, with a fatal diagnostic and halt on configuration failure.
+- Confirmed the bootstrap page-table builders use supervisor-only table and leaf flags and the boot path explicitly defers Ring 3 until isolated per-process address spaces exist.
+- Confirmed the checked BootInfo/frame-map path rejects excessive counts, null/misaligned pointers, descriptor-array arithmetic overflow, zero/overflowing regions, unknown kinds and unsorted/overlapping ranges. The cursor remains only an early-boot probe; it is not yet the persistent allocator used by the VM subsystem.
+- Confirmed capability IDs no longer wrap back to previously issued IDs; the final `u64::MAX` is issued once and later inserts fail with `IdExhausted`.
+
+### CI failures found and code fixes
+- On PR head `f5cbfbf`, workspace compilation/tests, formatting, UEFI loader, VirtIO QEMU runtime, multi-architecture image build and AOSIN installer matrix passed. The bootable-image workflow was still running when inspected. Quality Gate, Cloud Security and the dedicated Clippy diagnostics job failed because Clippy promoted `manual_is_multiple_of` to an error at `kernel/src/memory/frame.rs:82`.
+- Fixed that exact check in `kernel/src/memory/frame.rs` to use `is_multiple_of` (commit `c3b48e5`).
+- The fresh run on `c3b48e5` exposed a second independent `manual_is_multiple_of` lint in the Multiboot2 parser at `kernel-bin/src/main.rs:571`. Workspace compilation, workspace tests, formatting and UEFI loader passed on that head; Clippy/Quality/Cloud Security failed at this second lint.
+- Fixed the second check to use `!(size - 16).is_multiple_of(entry_size)` (commit `5bd894b`). The divisor is guarded by the preceding `entry_size < 24` short-circuit check.
+- Fresh CI/Clippy/Quality/Cloud Security/boot-image/VirtIO/multi-architecture/AOSIN runs for `5bd894b` have started. Their results are pending at the time of this log update; no green result is claimed yet.
+
+### Files changed in this continuation
+- `kernel/src/memory/frame.rs`
+- `kernel-bin/src/main.rs`
+- `docs/AI-DEVELOPMENT-LOG.md` (this entry)
+
+### Remaining risks / next priorities
+1. Wait for the full workflow set on `5bd894b`; inspect exact job logs and fix any remaining real failures without suppressing lints.
+2. Re-run/verify the bootable-image QEMU smoke and VirtIO QEMU runtime on the final PR head.
+3. Review PR #57 against its current `main` base and keep it unmerged until all required checks are green and the security changes are reviewed.
+4. Add explicit QEMU exception/IST delivery tests for #DE/#UD/#PF and #NMI/#DF/#MC; the current QEMU boot smoke does not inject these events.
+5. Continue toward per-process page tables, persistent frame allocator integration, APIC/IOAPIC EOI/routing, timer-driven scheduling and FPU/XSAVE ownership.
+
+Local `cargo`, `rustc` and QEMU were not available in this automation environment. All reported test/build/QEMU results are from the linked GitHub Actions jobs. No physical hardware validation was performed.
