@@ -55,7 +55,7 @@ pub fn kernel_entry(info: &BootInfo) -> KernelBootStatus {
         return KernelBootStatus::NoUsableMemory;
     }
 
-    let mut frames = match unsafe { PhysicalFrameAllocator::from_boot_info(info) } {
+    let mut frames = match unsafe { PhysicalFrameAllocator::try_from_boot_info(info) } {
         Ok(allocator) => allocator,
         Err(_) => return KernelBootStatus::InvalidMemoryMap,
     };
@@ -295,8 +295,14 @@ mod tests {
 
     #[test]
     fn rejects_misaligned_memory_map_pointer_before_reading_it() {
-        let storage = [0u8; core::mem::size_of::<MemoryRegion>() + 1];
-        let misaligned = unsafe { storage.as_ptr().add(1).cast::<MemoryRegion>() };
+        let storage = [0u64; 4];
+        let misaligned = unsafe {
+            storage
+                .as_ptr()
+                .cast::<u8>()
+                .add(1)
+                .cast::<MemoryRegion>()
+        };
         let info = BootInfo {
             magic: awe_boot_protocol::AWE_BOOT_MAGIC,
             version: awe_boot_protocol::AWE_BOOT_VERSION,
