@@ -3,9 +3,10 @@
 /// CPU state captured by the x86_64 common ISR entry.
 ///
 /// The register/vector/error/RIP/CS/RFLAGS prefix is always present. The
-/// trailing RSP/SS words are pushed by hardware only when the interrupt
-/// changes privilege level; same-ring handlers must use the accessors below
-/// instead of reading those fields as though hardware had populated them.
+/// trailing RSP/SS words are present when hardware switches stacks because
+/// CPL changes or an IDT gate selects an IST slot. Same-ring handlers without
+/// an IST switch must use the accessors below instead of reading those fields
+/// as though hardware had populated them.
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct InterruptFrame {
@@ -75,25 +76,32 @@ impl InterruptFrame {
         self.cs & 0x3 != 0
     }
 
-    /// Return the interrupted stack pointer without assuming that the CPU
-    /// pushed an RSP field for a same-privilege interrupt.
+    /// Whether the CPU switched stacks before constructing this frame.
     ///
-    /// IST-backed vectors (NMI, #DF, #MC) switch RSP to the TSS IST stack
-    /// before the frame is built, but the CPU still does not push RSP/SS for
-    /// a same-privilege interrupt, so the derivation below stays valid: the
-    /// same-ring RSP is the address immediately after the three-word hardware
-    /// return frame (RIP, CS, RFLAGS) on whichever stack the entry used.
+    /// In long mode, a privilege transition or a non-zero IST field causes
+    /// hardware to save the old SS:RSP even when the interrupted CPL remains
+    /// zero. The critical IST vectors are defined by the same mapping used
+    /// when the IDT is configured.
+    pub fn interrupted_stack_was_switched(&self) -> bool {
+        self.interrupted_from_user()
+            || (self.vector <= u8::MAX as u64
+                && super::ist::ist_index_for_vector(self.vector as u8).is_some())
+    }
+
+    /// Return the interrupted stack pointer using the hardware-saved value
+    /// after a privilege or IST stack switch. For a same-ring interrupt with
+    /// no IST slot, derive the old RSP from the three-word return frame.
     pub fn interrupted_stack_pointer(&self) -> u64 {
-        if self.interrupted_from_user() {
+        if self.interrupted_stack_was_switched() {
             self.rsp
         } else {
             (self as *const Self as usize + core::mem::offset_of!(Self, rsp)) as u64
         }
     }
 
-    /// The interrupted SS is hardware-saved only after a privilege transition.
-    pub const fn interrupted_stack_segment(&self) -> Option<u64> {
-        if self.interrupted_from_user() {
+    /// The interrupted SS is hardware-saved after a privilege or IST switch.
+    pub fn interrupted_stack_segment(&self) -> Option<u64> {
+        if self.interrupted_stack_was_switched() {
             Some(self.ss)
         } else {
             None
@@ -171,6 +179,22 @@ mod tests {
             + core::mem::offset_of!(InterruptFrame, rsp)) as u64;
         assert_eq!(f.interrupted_stack_pointer(), expected_rsp);
         assert_eq!(f.interrupted_stack_segment(), None);
+        assert!(f.validate());
+    }
+
+    #[test]
+    fn ist_same_ring_frame_uses_hardware_saved_rsp_and_ss() {
+        let mut f = InterruptFrame::empty();
+        f.vector = 8; // Double Fault uses IST2.
+        f.rip = 0x0040_0000;
+        f.cs = 0x08; // Same privilege level: CPL0.
+        f.rflags = 0x202;
+        f.rsp = 0x0080_0000;
+        f.ss = 0x10;
+
+        assert!(f.interrupted_stack_was_switched());
+        assert_eq!(f.interrupted_stack_pointer(), 0x0080_0000);
+        assert_eq!(f.interrupted_stack_segment(), Some(0x10));
         assert!(f.validate());
     }
 
