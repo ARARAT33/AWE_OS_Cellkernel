@@ -35,6 +35,9 @@ jobs:
             echo '--- check: kernel-bin with selftest feature (x86_64-unknown-none) ---'
             cargo check -p aweos-kernel-bin --target x86_64-unknown-none --features selftest 2>&1 | tail -n 80
             echo "CHECK_SELFTEST_EXIT=${PIPESTATUS[0]}"
+            echo '--- test: workspace, all targets (virtio job parity) ---'
+            cargo test --workspace --all-targets 2>&1 | tail -n 200
+            echo "TEST_ALL_TARGETS_EXIT=${PIPESTATUS[0]}"
             echo '~~~'
           } > /tmp/diag.txt
           cat /tmp/diag.txt
