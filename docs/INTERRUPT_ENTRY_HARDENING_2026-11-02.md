@@ -1,5 +1,13 @@
 # x86_64 Interrupt Entry Hardening — 2026-11-02
 
+> **2026-11-05 architecture correction:** The original same-ring stack-frame
+> statement below was incorrect for 64-bit mode. Intel SDM Vol. 3A
+> §6.14.2 states that long mode unconditionally pushes the interrupted
+> SS:RSP for every interrupt/exception, including same-CPL events with
+> IST=0. The current `InterruptFrame` implementation therefore reads the
+> hardware-saved `rsp` and `ss` fields for all vectors. The earlier
+> same-ring derivation described in this historical plan is superseded.
+
 ## Main-branch inspection
 
 - Repository: `ARARAT33/AWE_OS_Cellkernel`
