@@ -21,7 +21,12 @@ pub const fn frame_at(address: u64) -> Frame {
     }
 }
 
-pub const fn frame_end(frame: Frame) -> Option<u64> {
+/// Legacy exclusive-end helper. Use checked_frame_end when overflow must be distinguished.
+pub const fn frame_end(frame: Frame) -> u64 {
+    frame.start.saturating_add(PAGE_SIZE)
+}
+
+pub const fn checked_frame_end(frame: Frame) -> Option<u64> {
     frame.start.checked_add(PAGE_SIZE)
 }
 
@@ -61,7 +66,7 @@ impl PhysicalFrameAllocator {
     /// The memory-region array must be readable for memory_region_count
     /// descriptors, aligned for MemoryRegion, and remain valid and immutable
     /// for this allocator's lifetime. The BootInfo object must also be valid.
-    pub unsafe fn from_boot_info(info: &BootInfo) -> Result<Self, FrameAllocatorError> {
+    pub unsafe fn try_from_boot_info(info: &BootInfo) -> Result<Self, FrameAllocatorError> {
         if !awe_boot_protocol::validate(info) {
             return Err(FrameAllocatorError::InvalidBootInfo);
         }
@@ -119,6 +124,16 @@ impl PhysicalFrameAllocator {
         };
         allocator.select_next_region();
         Ok(allocator)
+    }
+
+    /// Compatibility wrapper for callers that only need a best-effort cursor.
+    /// New boot code should use try_from_boot_info and handle its error.
+    ///
+    /// # Safety
+    /// The memory-map pointer must satisfy the same validity requirements as
+    /// try_from_boot_info.
+    pub unsafe fn from_boot_info(info: &BootInfo) -> Self {
+        unsafe { Self::try_from_boot_info(info) }.unwrap_or_else(|_| Self::empty())
     }
 
     fn select_next_region(&mut self) {
@@ -222,7 +237,7 @@ impl<const MAX_BITMAP_WORDS: usize> BitmapFrameAllocator<MAX_BITMAP_WORDS> {
         None
     }
 
-    pub fn free_frame(&mut self, frame: Frame) -> Result<(), BitmapFrameError> {
+    pub fn try_free_frame(&mut self, frame: Frame) -> Result<(), BitmapFrameError> {
         if !self.valid {
             return Err(BitmapFrameError::InvalidAllocator);
         }
@@ -243,6 +258,12 @@ impl<const MAX_BITMAP_WORDS: usize> BitmapFrameAllocator<MAX_BITMAP_WORDS> {
         }
         self.bitmap[word_idx] &= !mask;
         Ok(())
+    }
+
+    /// Compatibility wrapper. Use try_free_frame when the caller must observe
+    /// invalid-frame and double-free errors.
+    pub fn free_frame(&mut self, frame: Frame) {
+        let _ = self.try_free_frame(frame);
     }
 }
 
@@ -275,8 +296,8 @@ mod tests {
     #[test]
     fn frame_alignment_and_end_are_checked() {
         assert_eq!(frame_at(0x1234).start, 0x1000);
-        assert_eq!(frame_end(frame_at(0x1234)), Some(0x2000));
-        assert_eq!(frame_end(frame_at(u64::MAX)), None);
+        assert_eq!(checked_frame_end(frame_at(0x1234)), Some(0x2000));
+        assert_eq!(checked_frame_end(frame_at(u64::MAX)), None);
     }
 
     #[test]
@@ -302,7 +323,7 @@ mod tests {
             },
         ];
         let info = boot_info(&regions);
-        let mut allocator = unsafe { PhysicalFrameAllocator::from_boot_info(&info) }.unwrap();
+        let mut allocator = unsafe { PhysicalFrameAllocator::try_from_boot_info(&info) }.unwrap();
         assert_eq!(allocator.allocate().unwrap().start, 0x1000);
         assert_eq!(allocator.allocate().unwrap().start, 0x4000);
         assert_eq!(allocator.allocate().unwrap().start, 0x5000);
@@ -328,7 +349,7 @@ mod tests {
         ];
         let info = boot_info(&regions);
         assert_eq!(
-            unsafe { PhysicalFrameAllocator::from_boot_info(&info) }.err(),
+            unsafe { PhysicalFrameAllocator::try_from_boot_info(&info) }.err(),
             Some(FrameAllocatorError::OverlappingOrUnsortedRegions)
         );
     }
@@ -358,7 +379,7 @@ mod tests {
         }];
         let zero_info = boot_info(&zero);
         assert_eq!(
-            unsafe { PhysicalFrameAllocator::from_boot_info(&zero_info) }.err(),
+            unsafe { PhysicalFrameAllocator::try_from_boot_info(&zero_info) }.err(),
             Some(FrameAllocatorError::EmptyRegion)
         );
 
@@ -370,7 +391,7 @@ mod tests {
         }];
         let unknown_info = boot_info(&unknown);
         assert_eq!(
-            unsafe { PhysicalFrameAllocator::from_boot_info(&unknown_info) }.err(),
+            unsafe { PhysicalFrameAllocator::try_from_boot_info(&unknown_info) }.err(),
             Some(FrameAllocatorError::InvalidRegionKind)
         );
     }
@@ -383,7 +404,7 @@ mod tests {
         let second = allocator.allocate_frame().unwrap();
         assert_eq!(first.start, 0x100000);
         assert_eq!(second.start, 0x101000);
-        allocator.free_frame(first).unwrap();
+        allocator.try_free_frame(first).unwrap();
         assert_eq!(
             allocator.free_frame(first),
             Err(BitmapFrameError::DoubleFree)
