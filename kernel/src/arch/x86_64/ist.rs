@@ -1,4 +1,3 @@
-successfully downloaded text file (SHA: 236cb0e8a6d8858c0eca7522040c05213145ee7f)
 #![no_std]
 
 //! Interrupt Stack Table (IST) support for critical x86_64 vectors.

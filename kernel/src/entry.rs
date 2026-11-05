@@ -1,4 +1,3 @@
-successfully downloaded text file (SHA: f875a4ba97026cb4e173581fd0ad1e483f2adc8f)
 #![no_std]
 
 use awe_boot_protocol::{BootInfo, validate};

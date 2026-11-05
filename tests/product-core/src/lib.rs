@@ -1,4 +1,3 @@
-successfully downloaded text file (SHA: b00a9d414f2503f1aba136ac34f2588ae14c50e6)
 #[cfg(test)]
 mod product_core {
     use awe_appd::{

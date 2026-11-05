@@ -1,4 +1,3 @@
-successfully downloaded text file (SHA: c844db360d5d36d183f5e2c859b4377efe4d141e)
 #![no_std]
 #![allow(bad_asm_style)]
 
