@@ -44,7 +44,20 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Run storage and driver contract tests
-        run: cargo test --workspace --all-targets
+        shell: bash
+        run: |
+          set +e
+          cargo test --workspace --all-targets 2>&1 | tee /tmp/cargo-test-all.log
+          code=${PIPESTATUS[0]}
+          if [ "$code" -ne 0 ]; then
+            {
+              echo "## cargo test --workspace --all-targets failed (exit $code)"
+              echo '~~~text'
+              tail -n 200 /tmp/cargo-test-all.log
+              echo '~~~'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+          exit "$code"
 
       - name: Build kernel
         env:
@@ -175,4 +188,5 @@ jobs:
             dist/qemu-host.log
             dist/qemu-virtio-debug.log
             dist/qemu-device-evidence.json
+            /tmp/cargo-test-all.log
           if-no-files-found: warn
