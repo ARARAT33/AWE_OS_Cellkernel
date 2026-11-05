@@ -608,25 +608,28 @@ mod product_core {
             .spawn();
         let mut child = child_res.expect("failed to start QEMU");
 
-        // These are the milestones actually emitted by the current kernel
-        // entry path. Ring-3 execution is not claimed until the kernel emits
-        // dedicated userspace-entry evidence.
+        // These are the milestones actually emitted by the current boot
+        // path. The test explicitly expects Ring 3 to remain disabled until
+        // isolated per-process user mappings exist; it does not accept a
+        // synthetic userspace-success message.
         let required_milestones = [
             "AWEOS CellKernel",
             "AWEOS boot:",
             "AWEOS: GDT & TSS initialized",
             "AWEOS: SYSCALL/SYSRET MSRs initialized",
-            "AWEOS: IDT initialized",
+            "AWEOS: IDT & critical IST stacks initialized",
             "AWEOS: Kernel Heap initialized",
             "AWEOS: PCI Bus 0 enumerated",
             "AWEOS: Interrupts & PIC/PIT initialized",
-            "AWEOS: Preemptive Scheduler initialized",
+            "AWEOS: timer programmed (no scheduler yet)",
             "AWEOS: boot protocol validated",
             "AWEOS: kernel state = RUNNING",
             "AWEOS: kernel is alive",
-            "AWEOS: Entering Ring 3 Userspace...",
-            "AWEOS: Ring 3 userspace reached and active!",
-            "AWEOS: userspace execution completed cleanly!",
+            "AWEOS: Ring 3 deferred: isolated user address spaces are not installed",
+            "AWEOS: boot protocol validated",
+            "AWEOS: x86_64 bootstrap paging = ACTIVE",
+            "AWEOS: kernel state = RUNNING",
+            "AWEOS: kernel is alive",
         ];
 
         let start_time = Instant::now();
@@ -665,6 +668,15 @@ mod product_core {
         // Allow a short settling period to catch immediate privilege/return faults.
         std::thread::sleep(Duration::from_millis(100));
         let final_log = std::fs::read_to_string(&log_file).unwrap_or_default();
+        assert!(
+            final_log.contains("AWEOS: Ring 3 deferred: isolated user address spaces are not installed"),
+            "Ring 3 must remain deferred until isolated user mappings exist:\n{final_log}"
+        );
+        assert!(
+            !final_log.contains("Ring 3 userspace reached and active!")
+                && !final_log.contains("Preemptive Scheduler initialized"),
+            "boot log must not claim unimplemented userspace or preemptive scheduling:\n{final_log}"
+        );
         assert!(
             !final_log.contains("AWEOS EXCEPTION"),
             "QEMU reached the expected milestones but raised a CPU exception:\n{final_log}"
