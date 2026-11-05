@@ -68,10 +68,8 @@ pub fn kernel_entry(info: &BootInfo) -> KernelBootStatus {
         use crate::platform::pit::Pit;
 
         static mut KERNEL_STACK: [u8; 65536] = [0; 65536];
-        static mut USER_STACK: [u8; 16384] = [0; 16384];
 
         let stack_top = core::ptr::addr_of_mut!(KERNEL_STACK) as u64 + 65536;
-        let user_stack_top = core::ptr::addr_of_mut!(USER_STACK) as u64 + 16384;
 
         use crate::arch::x86_64::gdt::{KERNEL_CODE_SELECTOR, USER_CODE_SELECTOR};
         use crate::arch::x86_64::idt::IDT;
@@ -131,38 +129,27 @@ pub fn kernel_entry(info: &BootInfo) -> KernelBootStatus {
         serial_write_str("AWEOS: boot protocol validated\r\n");
         serial_write_str("AWEOS: kernel state = RUNNING\r\n");
         serial_write_str("AWEOS: kernel is alive\r\n");
-        serial_write_str("AWEOS: Entering Ring 3 Userspace...\r\n");
-        unsafe {
-            enter_userspace(userspace_entry as *const () as usize as u64, user_stack_top);
-        }
+        // The bootstrap identity map is supervisor-only. Ring 3 must remain
+        // disabled until a per-process address space maps only the intended
+        // user code/data/stack with USER permissions and keeps kernel pages
+        // supervisor-only.
+        serial_write_str(
+            "AWEOS: Ring 3 deferred: isolated user address spaces are not installed\r\n",
+        );
     }
 
     KernelBootStatus::Ready
 }
 
-#[cfg(all(target_arch = "x86_64", target_os = "none"))]
-#[unsafe(no_mangle)]
-pub extern "C" fn userspace_entry() -> ! {
-    // This bootstrap cell deliberately does not call kernel functions directly:
-    // privileged serial I/O from CPL3 caused #GP faults. It proves the Ring 3
-    // -> SYSCALL -> trusted kernel entry -> SYSRET round trip only.
-    unsafe {
-        core::arch::asm!(
-            "syscall",
-            inlateout("rax") crate::syscall::BOOTSTRAP_HELLO_SYSCALL => _,
-            lateout("rcx") _,
-            lateout("r11") _,
-            options(nostack)
-        );
-    }
 
-    loop {
-        unsafe {
-            core::arch::asm!("pause", options(nomem, nostack, preserves_flags));
-        }
-    }
-}
-
+/// Enter a user-mode bootstrap context.
+///
+/// # Safety
+/// The active page tables must map `user_rip` and the stack containing
+/// `user_rsp` as user-accessible, while every kernel mapping remains
+/// supervisor-only. The caller must also have installed a valid syscall
+/// entry and kernel stack. The current boot path deliberately does not call
+/// this helper until a per-process address-space builder exists.
 #[cfg(all(target_arch = "x86_64", target_os = "none"))]
 pub unsafe fn enter_userspace(user_rip: u64, user_rsp: u64) {
     use crate::arch::x86_64::gdt::{USER_CODE_SELECTOR, USER_DATA_SELECTOR};
