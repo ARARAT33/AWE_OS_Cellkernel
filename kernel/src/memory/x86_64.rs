@@ -74,7 +74,10 @@ mod tests {
     fn two_megabyte_leafs_cover_one_gib() {
         assert_eq!(ENTRIES as u64 * 0x20_0000, 0x4000_0000);
         assert_eq!(BOOTSTRAP_TABLE_FLAGS & HUGE_2M, 0);
-        assert_eq!(BOOTSTRAP_LEAF_FLAGS & PageFlags::PRESENT.0, PageFlags::PRESENT.0);
+        assert_eq!(
+            BOOTSTRAP_LEAF_FLAGS & PageFlags::PRESENT.0,
+            PageFlags::PRESENT.0
+        );
         assert_eq!(BOOTSTRAP_LEAF_FLAGS & HUGE_2M, HUGE_2M);
     }
 
