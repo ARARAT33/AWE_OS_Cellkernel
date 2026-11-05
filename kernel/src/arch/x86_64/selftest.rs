@@ -1,4 +1,5 @@
 #![no_std]
+#![allow(bad_asm_style)]
 
 //! QEMU exception-injection self-test (cargo feature "kernel-selftest").
 //!
