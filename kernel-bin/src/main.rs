@@ -568,7 +568,7 @@ fn parse_multiboot2(addr: usize) -> BootInfo {
                 let entry_size =
                     unsafe { core::ptr::read_unaligned((addr + offset + 8) as *const u32) }
                         as usize;
-                if entry_size < 24 || (size - 16) % entry_size != 0 {
+                if entry_size < 24 || !(size - 16).is_multiple_of(entry_size) {
                     return BootInfo::empty(Architecture::X86_64);
                 }
                 let mut entry = offset + 16;
