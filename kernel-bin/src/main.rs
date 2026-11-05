@@ -254,12 +254,30 @@ mod bootstrap_paging_tests {
 
     #[test]
     fn multiboot_memory_types_are_normalized_fail_closed() {
-        assert_eq!(normalize_multiboot_memory_kind(1), awe_boot_protocol::MEMORY_REGION_USABLE);
-        assert_eq!(normalize_multiboot_memory_kind(3), awe_boot_protocol::MEMORY_REGION_RECLAIMABLE);
-        assert_eq!(normalize_multiboot_memory_kind(2), awe_boot_protocol::MEMORY_REGION_RESERVED);
-        assert_eq!(normalize_multiboot_memory_kind(4), awe_boot_protocol::MEMORY_REGION_RESERVED);
-        assert_eq!(normalize_multiboot_memory_kind(5), awe_boot_protocol::MEMORY_REGION_RESERVED);
-        assert_eq!(normalize_multiboot_memory_kind(u32::MAX), awe_boot_protocol::MEMORY_REGION_RESERVED);
+        assert_eq!(
+            normalize_multiboot_memory_kind(1),
+            awe_boot_protocol::MEMORY_REGION_USABLE
+        );
+        assert_eq!(
+            normalize_multiboot_memory_kind(3),
+            awe_boot_protocol::MEMORY_REGION_RECLAIMABLE
+        );
+        assert_eq!(
+            normalize_multiboot_memory_kind(2),
+            awe_boot_protocol::MEMORY_REGION_RESERVED
+        );
+        assert_eq!(
+            normalize_multiboot_memory_kind(4),
+            awe_boot_protocol::MEMORY_REGION_RESERVED
+        );
+        assert_eq!(
+            normalize_multiboot_memory_kind(5),
+            awe_boot_protocol::MEMORY_REGION_RESERVED
+        );
+        assert_eq!(
+            normalize_multiboot_memory_kind(u32::MAX),
+            awe_boot_protocol::MEMORY_REGION_RESERVED
+        );
     }
 }
 
