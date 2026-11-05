@@ -13,13 +13,15 @@ jobs:
   diagnose:
     name: cargo failure diagnostics
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
 
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: stable
+          components: clippy
+          targets: x86_64-unknown-none
 
       - name: Collect cargo diagnostics
         shell: bash
@@ -27,12 +29,12 @@ jobs:
           {
             echo "## CI diagnostics (head ${{ github.sha }})"
             echo '~~~text'
-            cargo --version --verbose 2>&1 || true
-            echo '--- cargo fetch ---'
-            cargo fetch 2>&1 || echo "FETCH_EXIT=$?"
-            echo '--- cargo check workspace (tail 60) ---'
-            cargo check --workspace 2>&1 | tail -n 60
-            echo "CHECK_EXIT=${PIPESTATUS[0]}"
+            echo '--- clippy: kernel with kernel-selftest feature ---'
+            cargo clippy -p aweos-kernel --features kernel-selftest 2>&1 | tail -n 120
+            echo "CLIPPY_SELFTEST_EXIT=${PIPESTATUS[0]}"
+            echo '--- check: kernel-bin with selftest feature (x86_64-unknown-none) ---'
+            cargo check -p aweos-kernel-bin --target x86_64-unknown-none --features selftest 2>&1 | tail -n 80
+            echo "CHECK_SELFTEST_EXIT=${PIPESTATUS[0]}"
             echo '~~~'
           } > /tmp/diag.txt
           cat /tmp/diag.txt
