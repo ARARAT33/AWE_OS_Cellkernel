@@ -525,3 +525,42 @@ Workflow run references:
   confirmed as transient infrastructure noise.
 - The bootable-image workflow's missing check runs for head `bd4226d`
   remain unexplained and will be rechecked on the new head.
+
+
+---
+
+## Session 2026-11-05 (conclusion) — root cause found: connector marker lines inside repo files
+
+### Root cause (confirmed with exact CI diagnostics)
+- The new `ci-diagnostics.yml` workflow reproduced the failure and
+  commented the exact cargo output on the PR: cargo failed at
+  `kernel/Cargo.toml:1:14` with "key with no value, expected `=`" —
+  the first line of that file was literally
+  `successfully downloaded text file (SHA: ...)`.
+- Cause: the previous automation pass wrote files whose content was
+  assembled by joining the entire file-read tool response, including the
+  connector status marker line, into the pushed file content. The same
+  marker line was embedded in `kernel-bin/Cargo.toml`,
+  `.github/workflows/boot-image.yml`, `kernel/src/entry.rs`,
+  `kernel/src/arch/x86_64/ist.rs`, `isr_stubs.rs`,
+  `tests/product-core/src/lib.rs`, `docs/AI-DEVELOPMENT-LOG.md` (twice)
+  and `.github/workflows/ci-diagnostics.yml` was authored fresh and clean.
+- Effects: every cargo command (fetch/check/test/clippy/fmt) failed with
+  exit 101 within seconds on all workflows, because cargo/rustfmt cannot
+  parse a manifest or Rust file starting with that marker line. The
+  boot-image workflow never produced check runs for the corrupted heads.
+- The earlier "transient registry outage" hypothesis was wrong and is
+  hereby corrected on the record.
+
+### Fix
+- Commit `40429f8` removed every marker line from the affected files
+  without altering any intended code content.
+- This documentation commit triggers the full validation run on the
+  cleaned tree (the rustfmt-fix bot's own follow-up commit does not
+  trigger workflows).
+- The diagnostics workflow stays in the repository: it turns any future
+  cargo failure into a PR comment, which is how this root cause was found.
+
+### Honest validation state
+- No green result is claimed for the cleaned tree until the full check
+  set finishes on this head. Results will be recorded in the next entry.
