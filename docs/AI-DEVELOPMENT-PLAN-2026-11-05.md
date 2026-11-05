@@ -9,9 +9,11 @@ AI development log, and a review of the open IST boot-wiring change.
 1. Wire the configured NMI, double-fault and machine-check IST stacks into
    the real x86_64 boot path, after all IDT handlers are installed and before
    `lidt`; halt with a diagnostic if configuration fails.
-2. Correct `InterruptFrame` interpretation: an IST stack switch saves the
-   interrupted RSP/SS even when CPL does not change. Preserve the existing
-   same-ring/no-IST derivation and add regression tests for both cases.
+2. Correct `InterruptFrame` interpretation using Intel SDM Vol. 3A
+   §6.14.2: in 64-bit mode the CPU unconditionally saves SS:RSP for every
+   interrupt/exception, including same-CPL events with IST=0. Use the
+   hardware-saved fields for every vector and add same-ring, IST and Ring 3
+   regression tests.
 3. Make IST configuration preflight all required IDT gates and stack tops
    before mutating TSS/IDT state.
 
