@@ -28,11 +28,12 @@ const MULTIBOOT2_MIN_SIZE: usize = 16;
 #[cfg(not(test))]
 const MULTIBOOT2_MAX_SIZE: usize = 1024 * 1024;
 
-
 fn multiboot1_mmap_entry_valid(size: usize, remaining: usize) -> bool {
-    size >= 20 && size.checked_add(4).is_some_and(|entry_len| entry_len <= remaining)
+    size >= 20
+        && size
+            .checked_add(4)
+            .is_some_and(|entry_len| entry_len <= remaining)
 }
-
 
 #[cfg(not(test))]
 static mut MEMORY_REGIONS: [MemoryRegion; MAX_MEMORY_REGIONS] = [MemoryRegion {
@@ -378,8 +379,7 @@ fn parse_multiboot1(addr: usize) -> BootInfo {
         };
         let mmap_length =
             unsafe { core::ptr::read_unaligned(mmap_length_ptr as *const u32) } as usize;
-        let mmap_addr =
-            unsafe { core::ptr::read_unaligned(mmap_addr_ptr as *const u32) } as usize;
+        let mmap_addr = unsafe { core::ptr::read_unaligned(mmap_addr_ptr as *const u32) } as usize;
         if mmap_length == 0 || mmap_addr == 0 || mmap_addr.checked_add(mmap_length).is_none() {
             return BootInfo::empty(Architecture::X86_64);
         }
@@ -533,8 +533,7 @@ fn parse_multiboot2(addr: usize) -> BootInfo {
                     if region_count as usize >= MAX_MEMORY_REGIONS {
                         return BootInfo::empty(Architecture::X86_64);
                     }
-                    let base =
-                        unsafe { core::ptr::read_unaligned((addr + entry) as *const u64) };
+                    let base = unsafe { core::ptr::read_unaligned((addr + entry) as *const u64) };
                     let length =
                         unsafe { core::ptr::read_unaligned((addr + entry + 8) as *const u64) };
                     let kind =
@@ -680,5 +679,4 @@ unsafe fn in8(port: u16) -> u8 {
 fn panic(_info: &core::panic::PanicInfo) -> ! {
     serial_write(b"AWEOS: KERNEL PANIC\r\n");
     halt_forever();
-
 }
