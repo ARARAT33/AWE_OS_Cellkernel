@@ -1,3 +1,4 @@
+successfully downloaded text file (SHA: b5a83c20a0029574aacc8544a37ca7ac888e2ba1)
 [package]
 name = "aweos-kernel-bin"
 version = "0.1.0"
@@ -11,3 +12,7 @@ path = "src/main.rs"
 [dependencies]
 aweos-kernel = { path = "../kernel" }
 awe-boot-protocol = { workspace = true }
+
+[features]
+# Enables the kernel QEMU exception-injection self-test in this binary.
+selftest = ["aweos-kernel/kernel-selftest"]

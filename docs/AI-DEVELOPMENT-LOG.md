@@ -1,3 +1,4 @@
+successfully downloaded text file (SHA: bb52958fc90612e9a51964eb104215e964c829aa)
 # AI Development Log
 
 Running log of autonomous development sessions on AWE_OS_Cellkernel.
@@ -393,3 +394,91 @@ Workflow run references:
 2. Complete per-process address-space isolation and persistent physical-frame allocator integration.
 3. Implement the actual bounded CellManager runtime and bind cells to ProcessManager, scheduler, capabilities and IPC.
 4. Continue APIC/IOAPIC, timer-driven scheduling and FPU/XSAVE work.
+
+
+---
+
+## Session 2026-11-05 (continued) — QEMU exception/IST injection self-test
+
+### Repository / PR state at session start
+- PR #57 (feat/x86_64-ist-boot-wiring) had all 14 checks green on head
+  fd3732c and was mergeable, but its own review section forbids merging
+  until the missing exception/IST runtime validation exists.
+- The carried-forward top priority was exactly that: QEMU exception
+  injection for #DE/#UD/#PF and controlled IST delivery for NMI/#DF.
+- Continued on the same PR branch. No new branch, no force-push, no
+  deletions, no unverified merge.
+
+### Implemented: feature-gated exception/IST injection runtime
+- New module kernel/src/arch/x86_64/selftest.rs, compiled only under the
+  new cargo feature "kernel-selftest" (never in default/production
+  images):
+  - Assembly injectors store their resume RIP (and, for the #DF case, the
+    known-good RSP) and then deliberately fault: divide-by-zero (#DE), an
+    invalid opcode (#UD), an unmapped read above the 1 GiB bootstrap map
+    at 0x40000000 (#PF), and a non-canonical RSP followed by push, which
+    faults #SS and escalates to #DF delivered on the dedicated IST2
+    stack.
+  - A recovery hook in the common ISR calls try_recover before normal
+    exception dispatch when the feature is enabled. It validates the
+    hardware frame (long-mode SS:RSP saved even same-CPL, canonical
+    RIP/RSP, supervisor CPL), verifies CR2 equals the probe address for
+    #PF, verifies the handler RSP lies inside the dedicated IST stack
+    bounds for #DF and NMI, fixes up RIP/RSP and resumes the driver via
+    iretq.
+  - The driver then arms an external-NMI wait (interrupts unmasked, PIT
+    tick-bounded at 5 s) and the host injects the NMI through the QEMU
+    human monitor, proving IST1 delivery.
+  - #MC is deliberately not injected (QEMU has no machine-check injection
+    mechanism); IST3 remains host-test + wiring evidence only, not
+    runtime evidence, and is not claimed.
+- kernel/src/entry.rs calls the self-test at the end of the real x86_64
+  boot path, after IST configuration, PIC/PIT init and the Ring-3
+  deferral notice, only when the feature is enabled.
+- kernel/src/arch/x86_64/ist.rs gained critical_stack_bounds() so runtime
+  consumers can prove a handler is actually running inside its dedicated
+  stack.
+- Feature wiring: kernel/Cargo.toml defines "kernel-selftest";
+  kernel-bin/Cargo.toml defines "selftest" enabling the kernel feature,
+  so validation images are built explicitly and deliberately.
+
+### Host-side validation and CI
+- tests/product-core/src/lib.rs gained qemu_exception_injection_selftest
+  (unix-only): builds the self-test kernel image with the feature,
+  validates the Multiboot2 header, builds the ISO, boots it in QEMU with
+  a human-monitor unix socket, requires the ordered serial milestones
+  for all injection phases, injects the NMI after the kernel reports it
+  is armed, then requires the NMI/IST1, ALL-PHASES and final boot
+  milestones, and rejects FAIL/PANIC markers. It skips cleanly when the
+  QEMU/ISO toolchain is absent.
+- .github/workflows/boot-image.yml gained the exception-injection-selftest
+  job: installs QEMU/ISO tools, lints and checks the feature build
+  (clippy with -D warnings on the kernel feature configuration), and runs
+  the new QEMU test. This closes the gap where feature-gated code was
+  never compiled or linted by the default workspace jobs.
+
+### Honest validation status
+- All results for this pass were pending on the new PR head in GitHub
+  Actions at the time of this log entry. Nothing is claimed green until
+  the linked jobs, including the new exception-injection-selftest job,
+  finish on that exact head.
+- What the test proves once green: real #DE/#UD/#PF recovery through the
+  real IDT handlers, real #DF escalation onto the dedicated IST2 stack,
+  real monitor-injected NMI delivery onto the dedicated IST1 stack, and
+  the corrected long-mode interrupt-frame model, all in the actual boot
+  image rather than host unit tests.
+- Still not claimed: #MC/IST3 runtime delivery (no QEMU injection
+  mechanism), physical-hardware behaviour, per-process page tables, the
+  persistent frame allocator integration, APIC/IOAPIC runtime, and any
+  end-to-end cell runtime.
+
+### Next session priorities
+1. Confirm the new CI job and all existing checks are green on the new
+   head; fix any real failures (not by suppressing lints).
+2. With the missing exception/IST runtime evidence addressed, update the
+   PR review section and merge PR #57 into main, then confirm main CI.
+3. Re-evaluate the stale open PRs (#55, #53, #52, #50, #48) against the
+   restructured main.
+4. Continue with per-process page tables/user-only mappings before any
+   Ring 3 re-enable, then the persistent physical-frame allocator
+   integration, then APIC/IOAPIC EOI/routing and the bounded CellManager.

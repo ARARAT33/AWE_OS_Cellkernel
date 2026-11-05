@@ -1,3 +1,4 @@
+successfully downloaded text file (SHA: c844db360d5d36d183f5e2c859b4377efe4d141e)
 #![no_std]
 #![allow(bad_asm_style)]
 
@@ -1140,6 +1141,14 @@ pub extern "C" fn awe_interrupt_handler(frame: &mut InterruptFrame) {
         print_u64_hex(vector as u64);
         serial_write_str("\r\n");
         halt_after_exception();
+    }
+    // QEMU exception-injection self-test (validation builds only, cargo
+    // feature "kernel-selftest"). When the self-test armed this vector, the
+    // recovery path validates the frame and fixes up RIP/RSP so the ISR
+    // returns into the self-test driver instead of halting.
+    #[cfg(feature = "kernel-selftest")]
+    if crate::arch::x86_64::selftest::try_recover(frame) {
+        return;
     }
     // Handle CPU exceptions
     if vector < 32 {

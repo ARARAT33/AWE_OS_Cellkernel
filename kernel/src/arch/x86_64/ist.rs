@@ -1,3 +1,4 @@
+successfully downloaded text file (SHA: 236cb0e8a6d8858c0eca7522040c05213145ee7f)
 #![no_std]
 
 //! Interrupt Stack Table (IST) support for critical x86_64 vectors.
@@ -60,6 +61,15 @@ pub fn critical_stack_tops() -> [u64; 3] {
         core::ptr::addr_of_mut!(MACHINE_CHECK_STACK) as usize,
     ];
     bases.map(|base| (base + IST_STACK_SIZE) as u64)
+}
+
+/// Base..top address bounds of the three critical IST stacks, in the same
+/// NMI/#DF/#MC order as critical_stack_tops. Runtime consumers (such as the
+/// exception-injection self-test) use these to prove that a handler is
+/// actually running inside its dedicated stack.
+pub fn critical_stack_bounds() -> [(u64, u64); 3] {
+    critical_stack_tops()
+        .map(|top| (top - IST_STACK_SIZE as u64, top))
 }
 
 /// The IST slot assigned to a critical vector, if this vector is managed here.

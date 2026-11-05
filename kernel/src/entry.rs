@@ -1,3 +1,4 @@
+successfully downloaded text file (SHA: f875a4ba97026cb4e173581fd0ad1e483f2adc8f)
 #![no_std]
 
 use awe_boot_protocol::{BootInfo, validate};
@@ -140,6 +141,17 @@ pub fn kernel_entry(info: &BootInfo) -> KernelBootStatus {
         serial_write_str(
             "AWEOS: Ring 3 deferred: isolated user address spaces are not installed\r\n",
         );
+
+        // QEMU exception-injection validation (cargo feature
+        // "kernel-selftest"): deliberately inject #DE/#UD/#PF/#DF and wait
+        // for an externally injected NMI to prove the real IDT handlers,
+        // the long-mode frame model and the dedicated IST stacks recover
+        // execution. Runs only in validation builds; production images
+        // contain no self-test code path.
+        #[cfg(feature = "kernel-selftest")]
+        {
+            crate::arch::x86_64::selftest::run();
+        }
     }
 
     KernelBootStatus::Ready

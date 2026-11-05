@@ -1,3 +1,4 @@
+successfully downloaded text file (SHA: 9ebef468bf33412e57566f91e2e5f265a661ee87)
 [package]
 name = "aweos-kernel"
 version = "0.2.1"
@@ -9,3 +10,8 @@ path = "src/lib.rs"
 
 [dependencies]
 awe-boot-protocol = { workspace = true }
+
+[features]
+# QEMU exception-injection validation builds. Never enable in production
+# images: the self-test deliberately faults the CPU to exercise IST paths.
+kernel-selftest = []
