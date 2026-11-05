@@ -67,8 +67,7 @@ pub fn critical_stack_tops() -> [u64; 3] {
 /// exception-injection self-test) use these to prove that a handler is
 /// actually running inside its dedicated stack.
 pub fn critical_stack_bounds() -> [(u64, u64); 3] {
-    critical_stack_tops()
-        .map(|top| (top - IST_STACK_SIZE as u64, top))
+    critical_stack_tops().map(|top| (top - IST_STACK_SIZE as u64, top))
 }
 
 /// The IST slot assigned to a critical vector, if this vector is managed here.
