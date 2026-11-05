@@ -884,10 +884,8 @@ fn print_u64_hex(mut val: u64) {
 fn print_stack_context(frame: &InterruptFrame) {
     serial_write_str("  RSP: 0x");
     print_u64_hex(frame.interrupted_stack_pointer());
-    if let Some(ss) = frame.interrupted_stack_segment() {
-        serial_write_str(" SS: 0x");
-        print_u64_hex(ss);
-    }
+    serial_write_str(" SS: 0x");
+    print_u64_hex(frame.interrupted_stack_segment());
     serial_write_str("\r\n");
 }
 
