@@ -241,7 +241,11 @@ merging it also restores `main` to green.
    - Both bootstrap page-table builders now use shared supervisor-only permission constants. Tests verify U/S is clear at table and leaf levels.
    - The boot path no longer enters the bootstrap Ring 3 stub. Ring 3 is deliberately deferred until dedicated per-process user code/data/stack mappings exist. The unsafe helper remains documented with its mapping preconditions, but is not called by boot.
 
-4. **Host test linkability**
+4. **Saved interrupted RSP alignment**
+   - Long mode aligns the new interrupt frame to 16 bytes, but preserves the old RSP unconditionally; the old value can be byte-unaligned.
+   - Removed the invalid eight-byte alignment check from `InterruptFrame::stack_pointer_valid`, retained nonzero/canonical validation, and added `unaligned_interrupted_rsp_is_valid_in_long_mode`.
+
+5. **Host test linkability**
    - Changed the x86_64 context-switch resume-label address to RIP-relative form, fixing the PIE test-linker relocation error observed on the earlier PR head.
 
 ### Files changed in this pass
