@@ -225,6 +225,7 @@ fn main() {}
 
 #[cfg(test)]
 mod bootstrap_paging_tests {
+    use super::{multiboot1_mmap_entry_valid, normalize_multiboot_memory_kind};
     use aweos_kernel::memory::{
         PageFlags,
         x86_64::{BOOTSTRAP_LEAF_FLAGS, BOOTSTRAP_TABLE_FLAGS},
