@@ -35,7 +35,7 @@ A second correctness issue was found in interrupt-frame accessors. Intel SDM Vol
 | Process/scheduler | Process states, ID allocation, resource budgets, scheduler queue, context-switch frame/backend and reap paths | Lifecycle and switch primitives exist. Timer-driven preemptive scheduling is not wired end-to-end; boot output must not claim a running scheduler. |
 | Syscalls | SYSCALL MSR setup and assembly entry plus typed syscall ABI/dispatch modules | Early entry/contract exists. A complete validated user-buffer and capability-enforced syscall path is not yet demonstrated end-to-end. |
 | IPC/cells | Bounded mailbox, service channels, handshake/shared-ring primitives and service bus | Local bounded IPC foundations exist. There is no demonstrated general cell runtime with fault containment and remote IPC transport integration yet. |
-| Capabilities | Rights model, derivation, lookup, revoke and fixed-capacity table | Useful security foundation. The capability ID allocator currently wraps from `u64::MAX` back to 1; this can reuse a stale handle ID and is a high-priority follow-up. |
+| Capabilities | Rights model, derivation, lookup, revoke and fixed-capacity table | Useful security foundation. The original allocator wrapped from `u64::MAX` back to 1. PR #57 now uses a zero exhausted sentinel and a checked increment; a regression test covers final-ID allocation and refusal to reuse a stale handle. This remains pending final CI on the latest PR head. |
 | Drivers/HAL | PCI enumeration, VirtIO contracts/queues, ACPI/APIC/IOAPIC service modules and driverd supervisor/contracts | Discovery and protocol foundations exist. APIC/IOAPIC EOI/routing runtime, broad USB/HID/GPU/audio/Wi-Fi support and DMA/IOMMU enforcement are not established. |
 | Storage | GPT parser with CRC checks, bounded VFS metadata, RAM disk and journal/recovery state machine; storaged fixed-capacity volume/cache structures | Parsers and state contracts exist. Durable block-device read/write, native filesystem persistence and power-loss recovery are not yet proven end-to-end. |
 | Networking | ARP packet/cache, IPv4 parsing/checksum, UDP/TCP header and socket-table primitives, firewall rules; netd service structures | Protocol foundations exist. Full Ethernet device I/O, IPv6, DNS, DHCP, TLS, routing, reconnect and distributed discovery are not demonstrated. |
@@ -71,7 +71,7 @@ The current IST boot-wiring PR's first workflow runs were marked `action_require
 
 ## Next priorities
 
-1. Fix capability-ID exhaustion so IDs never wrap/reuse.
+1. Add fuzz/stress coverage for capability derivation, revoke/remove races and table exhaustion.
 2. Add QEMU exception exercise for #DE/#UD/#PF and actual NMI/#DF/#MC IST delivery.
 3. Implement per-process page tables and explicit user code/data/stack mappings before re-enabling Ring 3.
 4. Implement APIC/IOAPIC EOI and routing, then timer-driven context switching and FPU/XSAVE ownership.
