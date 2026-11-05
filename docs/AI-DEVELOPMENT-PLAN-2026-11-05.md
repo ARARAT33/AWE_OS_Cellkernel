@@ -68,3 +68,15 @@ timer/PIT programming is not a scheduler.
 
 No release-readiness percentage is used. A subsystem advances only with
 executable evidence.
+
+
+## P0 — Validate the physical memory-map trust boundary
+
+1. Bound the version-1 BootInfo memory-region count and document the memory-map contract.
+2. Reject null/misaligned/overflowing region arrays, zero-length or overflowing descriptors, and unsorted/overlapping ranges before the kernel reads them into an allocator.
+3. Replace saturating address arithmetic in the boot frame cursor with checked arithmetic; a malformed region must never expose a frame outside its declared interval.
+4. Harden the bitmap allocators against unaligned bases/frames, range overflow, capacity mismatch and double-free.
+5. Make kernel entry distinguish an invalid memory map from a valid map with no usable frame; add regression tests for every rejected case.
+6. Keep the boot cursor explicitly documented as an early-boot probe, not a fully integrated physical allocator; do not claim persistent frame allocation until it is retained and wired into VM/page-table allocation.
+
+Validation must include workspace tests, formatting, Clippy, UEFI loader checks and the existing QEMU boot/VirtIO jobs. A passing unit test is not evidence of durable physical-memory ownership or hardware validation.
