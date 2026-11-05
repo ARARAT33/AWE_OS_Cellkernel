@@ -11,6 +11,7 @@ use aweos_kernel::entry::{KernelBootStatus, kernel_entry};
 #[cfg(target_arch = "x86_64")]
 #[cfg(not(test))]
 use aweos_kernel::memory::activate_bootstrap_identity_map;
+use aweos_kernel::memory::x86_64::{BOOTSTRAP_LEAF_FLAGS, BOOTSTRAP_TABLE_FLAGS};
 
 #[cfg(not(test))]
 const MULTIBOOT1_BOOTLOADER_MAGIC: u32 = 0x2BAD_B002;
@@ -112,15 +113,15 @@ _start:
     mov dword ptr [boot_magic_saved], eax
     mov dword ptr [boot_info_saved], ebx
 
-    # Build a minimal identity map for the first 1 GiB using 2 MiB pages with User accessibility.
+    # Build a supervisor-only identity map for the first 1 GiB using 2 MiB pages.
     # PML4[0] -> PDPT[0] -> PD[0..511].
     mov eax, offset BOOT_PDPT
-    or eax, 7
+    or eax, {table_flags}
     mov dword ptr [BOOT_PML4], eax
     mov dword ptr [BOOT_PML4 + 4], 0
 
     mov eax, offset BOOT_PD
-    or eax, 7
+    or eax, {table_flags}
     mov dword ptr [BOOT_PDPT], eax
     mov dword ptr [BOOT_PDPT + 4], 0
 
@@ -128,7 +129,7 @@ _start:
 1:
     mov eax, ecx
     shl eax, 21
-    or eax, 0x87
+    or eax, {leaf_flags}
     mov dword ptr [BOOT_PD + ecx * 8], eax
     mov dword ptr [BOOT_PD + ecx * 8 + 4], 0
     inc ecx
@@ -199,11 +200,27 @@ gdt64_descriptor:
 
 .size _start, .-_start
 .att_syntax prefix
-"#
+"#,
+    table_flags = const BOOTSTRAP_TABLE_FLAGS,
+    leaf_flags = const BOOTSTRAP_LEAF_FLAGS,
 );
 
 #[cfg(test)]
 fn main() {}
+
+#[cfg(test)]
+mod bootstrap_paging_tests {
+    use aweos_kernel::memory::{PageFlags, x86_64::{BOOTSTRAP_LEAF_FLAGS, BOOTSTRAP_TABLE_FLAGS}};
+
+    #[test]
+    fn bootstrap_page_table_flags_never_grant_user_access() {
+        assert!(BOOTSTRAP_TABLE_FLAGS & PageFlags::PRESENT.0 != 0);
+        assert!(BOOTSTRAP_TABLE_FLAGS & PageFlags::WRITABLE.0 != 0);
+        assert_eq!(BOOTSTRAP_TABLE_FLAGS & PageFlags::USER.0, 0);
+        assert!(BOOTSTRAP_LEAF_FLAGS & PageFlags::HUGE.0 != 0);
+        assert_eq!(BOOTSTRAP_LEAF_FLAGS & PageFlags::USER.0, 0);
+    }
+}
 
 #[cfg(not(test))]
 #[unsafe(no_mangle)]
