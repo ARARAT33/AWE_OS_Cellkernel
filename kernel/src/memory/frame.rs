@@ -16,7 +16,9 @@ pub struct Frame {
 pub const PAGE_SIZE: u64 = 4096;
 
 pub const fn frame_at(address: u64) -> Frame {
-    Frame { start: address & !(PAGE_SIZE - 1) }
+    Frame {
+        start: address & !(PAGE_SIZE - 1),
+    }
 }
 
 pub const fn frame_end(frame: Frame) -> Option<u64> {
@@ -121,9 +123,7 @@ impl PhysicalFrameAllocator {
 
     fn select_next_region(&mut self) {
         while self.region_index < self.region_count {
-            let region = unsafe {
-                self.regions.add(self.region_index as usize).read()
-            };
+            let region = unsafe { self.regions.add(self.region_index as usize).read() };
             self.region_index += 1;
             if region.kind != MEMORY_REGION_USABLE || region.length < PAGE_SIZE {
                 continue;
@@ -187,9 +187,7 @@ impl<const MAX_BITMAP_WORDS: usize> BitmapFrameAllocator<MAX_BITMAP_WORDS> {
             Some(bytes) => base_address.checked_add(bytes).is_some(),
             None => false,
         };
-        let valid = base_address & (PAGE_SIZE - 1) == 0
-            && total_frames <= capacity
-            && range_valid;
+        let valid = base_address & (PAGE_SIZE - 1) == 0 && total_frames <= capacity && range_valid;
         Self {
             bitmap: [0u64; MAX_BITMAP_WORDS],
             base_address,
@@ -232,8 +230,8 @@ impl<const MAX_BITMAP_WORDS: usize> BitmapFrameAllocator<MAX_BITMAP_WORDS> {
             return Err(BitmapFrameError::InvalidFrame);
         }
         let offset = frame.start - self.base_address;
-        let frame_idx = usize::try_from(offset / PAGE_SIZE)
-            .map_err(|_| BitmapFrameError::InvalidFrame)?;
+        let frame_idx =
+            usize::try_from(offset / PAGE_SIZE).map_err(|_| BitmapFrameError::InvalidFrame)?;
         if frame_idx >= self.total_frames {
             return Err(BitmapFrameError::InvalidFrame);
         }
@@ -284,9 +282,24 @@ mod tests {
     #[test]
     fn allocator_skips_reserved_memory_and_page_zero() {
         let regions = [
-            MemoryRegion { base: 0, length: 0x2000, kind: MEMORY_REGION_USABLE, reserved: 0 },
-            MemoryRegion { base: 0x2000, length: 0x2000, kind: MEMORY_REGION_RESERVED, reserved: 0 },
-            MemoryRegion { base: 0x4000, length: 0x3000, kind: MEMORY_REGION_USABLE, reserved: 0 },
+            MemoryRegion {
+                base: 0,
+                length: 0x2000,
+                kind: MEMORY_REGION_USABLE,
+                reserved: 0,
+            },
+            MemoryRegion {
+                base: 0x2000,
+                length: 0x2000,
+                kind: MEMORY_REGION_RESERVED,
+                reserved: 0,
+            },
+            MemoryRegion {
+                base: 0x4000,
+                length: 0x3000,
+                kind: MEMORY_REGION_USABLE,
+                reserved: 0,
+            },
         ];
         let info = boot_info(&regions);
         let mut allocator = unsafe { PhysicalFrameAllocator::from_boot_info(&info) }.unwrap();
@@ -300,8 +313,18 @@ mod tests {
     #[test]
     fn rejects_overlapping_or_unsorted_memory_map() {
         let regions = [
-            MemoryRegion { base: 0x1000, length: 0x3000, kind: MEMORY_REGION_USABLE, reserved: 0 },
-            MemoryRegion { base: 0x3000, length: 0x1000, kind: MEMORY_REGION_RESERVED, reserved: 0 },
+            MemoryRegion {
+                base: 0x1000,
+                length: 0x3000,
+                kind: MEMORY_REGION_USABLE,
+                reserved: 0,
+            },
+            MemoryRegion {
+                base: 0x3000,
+                length: 0x1000,
+                kind: MEMORY_REGION_RESERVED,
+                reserved: 0,
+            },
         ];
         let info = boot_info(&regions);
         assert_eq!(
@@ -327,14 +350,24 @@ mod tests {
 
     #[test]
     fn rejects_zero_length_and_unknown_kind() {
-        let zero = [MemoryRegion { base: 0x1000, length: 0, kind: MEMORY_REGION_USABLE, reserved: 0 }];
+        let zero = [MemoryRegion {
+            base: 0x1000,
+            length: 0,
+            kind: MEMORY_REGION_USABLE,
+            reserved: 0,
+        }];
         let zero_info = boot_info(&zero);
         assert_eq!(
             unsafe { PhysicalFrameAllocator::from_boot_info(&zero_info) }.err(),
             Some(FrameAllocatorError::EmptyRegion)
         );
 
-        let unknown = [MemoryRegion { base: 0x1000, length: 0x1000, kind: 99, reserved: 0 }];
+        let unknown = [MemoryRegion {
+            base: 0x1000,
+            length: 0x1000,
+            kind: 99,
+            reserved: 0,
+        }];
         let unknown_info = boot_info(&unknown);
         assert_eq!(
             unsafe { PhysicalFrameAllocator::from_boot_info(&unknown_info) }.err(),
@@ -351,9 +384,14 @@ mod tests {
         assert_eq!(first.start, 0x100000);
         assert_eq!(second.start, 0x101000);
         allocator.free_frame(first).unwrap();
-        assert_eq!(allocator.free_frame(first), Err(BitmapFrameError::DoubleFree));
         assert_eq!(
-            allocator.free_frame(Frame { start: second.start + 1 }),
+            allocator.free_frame(first),
+            Err(BitmapFrameError::DoubleFree)
+        );
+        assert_eq!(
+            allocator.free_frame(Frame {
+                start: second.start + 1
+            }),
             Err(BitmapFrameError::InvalidFrame)
         );
         assert_eq!(allocator.allocate_frame().unwrap().start, first.start);

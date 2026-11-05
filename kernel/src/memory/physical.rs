@@ -145,5 +145,4 @@ mod tests {
             Some(PhysicalMemoryError::InvalidRange)
         );
     }
-
 }

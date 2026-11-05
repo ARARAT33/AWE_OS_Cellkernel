@@ -230,8 +230,18 @@ mod tests {
     #[test]
     fn rejects_overlapping_memory_map() {
         let regions = [
-            MemoryRegion { base: 0x1000, length: 0x3000, kind: 1, reserved: 0 },
-            MemoryRegion { base: 0x3000, length: 0x1000, kind: 2, reserved: 0 },
+            MemoryRegion {
+                base: 0x1000,
+                length: 0x3000,
+                kind: 1,
+                reserved: 0,
+            },
+            MemoryRegion {
+                base: 0x3000,
+                length: 0x1000,
+                kind: 2,
+                reserved: 0,
+            },
         ];
         let info = BootInfo {
             magic: awe_boot_protocol::AWE_BOOT_MAGIC,
@@ -307,5 +317,4 @@ mod tests {
         };
         assert_eq!(kernel_entry(&info), KernelBootStatus::InvalidMemoryMap);
     }
-
 }
