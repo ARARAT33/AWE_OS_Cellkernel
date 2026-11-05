@@ -8,6 +8,7 @@ on:
 
 permissions:
   contents: read
+  pull-requests: write
 
 concurrency:
   group: virtio-runtime-${{ github.workflow }}-${{ github.ref }}
@@ -59,6 +60,21 @@ jobs:
           fi
           exit "$code"
 
+      - name: Comment test failure tail on PR
+        if: failure() && github.event_name == 'pull_request'
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const fs = require('fs');
+            let tail = '';
+            try { tail = require('child_process').execSync('tail -n 200 /tmp/cargo-test-all.log').toString(); } catch (e) { tail = 'log unavailable: ' + e.message; }
+            const body = `## virtio test step failure (head ${{ github.sha }})\n~~~text\n${tail}\n~~~`;
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: body.slice(0, 60000)
+            });
       - name: Build kernel
         env:
           AWEOS_QEMU_SMOKE: "1"
