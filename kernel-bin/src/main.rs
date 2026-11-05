@@ -35,6 +35,14 @@ fn multiboot1_mmap_entry_valid(size: usize, remaining: usize) -> bool {
             .is_some_and(|entry_len| entry_len <= remaining)
 }
 
+fn normalize_multiboot_memory_kind(kind: u32) -> u32 {
+    match kind {
+        1 => awe_boot_protocol::MEMORY_REGION_USABLE,
+        3 => awe_boot_protocol::MEMORY_REGION_RECLAIMABLE,
+        _ => awe_boot_protocol::MEMORY_REGION_RESERVED,
+    }
+}
+
 #[cfg(not(test))]
 static mut MEMORY_REGIONS: [MemoryRegion; MAX_MEMORY_REGIONS] = [MemoryRegion {
     base: 0,
@@ -243,6 +251,16 @@ mod bootstrap_paging_tests {
         assert!(!multiboot1_mmap_entry_valid(20, 23));
         assert!(!multiboot1_mmap_entry_valid(usize::MAX, usize::MAX));
     }
+
+    #[test]
+    fn multiboot_memory_types_are_normalized_fail_closed() {
+        assert_eq!(normalize_multiboot_memory_kind(1), awe_boot_protocol::MEMORY_REGION_USABLE);
+        assert_eq!(normalize_multiboot_memory_kind(3), awe_boot_protocol::MEMORY_REGION_RECLAIMABLE);
+        assert_eq!(normalize_multiboot_memory_kind(2), awe_boot_protocol::MEMORY_REGION_RESERVED);
+        assert_eq!(normalize_multiboot_memory_kind(4), awe_boot_protocol::MEMORY_REGION_RESERVED);
+        assert_eq!(normalize_multiboot_memory_kind(5), awe_boot_protocol::MEMORY_REGION_RESERVED);
+        assert_eq!(normalize_multiboot_memory_kind(u32::MAX), awe_boot_protocol::MEMORY_REGION_RESERVED);
+    }
 }
 
 #[cfg(not(test))]
@@ -366,6 +384,9 @@ fn parse_multiboot1(addr: usize) -> BootInfo {
         return BootInfo::empty(Architecture::X86_64);
     }
 
+    if addr.checked_add(52).is_none() {
+        return BootInfo::empty(Architecture::X86_64);
+    }
     let flags = unsafe { core::ptr::read_unaligned(addr as *const u32) };
     let regions_ptr = core::ptr::addr_of_mut!(MEMORY_REGIONS) as *mut MemoryRegion;
     let mut region_count = 0u32;
@@ -411,7 +432,8 @@ fn parse_multiboot1(addr: usize) -> BootInfo {
             };
             let base = unsafe { core::ptr::read_unaligned(base_ptr as *const u64) };
             let length = unsafe { core::ptr::read_unaligned(length_ptr as *const u64) };
-            let kind = unsafe { core::ptr::read_unaligned(kind_ptr as *const u32) };
+            let raw_kind = unsafe { core::ptr::read_unaligned(kind_ptr as *const u32) };
+            let kind = normalize_multiboot_memory_kind(raw_kind);
 
             unsafe {
                 core::ptr::write(
@@ -431,7 +453,10 @@ fn parse_multiboot1(addr: usize) -> BootInfo {
 
     if region_count == 0 {
         let mem_upper = if (flags & (1 << 0)) != 0 {
-            (unsafe { core::ptr::read_unaligned((addr + 8) as *const u32) }) as u64
+            let Some(mem_upper_ptr) = addr.checked_add(8) else {
+                return BootInfo::empty(Architecture::X86_64);
+            };
+            unsafe { core::ptr::read_unaligned(mem_upper_ptr as *const u32) as u64 }
         } else {
             0
         };
@@ -536,8 +561,9 @@ fn parse_multiboot2(addr: usize) -> BootInfo {
                     let base = unsafe { core::ptr::read_unaligned((addr + entry) as *const u64) };
                     let length =
                         unsafe { core::ptr::read_unaligned((addr + entry + 8) as *const u64) };
-                    let kind =
+                    let raw_kind =
                         unsafe { core::ptr::read_unaligned((addr + entry + 16) as *const u32) };
+                    let kind = normalize_multiboot_memory_kind(raw_kind);
                     unsafe {
                         core::ptr::write(
                             regions_ptr.add(region_count as usize),
