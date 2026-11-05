@@ -18,7 +18,7 @@ const MULTIBOOT1_BOOTLOADER_MAGIC: u32 = 0x2BAD_B002;
 #[cfg(not(test))]
 const MULTIBOOT2_BOOTLOADER_MAGIC: u32 = 0x36D7_6289;
 #[cfg(not(test))]
-const MAX_MEMORY_REGIONS: usize = 128;
+const MAX_MEMORY_REGIONS: usize = awe_boot_protocol::MAX_MEMORY_REGIONS as usize;
 #[cfg(not(test))]
 const FALLBACK_MEMORY_BASE: u64 = 0x0100_0000;
 #[cfg(not(test))]
@@ -27,6 +27,12 @@ const FALLBACK_MEMORY_LENGTH: u64 = 0x0200_0000;
 const MULTIBOOT2_MIN_SIZE: usize = 16;
 #[cfg(not(test))]
 const MULTIBOOT2_MAX_SIZE: usize = 1024 * 1024;
+
+
+fn multiboot1_mmap_entry_valid(size: usize, remaining: usize) -> bool {
+    size >= 20 && size.checked_add(4).is_some_and(|entry_len| entry_len <= remaining)
+}
+
 
 #[cfg(not(test))]
 static mut MEMORY_REGIONS: [MemoryRegion; MAX_MEMORY_REGIONS] = [MemoryRegion {
@@ -291,6 +297,10 @@ pub extern "C" fn rust_main(boot_magic: u32, boot_info_addr: u64) -> ! {
             serial_write(b"AWEOS: no usable memory reported\r\n");
             halt_forever();
         }
+        KernelBootStatus::InvalidMemoryMap => {
+            serial_write(b"AWEOS: invalid or unsafe physical memory map\r\n");
+            halt_forever();
+        }
     }
 
     serial_write(b"AWEOS: kernel is alive\r\n");
@@ -351,19 +361,48 @@ fn parse_multiboot1(addr: usize) -> BootInfo {
     let mut region_count = 0u32;
 
     if (flags & (1 << 6)) != 0 {
-        let mmap_length = unsafe { core::ptr::read_unaligned((addr + 44) as *const u32) } as usize;
-        let mmap_addr = unsafe { core::ptr::read_unaligned((addr + 48) as *const u32) } as usize;
+        let Some(mmap_length_ptr) = addr.checked_add(44) else {
+            return BootInfo::empty(Architecture::X86_64);
+        };
+        let Some(mmap_addr_ptr) = addr.checked_add(48) else {
+            return BootInfo::empty(Architecture::X86_64);
+        };
+        let mmap_length =
+            unsafe { core::ptr::read_unaligned(mmap_length_ptr as *const u32) } as usize;
+        let mmap_addr =
+            unsafe { core::ptr::read_unaligned(mmap_addr_ptr as *const u32) } as usize;
+        if mmap_length == 0 || mmap_addr == 0 || mmap_addr.checked_add(mmap_length).is_none() {
+            return BootInfo::empty(Architecture::X86_64);
+        }
 
         let mut offset = 0usize;
-        while offset < mmap_length && (region_count as usize) < MAX_MEMORY_REGIONS {
-            let entry_ptr = mmap_addr + offset;
-            let size = unsafe { core::ptr::read_unaligned(entry_ptr as *const u32) } as usize;
-            if size == 0 {
-                break;
+        while offset < mmap_length {
+            if region_count as usize >= MAX_MEMORY_REGIONS {
+                return BootInfo::empty(Architecture::X86_64);
             }
-            let base = unsafe { core::ptr::read_unaligned((entry_ptr + 4) as *const u64) };
-            let length = unsafe { core::ptr::read_unaligned((entry_ptr + 12) as *const u64) };
-            let kind = unsafe { core::ptr::read_unaligned((entry_ptr + 20) as *const u32) };
+            let remaining = mmap_length - offset;
+            if remaining < 4 {
+                return BootInfo::empty(Architecture::X86_64);
+            }
+            let Some(entry_ptr) = mmap_addr.checked_add(offset) else {
+                return BootInfo::empty(Architecture::X86_64);
+            };
+            let size = unsafe { core::ptr::read_unaligned(entry_ptr as *const u32) } as usize;
+            if !multiboot1_mmap_entry_valid(size, remaining) {
+                return BootInfo::empty(Architecture::X86_64);
+            }
+            let Some(base_ptr) = entry_ptr.checked_add(4) else {
+                return BootInfo::empty(Architecture::X86_64);
+            };
+            let Some(length_ptr) = entry_ptr.checked_add(12) else {
+                return BootInfo::empty(Architecture::X86_64);
+            };
+            let Some(kind_ptr) = entry_ptr.checked_add(20) else {
+                return BootInfo::empty(Architecture::X86_64);
+            };
+            let base = unsafe { core::ptr::read_unaligned(base_ptr as *const u64) };
+            let length = unsafe { core::ptr::read_unaligned(length_ptr as *const u64) };
+            let kind = unsafe { core::ptr::read_unaligned(kind_ptr as *const u32) };
 
             unsafe {
                 core::ptr::write(
@@ -433,7 +472,9 @@ fn parse_multiboot2(addr: usize) -> BootInfo {
     }
 
     let total_size = unsafe { core::ptr::read_unaligned(addr as *const u32) } as usize;
-    if !(MULTIBOOT2_MIN_SIZE..=MULTIBOOT2_MAX_SIZE).contains(&total_size) {
+    if !(MULTIBOOT2_MIN_SIZE..=MULTIBOOT2_MAX_SIZE).contains(&total_size)
+        || addr.checked_add(total_size).is_none()
+    {
         return BootInfo::empty(Architecture::X86_64);
     }
 
@@ -474,32 +515,34 @@ fn parse_multiboot2(addr: usize) -> BootInfo {
                 let entry_size =
                     unsafe { core::ptr::read_unaligned((addr + offset + 8) as *const u32) }
                         as usize;
-                if entry_size >= 24 {
-                    let mut entry = offset + 16;
-                    while entry_size <= size.saturating_sub(16)
-                        && entry + entry_size <= offset + size
-                        && (region_count as usize) < MAX_MEMORY_REGIONS
-                    {
-                        let base =
-                            unsafe { core::ptr::read_unaligned((addr + entry) as *const u64) };
-                        let length =
-                            unsafe { core::ptr::read_unaligned((addr + entry + 8) as *const u64) };
-                        let kind =
-                            unsafe { core::ptr::read_unaligned((addr + entry + 16) as *const u32) };
-                        unsafe {
-                            core::ptr::write(
-                                regions_ptr.add(region_count as usize),
-                                MemoryRegion {
-                                    base,
-                                    length,
-                                    kind,
-                                    reserved: 0,
-                                },
-                            );
-                        }
-                        region_count += 1;
-                        entry += entry_size;
+                if entry_size < 24 || (size - 16) % entry_size != 0 {
+                    return BootInfo::empty(Architecture::X86_64);
+                }
+                let mut entry = offset + 16;
+                let entry_end = offset + size;
+                while entry < entry_end {
+                    if region_count as usize >= MAX_MEMORY_REGIONS {
+                        return BootInfo::empty(Architecture::X86_64);
                     }
+                    let base =
+                        unsafe { core::ptr::read_unaligned((addr + entry) as *const u64) };
+                    let length =
+                        unsafe { core::ptr::read_unaligned((addr + entry + 8) as *const u64) };
+                    let kind =
+                        unsafe { core::ptr::read_unaligned((addr + entry + 16) as *const u32) };
+                    unsafe {
+                        core::ptr::write(
+                            regions_ptr.add(region_count as usize),
+                            MemoryRegion {
+                                base,
+                                length,
+                                kind,
+                                reserved: 0,
+                            },
+                        );
+                    }
+                    region_count += 1;
+                    entry += entry_size;
                 }
             }
             8 if size >= 32 => {
@@ -628,4 +671,14 @@ unsafe fn in8(port: u16) -> u8 {
 fn panic(_info: &core::panic::PanicInfo) -> ! {
     serial_write(b"AWEOS: KERNEL PANIC\r\n");
     halt_forever();
+
+    #[test]
+    fn multiboot1_memory_map_entry_size_is_bounded_by_remaining_bytes() {
+        assert!(multiboot1_mmap_entry_valid(20, 24));
+        assert!(multiboot1_mmap_entry_valid(24, 28));
+        assert!(!multiboot1_mmap_entry_valid(19, 23));
+        assert!(!multiboot1_mmap_entry_valid(20, 23));
+        assert!(!multiboot1_mmap_entry_valid(usize::MAX, usize::MAX));
+    }
+
 }
