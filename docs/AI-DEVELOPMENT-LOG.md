@@ -245,7 +245,11 @@ merging it also restores `main` to green.
    - Long mode aligns the new interrupt frame to 16 bytes, but preserves the old RSP unconditionally; the old value can be byte-unaligned.
    - Removed the invalid eight-byte alignment check from `InterruptFrame::stack_pointer_valid`, retained nonzero/canonical validation, and added `unaligned_interrupted_rsp_is_valid_in_long_mode`.
 
-5. **Host test linkability**
+5. **Capability ID exhaustion**
+   - `CapabilityTable::insert` no longer wraps its ID counter back to 1. It allocates `u64::MAX` once, switches to a zero exhausted sentinel, and returns `CapabilityError::IdExhausted` on later inserts.
+   - Added `capability_ids_exhaust_without_wrapping_or_reusing_handles`; final CI on the current PR head is still pending.
+
+6. **Host test linkability**
    - Changed the x86_64 context-switch resume-label address to RIP-relative form, fixing the PIE test-linker relocation error observed on the earlier PR head.
 
 ### Files changed in this pass
@@ -278,7 +282,7 @@ Earlier PR-head failures were investigated: stale flag identifiers, Clippy const
 
 ### Remaining risks / next priorities
 1. Add QEMU exception-injection tests for #DE/#UD/#PF and actual NMI/#DF/#MC IST delivery.
-2. Fix capability ID exhaustion: `CapabilityTable::insert` currently wraps its `u64` ID counter back to 1 and can reuse stale handle IDs.
+2. Fuzz/stress capability derivation, revoke/remove races and table exhaustion after the no-wrap allocator fix.
 3. Implement per-process page tables and user-only code/data/stack mappings before any Ring 3 re-enable.
 4. Implement APIC/IOAPIC EOI/routing and timer-driven context switching; current timer programming is not a preemptive scheduler.
 5. Prove persistent block-device I/O/recovery, real network-device I/O and AWOSA service supervision end-to-end.
