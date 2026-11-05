@@ -641,3 +641,18 @@ Workflow run references:
    re-enable.
 3. Persistent frame allocator integration, then APIC/IOAPIC EOI.
 4. Bounded CellManager runtime bound to ProcessManager/IPC/capabilities.
+
+## Post-merge CI confirmation (main @ 25c91da, 2026-11-05)
+
+PR #57 (feat/x86_64-ist-boot-wiring) merged to main as 25c91da. All 6 workflows on the main branch run completed successfully:
+
+- AWEOS CI Pipeline #329
+- AWEOS Quality Gate #969
+- AWEOS Cloud Security Gate #914
+- AWEOS VirtIO Runtime #322 (includes the previously-failing virtio-block-contract-and-qemu job, now green)
+- AWEOS Bootable Image Pipeline #940
+- AWEOS Multi-Architecture Images #243
+
+The QEMU test serialization + unix-socket monitor fix and the virtio cargo cache hygiene fix (v2 key, no target dir in cache, no restore-keys) are now verified on main.
+
+Next priorities (unchanged): per-process page tables, persistent frame allocator, APIC/IOAPIC EOI, bounded CellManager, re-evaluate stale PRs #55/#53/#52/#50/#48 against new main.
