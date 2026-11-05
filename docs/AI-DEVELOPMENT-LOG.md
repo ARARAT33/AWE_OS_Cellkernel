@@ -579,3 +579,65 @@ Workflow run references:
 **Open problem:** virtio-block-contract-and-qemu failed twice at "Run storage and driver contract tests" (cargo test --workspace --all-targets, exit 101) even though the identical command passes in the diagnostics job, then one run was cancelled by concurrency. Root cause not yet visible; the new step-summary capture should reveal it on the next run.
 
 **Next priorities:** (1) read the virtio job step summary, fix the environmental cause, (2) get a fully green check set incl. virtio, (3) merge PR #57 to main, (4) then per-process page tables, persistent frame allocator, APIC/IOAPIC EOI, bounded CellManager.
+
+
+---
+
+## Session 2026-11-05 (conclusion) — virtio workspace-test failure root-caused and fixed
+
+### Diagnosis (from the new PR-comment diagnostics, not speculation)
+- The virtio job's failure-tail comment (added in 113abee/f622b9d) finally
+  captured the real error: in the parallel workspace test run,
+  `product_core::qemu_exception_injection_selftest` panicked with
+  "QEMU exception selftest timed out in phase 1 after 0/10 milestones"
+  and QEMU had printed
+  "Failed to connect to 'qemu-exc-selftest-monitor.sock': No such file or
+  directory" at startup, so the selftest emulator never booted.
+- Why ci-diagnostics looked green: that job does NOT install QEMU/GRUB
+  tools, so both product-core QEMU tests silently skip there. Its
+  "311 tests, exit 0" never exercised the failing path. The stale-cache
+  hypothesis from the previous entry is disproven (3533677 reproduced the
+  failure with a fresh, target-less cache) and is hereby corrected.
+- Root cause: `cargo test --workspace --all-targets` runs
+  `qemu_automated_boot_smoke_test` and `qemu_exception_injection_selftest`
+  in parallel. Both spawn nested `cargo build` invocations (package-cache
+  lock contention visible in the log) and two full QEMU machines on a
+  small runner, and the selftest's monitor socket was configured with the
+  ambiguous default chardev mode. Under that contention the selftest QEMU
+  failed at startup and the test timed out with an empty serial log.
+
+### Fix (commit on the PR branch, test code only)
+- `tests/product-core/src/lib.rs`: a module-wide `QEMU_TEST_LOCK` mutex now
+  serializes the two QEMU-backed tests, and the exception selftest's
+  monitor socket is explicitly `unix:<path>,server,nowait` instead of the
+  ambiguous default mode.
+
+### Also in this session
+- 3533677: virtio-runtime.yml no longer caches `target` (only cargo
+  registry/git) and the restore-keys prefix fallback was removed with a
+  bumped cache key, eliminating the stale-cache class of failures even
+  though it turned out not to be this failure's cause.
+
+### Real test results on the final head (all 16 checks green)
+- Rust workspace, Workspace Build & Validation, Workspace clippy,
+  cloud-security, cloud-release-contract, UEFI loader,
+  build-and-smoke-test-image (QEMU boot smoke),
+  exception-injection-selftest (QEMU #DE/#UD/#PF/#DF + NMI/IST1),
+  virtio-block-contract-and-qemu (workspace tests incl. both QEMU product
+  tests, kernel build, VirtIO PCI QEMU boot), Build Multi-Arch Boot
+  Images, all 4 AOSIN installers, cargo failure diagnostics,
+  rustfmt bot: ALL SUCCESS.
+
+### Honest limits
+- The two QEMU product tests now run serialized; their pass proves the
+  emulated boot paths, not physical hardware behaviour.
+- Remaining carried-forward work is unchanged: per-process page tables,
+  persistent frame allocator, APIC/IOAPIC EOI/routing, bounded
+  CellManager runtime, stale PRs #55/#53/#52/#50/#48 re-evaluation.
+
+### Next priorities
+1. Merge PR #57 into main and confirm main CI is green.
+2. Per-process page tables and user-only mappings before any Ring 3
+   re-enable.
+3. Persistent frame allocator integration, then APIC/IOAPIC EOI.
+4. Bounded CellManager runtime bound to ProcessManager/IPC/capabilities.
