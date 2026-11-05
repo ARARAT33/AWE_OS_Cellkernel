@@ -260,6 +260,8 @@ merging it also restores `main` to green.
 - `kernel/src/memory/x86_64.rs`
 - `kernel-bin/src/main.rs`
 - `kernel/src/process/x86_64_switch.S`
+- `kernel/src/security/capability.rs`
+- `tests/product-core/src/lib.rs`
 - `docs/AI-DEVELOPMENT-PLAN-2026-11-05.md`
 - `docs/CELLKERNEL_ARCHITECTURE_AUDIT_2026-11-05.md`
 - `docs/INTERRUPT_ENTRY_HARDENING_2026-11-02.md`
@@ -289,3 +291,15 @@ Earlier PR-head failures were investigated: stale flag identifiers, Clippy const
 6. Add guard pages for IST stacks, FPU/XSAVE ownership, and fuzz/stress tests for capability, IPC, storage and network boundaries.
 
 PR #57 remains open and unmerged pending the remaining VirtIO check and review.
+
+### 2026-11-05 follow-up — capability IDs and QEMU milestone regression
+
+- Fixed `CapabilityTable::insert`: IDs now advance with `checked_add`, reserve zero as the exhausted sentinel, issue `u64::MAX` at most once, and return `CapabilityError::IdExhausted` instead of wrapping back to 1. Added `capability_ids_exhaust_without_wrapping_or_reusing_handles`.
+- Fixed `InterruptFrame::stack_pointer_valid`: the processor aligns the new long-mode interrupt frame, not the interrupted program's saved RSP. The saved RSP may be byte-unaligned; validation now checks nonzero/canonical form without an invalid 8-byte alignment requirement. Added `unaligned_interrupted_rsp_is_valid_in_long_mode`.
+- Investigated the VirtIO Runtime QEMU failure on head `3fcbc451`: the serial log showed the kernel completed the actual boot path, including GDT/TSS, SYSCALL MSRs, IDT+IST, heap, PCI, PIC/PIT, Ring-3 deferral and bootstrap paging, with no CPU exception. The smoke test itself still expected the obsolete `IDT initialized`, `Preemptive Scheduler initialized`, and successful Ring-3 messages. It timed out after 4/15 stale milestones; this was a test-contract failure, not evidence of a kernel boot exception.
+- Updated `tests/product-core/src/lib.rs` to assert the milestones actually emitted by the current boot path, require the explicit Ring-3 deferral message, and reject false preemptive-scheduler/Ring-3-success claims.
+- On code head `fa7c254b`, workspace compilation and all workspace tests passed, but formatting failed on the new test assertion line. The repository's `rustfmt-fix` workflow corrected only that formatting line in commit `7824f4d`.
+- Workflow runs triggered by the formatter-bot commit were marked `action_required`; they had no executed jobs. A user-authored follow-up log commit is being used to trigger fresh validation on the formatted tree. Do not treat those action-required runs as passes.
+- The earlier VirtIO Runtime failure is recorded as 9 passed / 1 failed; the failing test was the stale QEMU milestone contract. The updated test has not yet completed on the formatted head.
+
+**Current validation state:** CI workspace compilation/tests passed on `fa7c254b`; formatting was corrected in `7824f4d`; full CI, Clippy, Cloud Security, Bootable Image, Multi-Architecture and VirtIO validation on the final formatted tree is pending. No physical hardware or injected NMI/#DF/#MC test was performed.
