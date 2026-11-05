@@ -233,6 +233,15 @@ mod bootstrap_paging_tests {
     fn bootstrap_page_table_flags_never_grant_user_access() {
         assert_supervisor_only(BOOTSTRAP_TABLE_FLAGS, BOOTSTRAP_LEAF_FLAGS);
     }
+
+    #[test]
+    fn multiboot1_memory_map_entry_size_is_bounded_by_remaining_bytes() {
+        assert!(multiboot1_mmap_entry_valid(20, 24));
+        assert!(multiboot1_mmap_entry_valid(24, 28));
+        assert!(!multiboot1_mmap_entry_valid(19, 23));
+        assert!(!multiboot1_mmap_entry_valid(20, 23));
+        assert!(!multiboot1_mmap_entry_valid(usize::MAX, usize::MAX));
+    }
 }
 
 #[cfg(not(test))]
@@ -671,14 +680,5 @@ unsafe fn in8(port: u16) -> u8 {
 fn panic(_info: &core::panic::PanicInfo) -> ! {
     serial_write(b"AWEOS: KERNEL PANIC\r\n");
     halt_forever();
-
-    #[test]
-    fn multiboot1_memory_map_entry_size_is_bounded_by_remaining_bytes() {
-        assert!(multiboot1_mmap_entry_valid(20, 24));
-        assert!(multiboot1_mmap_entry_valid(24, 28));
-        assert!(!multiboot1_mmap_entry_valid(19, 23));
-        assert!(!multiboot1_mmap_entry_valid(20, 23));
-        assert!(!multiboot1_mmap_entry_valid(usize::MAX, usize::MAX));
-    }
 
 }
