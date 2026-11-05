@@ -6,6 +6,7 @@ use super::frame::{Frame, PAGE_SIZE};
 pub enum PhysicalMemoryError {
     OutOfMemory,
     InvalidFrame,
+    InvalidRange,
     DoubleFree,
 }
 
@@ -25,6 +26,13 @@ impl<'a> FrameBitmap<'a> {
         if base & (PAGE_SIZE - 1) != 0 || frame_count > bits.len().saturating_mul(64) {
             return Err(PhysicalMemoryError::InvalidFrame);
         }
+        let frame_count_u64 =
+            u64::try_from(frame_count).map_err(|_| PhysicalMemoryError::InvalidRange)?;
+        let bytes = frame_count_u64
+            .checked_mul(PAGE_SIZE)
+            .ok_or(PhysicalMemoryError::InvalidRange)?;
+        base.checked_add(bytes)
+            .ok_or(PhysicalMemoryError::InvalidRange)?;
         for word in bits.iter_mut() {
             *word = u64::MAX;
         }
@@ -40,7 +48,8 @@ impl<'a> FrameBitmap<'a> {
         if frame.start < self.base || frame.start & (PAGE_SIZE - 1) != 0 {
             return Err(PhysicalMemoryError::InvalidFrame);
         }
-        let number = ((frame.start - self.base) / PAGE_SIZE) as usize;
+        let number = usize::try_from((frame.start - self.base) / PAGE_SIZE)
+            .map_err(|_| PhysicalMemoryError::InvalidFrame)?;
         if number >= self.frame_count {
             return Err(PhysicalMemoryError::InvalidFrame);
         }
@@ -68,11 +77,18 @@ impl<'a> FrameBitmap<'a> {
             if number >= self.frame_count {
                 continue;
             }
+            let number_u64 =
+                u64::try_from(number).map_err(|_| PhysicalMemoryError::InvalidRange)?;
+            let offset = number_u64
+                .checked_mul(PAGE_SIZE)
+                .ok_or(PhysicalMemoryError::InvalidRange)?;
+            let start = self
+                .base
+                .checked_add(offset)
+                .ok_or(PhysicalMemoryError::InvalidRange)?;
             *word |= 1u64 << bit;
             self.free = self.free.saturating_sub(1);
-            return Ok(Frame {
-                start: self.base + number as u64 * PAGE_SIZE,
-            });
+            return Ok(Frame { start });
         }
         Err(PhysicalMemoryError::OutOfMemory)
     }
@@ -116,4 +132,18 @@ mod tests {
             Err(PhysicalMemoryError::InvalidFrame)
         );
     }
+
+    #[test]
+    fn rejects_misaligned_base_and_overflowing_range() {
+        let mut bits = [0u64; 1];
+        assert_eq!(
+            FrameBitmap::new(&mut bits, 0x1001, 1).err(),
+            Some(PhysicalMemoryError::InvalidFrame)
+        );
+        assert_eq!(
+            FrameBitmap::new(&mut bits, u64::MAX - 0xfff, 1).err(),
+            Some(PhysicalMemoryError::InvalidRange)
+        );
+    }
+
 }
