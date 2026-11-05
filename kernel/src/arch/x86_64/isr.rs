@@ -2,10 +2,10 @@
 
 /// CPU state captured by the x86_64 common ISR entry.
 ///
-/// The register/vector/error/RIP/CS/RFLAGS prefix is always present. The
-/// trailing RSP/SS words are pushed by hardware only when the interrupt
-/// changes privilege level; same-ring handlers must use the accessors below
-/// instead of reading those fields as though hardware had populated them.
+/// In 64-bit mode, the processor unconditionally saves the interrupted
+/// SS:RSP after the return frame, including same-CPL interrupts with no IST
+/// stack switch. The structure therefore has one fixed hardware-frame layout
+/// for all vectors (with the stub-normalized error-code slot).
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct InterruptFrame {
@@ -68,42 +68,32 @@ impl InterruptFrame {
 
     /// Whether the interrupted code was running outside ring 0.
     ///
-    /// The CPU only pushes RSP/SS when an interrupt changes privilege level.
-    /// For a same-ring interrupt, the original RSP is the address immediately
-    /// after the three-word hardware return frame (RIP, CS, RFLAGS).
+    /// This reports the saved CS privilege level; it does not determine
+    /// whether the hardware-saved RSP/SS fields are present (they always are
+    /// in 64-bit mode).
     pub const fn interrupted_from_user(&self) -> bool {
         self.cs & 0x3 != 0
     }
 
-    /// Return the interrupted stack pointer without assuming that the CPU
-    /// pushed an RSP field for a same-privilege interrupt.
+    /// Return the RSP unconditionally saved by the processor in 64-bit mode.
     ///
-    /// IST-backed vectors (NMI, #DF, #MC) switch RSP to the TSS IST stack
-    /// before the frame is built, but the CPU still does not push RSP/SS for
-    /// a same-privilege interrupt, so the derivation below stays valid: the
-    /// same-ring RSP is the address immediately after the three-word hardware
-    /// return frame (RIP, CS, RFLAGS) on whichever stack the entry used.
-    pub fn interrupted_stack_pointer(&self) -> u64 {
-        if self.interrupted_from_user() {
-            self.rsp
-        } else {
-            (self as *const Self as usize + core::mem::offset_of!(Self, rsp)) as u64
-        }
+    /// Long-mode interrupt/exception frames always contain the interrupted
+    /// SS:RSP, even when CPL does not change and the IDT gate has IST=0.
+    pub const fn interrupted_stack_pointer(&self) -> u64 {
+        self.rsp
     }
 
-    /// The interrupted SS is hardware-saved only after a privilege transition.
-    pub const fn interrupted_stack_segment(&self) -> Option<u64> {
-        if self.interrupted_from_user() {
-            Some(self.ss)
-        } else {
-            None
-        }
+    /// Return the SS unconditionally saved by the processor in 64-bit mode.
+    pub const fn interrupted_stack_segment(&self) -> u64 {
+        self.ss
     }
 
     pub fn stack_pointer_valid(&self) -> bool {
         let rsp = self.interrupted_stack_pointer();
         let upper = rsp >> 48;
-        (upper == 0 || upper == 0xffff) && (rsp & 0x7) == 0
+        // Long mode aligns the new interrupt frame, not the interrupted
+        // program's saved RSP. The old RSP may therefore be byte-unaligned.
+        rsp != 0 && (upper == 0 || upper == 0xffff)
     }
 
     pub const fn rflags_valid(&self) -> bool {
@@ -158,19 +148,47 @@ mod tests {
     }
 
     #[test]
-    fn ring_zero_frame_derives_rsp_from_the_hardware_frame() {
+    fn ring_zero_frame_uses_hardware_saved_rsp_and_ss() {
         let mut f = InterruptFrame::empty();
+        f.vector = 32; // Same-CPL external interrupt, no IST slot.
         f.rip = 0x0040_0000;
         f.cs = 0x08;
         f.rflags = 0x202;
-        // These fields are not present in a same-ring hardware frame.
-        f.rsp = 0x1;
-        f.ss = 0xffff;
+        f.rsp = 0x0080_0000;
+        f.ss = 0x10;
 
-        let expected_rsp = (&f as *const InterruptFrame as usize
-            + core::mem::offset_of!(InterruptFrame, rsp)) as u64;
-        assert_eq!(f.interrupted_stack_pointer(), expected_rsp);
-        assert_eq!(f.interrupted_stack_segment(), None);
+        assert_eq!(f.interrupted_stack_pointer(), 0x0080_0000);
+        assert_eq!(f.interrupted_stack_segment(), 0x10);
+        assert!(f.validate());
+    }
+
+    #[test]
+    fn unaligned_interrupted_rsp_is_valid_in_long_mode() {
+        let mut f = InterruptFrame::empty();
+        f.vector = 32;
+        f.rip = 0x0040_0000;
+        f.cs = 0x08;
+        f.rflags = 0x202;
+        f.rsp = 0x0080_0001;
+        f.ss = 0x10;
+
+        assert!(f.stack_pointer_valid());
+        assert!(f.validate());
+    }
+
+    #[test]
+    fn ist_same_ring_frame_uses_hardware_saved_rsp_and_ss() {
+        let mut f = InterruptFrame::empty();
+        f.vector = 8; // Double Fault uses IST2.
+        f.rip = 0x0040_0000;
+        f.cs = 0x08; // Same privilege level: CPL0.
+        f.rflags = 0x202;
+        f.rsp = 0x0080_0000;
+        f.ss = 0x10;
+
+        assert!(!f.interrupted_from_user());
+        assert_eq!(f.interrupted_stack_pointer(), 0x0080_0000);
+        assert_eq!(f.interrupted_stack_segment(), 0x10);
         assert!(f.validate());
     }
 
@@ -184,7 +202,7 @@ mod tests {
         f.ss = 0x23;
 
         assert_eq!(f.interrupted_stack_pointer(), 0x0080_0000);
-        assert_eq!(f.interrupted_stack_segment(), Some(0x23));
+        assert_eq!(f.interrupted_stack_segment(), 0x23);
         assert!(f.validate());
     }
 }

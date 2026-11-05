@@ -11,3 +11,7 @@ path = "src/main.rs"
 [dependencies]
 aweos-kernel = { path = "../kernel" }
 awe-boot-protocol = { workspace = true }
+
+[features]
+# Enables the kernel QEMU exception-injection self-test in this binary.
+selftest = ["aweos-kernel/kernel-selftest"]

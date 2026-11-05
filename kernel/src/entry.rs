@@ -13,6 +13,7 @@ pub enum KernelBootStatus {
     UnsupportedArchitecture = 2,
     NoCpu = 3,
     NoUsableMemory = 4,
+    InvalidMemoryMap = 5,
 }
 
 pub struct KernelContext {
@@ -54,7 +55,10 @@ pub fn kernel_entry(info: &BootInfo) -> KernelBootStatus {
         return KernelBootStatus::NoUsableMemory;
     }
 
-    let mut frames = unsafe { PhysicalFrameAllocator::from_boot_info(info) };
+    let mut frames = match unsafe { PhysicalFrameAllocator::try_from_boot_info(info) } {
+        Ok(allocator) => allocator,
+        Err(_) => return KernelBootStatus::InvalidMemoryMap,
+    };
     if frames.allocate().is_none() {
         return KernelBootStatus::NoUsableMemory;
     }
@@ -68,10 +72,8 @@ pub fn kernel_entry(info: &BootInfo) -> KernelBootStatus {
         use crate::platform::pit::Pit;
 
         static mut KERNEL_STACK: [u8; 65536] = [0; 65536];
-        static mut USER_STACK: [u8; 16384] = [0; 16384];
 
         let stack_top = core::ptr::addr_of_mut!(KERNEL_STACK) as u64 + 65536;
-        let user_stack_top = core::ptr::addr_of_mut!(USER_STACK) as u64 + 16384;
 
         use crate::arch::x86_64::gdt::{KERNEL_CODE_SELECTOR, USER_CODE_SELECTOR};
         use crate::arch::x86_64::idt::IDT;
@@ -88,11 +90,22 @@ pub fn kernel_entry(info: &BootInfo) -> KernelBootStatus {
         serial_write_str("AWEOS: SYSCALL/SYSRET MSRs initialized\r\n");
 
         let idt_ptr = core::ptr::addr_of_mut!(IDT);
+        let tss_ptr = core::ptr::addr_of_mut!(crate::arch::x86_64::gdt::TSS);
         unsafe {
             init_idt_stubs(&mut *idt_ptr, KERNEL_CODE_SELECTOR);
+            // Boot-order contract: the critical #NMI/#DF/#MC vectors get
+            // their dedicated IST stacks after the handlers are installed
+            // and before the IDT is loaded. Failing closed is the only
+            // safe option: continuing without IST would let a fault on a
+            // broken kernel stack escalate to a triple fault.
+            if crate::arch::x86_64::ist::configure_ist_stacks(&mut *tss_ptr, &mut *idt_ptr).is_err()
+            {
+                serial_write_str("AWEOS: FATAL: critical IST stack setup failed\r\n");
+                crate::arch::x86_64::boot::halt();
+            }
             (*idt_ptr).load();
         }
-        serial_write_str("AWEOS: IDT initialized\r\n");
+        serial_write_str("AWEOS: IDT & critical IST stacks initialized\r\n");
 
         init_kernel_heap();
         serial_write_str("AWEOS: Kernel Heap initialized\r\n");
@@ -114,42 +127,43 @@ pub fn kernel_entry(info: &BootInfo) -> KernelBootStatus {
         }
         serial_write_str("AWEOS: Interrupts & PIC/PIT initialized\r\n");
 
-        serial_write_str("AWEOS: Preemptive Scheduler initialized\r\n");
+        // No scheduler exists yet: timer ticks terminate in the ISR stubs.
+        // This line previously claimed a running scheduler; it does not.
+        serial_write_str("AWEOS: timer programmed (no scheduler yet)\r\n");
         serial_write_str("AWEOS: boot protocol validated\r\n");
         serial_write_str("AWEOS: kernel state = RUNNING\r\n");
         serial_write_str("AWEOS: kernel is alive\r\n");
-        serial_write_str("AWEOS: Entering Ring 3 Userspace...\r\n");
-        unsafe {
-            enter_userspace(userspace_entry as *const () as usize as u64, user_stack_top);
+        // The bootstrap identity map is supervisor-only. Ring 3 must remain
+        // disabled until a per-process address space maps only the intended
+        // user code/data/stack with USER permissions and keeps kernel pages
+        // supervisor-only.
+        serial_write_str(
+            "AWEOS: Ring 3 deferred: isolated user address spaces are not installed\r\n",
+        );
+
+        // QEMU exception-injection validation (cargo feature
+        // "kernel-selftest"): deliberately inject #DE/#UD/#PF/#DF and wait
+        // for an externally injected NMI to prove the real IDT handlers,
+        // the long-mode frame model and the dedicated IST stacks recover
+        // execution. Runs only in validation builds; production images
+        // contain no self-test code path.
+        #[cfg(feature = "kernel-selftest")]
+        {
+            crate::arch::x86_64::selftest::run();
         }
     }
 
     KernelBootStatus::Ready
 }
 
-#[cfg(all(target_arch = "x86_64", target_os = "none"))]
-#[unsafe(no_mangle)]
-pub extern "C" fn userspace_entry() -> ! {
-    // This bootstrap cell deliberately does not call kernel functions directly:
-    // privileged serial I/O from CPL3 caused #GP faults. It proves the Ring 3
-    // -> SYSCALL -> trusted kernel entry -> SYSRET round trip only.
-    unsafe {
-        core::arch::asm!(
-            "syscall",
-            inlateout("rax") crate::syscall::BOOTSTRAP_HELLO_SYSCALL => _,
-            lateout("rcx") _,
-            lateout("r11") _,
-            options(nostack)
-        );
-    }
-
-    loop {
-        unsafe {
-            core::arch::asm!("pause", options(nomem, nostack, preserves_flags));
-        }
-    }
-}
-
+/// Enter a user-mode bootstrap context.
+///
+/// # Safety
+/// The active page tables must map `user_rip` and the stack containing
+/// `user_rsp` as user-accessible, while every kernel mapping remains
+/// supervisor-only. The caller must also have installed a valid syscall
+/// entry and kernel stack. The current boot path deliberately does not call
+/// this helper until a per-process address-space builder exists.
 #[cfg(all(target_arch = "x86_64", target_os = "none"))]
 pub unsafe fn enter_userspace(user_rip: u64, user_rsp: u64) {
     use crate::arch::x86_64::gdt::{USER_CODE_SELECTOR, USER_DATA_SELECTOR};
@@ -222,5 +236,96 @@ mod tests {
     fn rejects_missing_memory_map() {
         let info = BootInfo::empty(Architecture::X86_64);
         assert_eq!(kernel_entry(&info), KernelBootStatus::NoUsableMemory);
+    }
+
+    #[test]
+    fn rejects_overlapping_memory_map() {
+        let regions = [
+            MemoryRegion {
+                base: 0x1000,
+                length: 0x3000,
+                kind: 1,
+                reserved: 0,
+            },
+            MemoryRegion {
+                base: 0x3000,
+                length: 0x1000,
+                kind: 2,
+                reserved: 0,
+            },
+        ];
+        let info = BootInfo {
+            magic: awe_boot_protocol::AWE_BOOT_MAGIC,
+            version: awe_boot_protocol::AWE_BOOT_VERSION,
+            size: core::mem::size_of::<BootInfo>() as u32,
+            architecture: Architecture::X86_64,
+            cpu_count: 1,
+            memory_regions: regions.as_ptr(),
+            memory_region_count: regions.len() as u32,
+            framebuffer_address: 0,
+            framebuffer_size: 0,
+            framebuffer_width: 0,
+            framebuffer_height: 0,
+            framebuffer_pitch: 0,
+            acpi_rsdp: 0,
+            device_tree: 0,
+            kernel_base: 0,
+            kernel_size: 0,
+        };
+        assert_eq!(kernel_entry(&info), KernelBootStatus::InvalidMemoryMap);
+    }
+
+    #[test]
+    fn rejects_overflowing_memory_map_region() {
+        let regions = [MemoryRegion {
+            base: u64::MAX - 0xfff,
+            length: 0x2000,
+            kind: 1,
+            reserved: 0,
+        }];
+        let info = BootInfo {
+            magic: awe_boot_protocol::AWE_BOOT_MAGIC,
+            version: awe_boot_protocol::AWE_BOOT_VERSION,
+            size: core::mem::size_of::<BootInfo>() as u32,
+            architecture: Architecture::X86_64,
+            cpu_count: 1,
+            memory_regions: regions.as_ptr(),
+            memory_region_count: 1,
+            framebuffer_address: 0,
+            framebuffer_size: 0,
+            framebuffer_width: 0,
+            framebuffer_height: 0,
+            framebuffer_pitch: 0,
+            acpi_rsdp: 0,
+            device_tree: 0,
+            kernel_base: 0,
+            kernel_size: 0,
+        };
+        assert_eq!(kernel_entry(&info), KernelBootStatus::InvalidMemoryMap);
+    }
+
+    #[test]
+    fn rejects_misaligned_memory_map_pointer_before_reading_it() {
+        let storage = [0u64; 4];
+        let misaligned = unsafe { storage.as_ptr().cast::<u8>().add(1).cast::<MemoryRegion>() };
+        let info = BootInfo {
+            magic: awe_boot_protocol::AWE_BOOT_MAGIC,
+            version: awe_boot_protocol::AWE_BOOT_VERSION,
+            size: core::mem::size_of::<BootInfo>() as u32,
+            architecture: Architecture::X86_64,
+            cpu_count: 1,
+            memory_regions: misaligned,
+            memory_region_count: 1,
+            framebuffer_address: 0,
+            framebuffer_size: 0,
+            framebuffer_width: 0,
+            framebuffer_height: 0,
+            framebuffer_pitch: 0,
+            acpi_rsdp: 0,
+            device_tree: 0,
+            kernel_base: 0,
+            kernel_size: 0,
+        };
+        assert_eq!(kernel_entry(&info), KernelBootStatus::InvalidMemoryMap);
     }
 }

@@ -25,6 +25,14 @@ mod product_core {
         BLOCK_SIZE, BlockDevice, NodeKind, RamBlockDevice, RecoveryAction, Vfs,
     };
 
+    /// QEMU-backed tests spawn nested `cargo build` invocations and full
+    /// machine emulators, so they must never run concurrently with each
+    /// other: parallel runs contend for cargo package-cache locks and CPU,
+    /// which starved the emulator boot on small CI runners and produced
+    /// a flaky monitor-socket failure (`Failed to connect ... No such
+    /// file or directory`, then a phase-1 milestone timeout).
+    static QEMU_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     fn asd_package(manifest: usize, payload: usize, signature: usize, sig_byte0: u8) -> Vec<u8> {
         let mut bytes = Vec::with_capacity(ASD_HEADER_LEN + manifest + payload + signature);
         bytes.extend_from_slice(&ASD_MAGIC);
@@ -493,6 +501,10 @@ mod product_core {
         use std::process::Command;
         use std::time::{Duration, Instant};
 
+        let _qemu_guard = QEMU_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+
         let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
         let workspace_root = manifest_dir.parent().unwrap().parent().unwrap();
         let kernel_bin = workspace_root.join("target/x86_64-unknown-none/debug/aweos");
@@ -608,25 +620,28 @@ mod product_core {
             .spawn();
         let mut child = child_res.expect("failed to start QEMU");
 
-        // These are the milestones actually emitted by the current kernel
-        // entry path. Ring-3 execution is not claimed until the kernel emits
-        // dedicated userspace-entry evidence.
+        // These are the milestones actually emitted by the current boot
+        // path. The test explicitly expects Ring 3 to remain disabled until
+        // isolated per-process user mappings exist; it does not accept a
+        // synthetic userspace-success message.
         let required_milestones = [
             "AWEOS CellKernel",
             "AWEOS boot:",
             "AWEOS: GDT & TSS initialized",
             "AWEOS: SYSCALL/SYSRET MSRs initialized",
-            "AWEOS: IDT initialized",
+            "AWEOS: IDT & critical IST stacks initialized",
             "AWEOS: Kernel Heap initialized",
             "AWEOS: PCI Bus 0 enumerated",
             "AWEOS: Interrupts & PIC/PIT initialized",
-            "AWEOS: Preemptive Scheduler initialized",
+            "AWEOS: timer programmed (no scheduler yet)",
             "AWEOS: boot protocol validated",
             "AWEOS: kernel state = RUNNING",
             "AWEOS: kernel is alive",
-            "AWEOS: Entering Ring 3 Userspace...",
-            "AWEOS: Ring 3 userspace reached and active!",
-            "AWEOS: userspace execution completed cleanly!",
+            "AWEOS: Ring 3 deferred: isolated user address spaces are not installed",
+            "AWEOS: boot protocol validated",
+            "AWEOS: x86_64 bootstrap paging = ACTIVE",
+            "AWEOS: kernel state = RUNNING",
+            "AWEOS: kernel is alive",
         ];
 
         let start_time = Instant::now();
@@ -665,6 +680,16 @@ mod product_core {
         // Allow a short settling period to catch immediate privilege/return faults.
         std::thread::sleep(Duration::from_millis(100));
         let final_log = std::fs::read_to_string(&log_file).unwrap_or_default();
+        assert!(
+            final_log
+                .contains("AWEOS: Ring 3 deferred: isolated user address spaces are not installed"),
+            "Ring 3 must remain deferred until isolated user mappings exist:\n{final_log}"
+        );
+        assert!(
+            !final_log.contains("Ring 3 userspace reached and active!")
+                && !final_log.contains("Preemptive Scheduler initialized"),
+            "boot log must not claim unimplemented userspace or preemptive scheduling:\n{final_log}"
+        );
         assert!(
             !final_log.contains("AWEOS EXCEPTION"),
             "QEMU reached the expected milestones but raised a CPU exception:\n{final_log}"
@@ -795,5 +820,216 @@ mod product_core {
         awefs.delete_file(1, b"editor.awos").unwrap();
         storaged.delete_package_file(file_id).unwrap();
         assert!(awefs.vfs.lookup(1, b"editor.awos").is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn qemu_exception_injection_selftest() {
+        use std::io::Write;
+        use std::os::unix::net::UnixStream;
+        use std::process::Command;
+        use std::time::{Duration, Instant};
+
+        let _qemu_guard = QEMU_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+
+        let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let workspace_root = manifest_dir.parent().unwrap().parent().unwrap();
+
+        // The exception-injection path runs only when the complete QEMU/ISO
+        // toolchain is present; the dedicated CI job installs it.
+        let tools_available = [
+            "qemu-system-x86_64",
+            "grub-file",
+            "grub-mkrescue",
+            "xorriso",
+        ]
+        .iter()
+        .all(|tool| Command::new(tool).arg("--version").output().is_ok());
+        if !tools_available {
+            eprintln!(
+                "Skipping QEMU exception-injection self test: emulator/ISO tools unavailable."
+            );
+            return;
+        }
+
+        // Validation build: the kernel deliberately injects #DE/#UD/#PF/#DF
+        // and waits for a monitor-injected NMI. Production builds carry
+        // none of this code (cargo feature "selftest").
+        let status = Command::new("cargo")
+            .current_dir(workspace_root)
+            .args([
+                "build",
+                "--release",
+                "-p",
+                "aweos-kernel-bin",
+                "--target",
+                "x86_64-unknown-none",
+                "--features",
+                "selftest",
+            ])
+            .status()
+            .expect("failed to run cargo build");
+        assert!(status.success(), "selftest feature build failed");
+
+        let kernel_bin = workspace_root.join("target/x86_64-unknown-none/release/aweos");
+        assert!(kernel_bin.exists(), "kernel binary missing after build");
+
+        let multiboot_status = Command::new("grub-file")
+            .arg("--is-x86-multiboot2")
+            .arg(&kernel_bin)
+            .status()
+            .expect("failed to run grub-file");
+        assert!(
+            multiboot_status.success(),
+            "selftest kernel lacks a valid Multiboot2 header"
+        );
+
+        let iso_root = workspace_root.join("target/aweos-exc-selftest-iso");
+        let iso_path = workspace_root.join("target/aweos-exc-selftest.iso");
+        let _ = std::fs::remove_dir_all(&iso_root);
+        std::fs::create_dir_all(iso_root.join("boot/grub")).expect("create ISO directory");
+        std::fs::copy(&kernel_bin, iso_root.join("boot/aweos")).expect("copy kernel into ISO");
+        std::fs::copy(
+            workspace_root.join("kernel-bin/grub.cfg"),
+            iso_root.join("boot/grub/grub.cfg"),
+        )
+        .expect("copy GRUB configuration");
+        let iso_status = Command::new("grub-mkrescue")
+            .arg("-o")
+            .arg(&iso_path)
+            .arg(&iso_root)
+            .status()
+            .expect("failed to run grub-mkrescue");
+        assert!(iso_status.success(), "failed to create selftest boot ISO");
+
+        let log_file = workspace_root.join("qemu-exc-selftest.log");
+        let monitor_path = workspace_root.join("qemu-exc-selftest-monitor.sock");
+        let _ = std::fs::remove_file(&log_file);
+        let _ = std::fs::remove_file(&monitor_path);
+
+        let mut child = Command::new("qemu-system-x86_64")
+            .current_dir(workspace_root)
+            .args([
+                "-cdrom",
+                iso_path.to_str().unwrap(),
+                "-display",
+                "none",
+                "-serial",
+                &format!("file:{}", log_file.display()),
+                "-monitor",
+                &format!("unix:{},server,nowait", monitor_path.display()),
+                "-no-reboot",
+            ])
+            .spawn()
+            .expect("failed to start QEMU");
+
+        fn scan(content: &str, milestones: &[&str], start: usize) -> usize {
+            let mut current = start;
+            for line in content.lines() {
+                if current < milestones.len() && line.contains(milestones[current]) {
+                    current += 1;
+                }
+            }
+            current
+        }
+
+        // Phase 1: the kernel must recover from deliberately injected
+        // #DE/#UD/#PF and a broken-stack #DF escalation on IST2 before it
+        // reports that it is armed and waiting for an external NMI.
+        let phase1_milestones = [
+            "AWEOS SELFTEST: begin exception injection",
+            "AWEOS SELFTEST: #DE handled and recovered (frame model OK)",
+            "AWEOS SELFTEST: driver resumed after #DE",
+            "AWEOS SELFTEST: #UD handled and recovered (frame model OK)",
+            "AWEOS SELFTEST: driver resumed after #UD",
+            "AWEOS SELFTEST: #PF handled and recovered (CR2 = 0x0000000040000000, frame model OK)",
+            "AWEOS SELFTEST: driver resumed after #PF",
+            "AWEOS SELFTEST: #DF handled on IST2 (rsp inside dedicated stack)",
+            "AWEOS SELFTEST: driver resumed after #DF",
+            "AWEOS SELFTEST: waiting for external NMI",
+        ];
+        let nmi_milestones = [
+            "AWEOS SELFTEST: NMI handled on IST1 (rsp inside dedicated stack)",
+            "AWEOS SELFTEST: ALL PHASES PASSED",
+            "AWEOS: x86_64 bootstrap paging = ACTIVE",
+            "AWEOS: kernel is alive",
+        ];
+
+        let read_log = || std::fs::read_to_string(&log_file).unwrap_or_default();
+        let start_time = Instant::now();
+        let timeout = Duration::from_secs(60);
+
+        let mut idx = 0;
+        loop {
+            if start_time.elapsed() > timeout {
+                let _ = child.kill();
+                let _ = child.wait();
+                let log = read_log();
+                panic!(
+                    "QEMU exception selftest timed out in phase 1 after {idx}/{} milestones. Serial log follows:
+{log}",
+                    phase1_milestones.len()
+                );
+            }
+            idx = scan(&read_log(), &phase1_milestones, idx);
+            if idx == phase1_milestones.len() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+
+        // Phase 2: inject an NMI through the QEMU human monitor once the
+        // kernel explicitly reports it is armed and waiting for the NMI.
+        let mut monitor =
+            UnixStream::connect(&monitor_path).expect("connect to QEMU monitor socket");
+        monitor
+            .write_all(b"nmi\n")
+            .expect("send nmi command to QEMU monitor");
+
+        let mut idx2 = 0;
+        loop {
+            if start_time.elapsed() > timeout {
+                let _ = child.kill();
+                let _ = child.wait();
+                let log = read_log();
+                panic!(
+                    "QEMU exception selftest timed out waiting for NMI/IST1 delivery ({idx2}/{}). Serial log follows:
+{log}",
+                    nmi_milestones.len()
+                );
+            }
+            idx2 = scan(&read_log(), &nmi_milestones, idx2);
+            if idx2 == nmi_milestones.len() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+
+        let _ = child.kill();
+        let _ = child.wait();
+
+        let final_log = read_log();
+        assert!(
+            !final_log.contains("AWEOS SELFTEST: FAIL"),
+            "selftest reported a validation failure:
+{final_log}"
+        );
+        assert!(
+            !final_log.contains("KERNEL PANIC"),
+            "selftest kernel panicked:
+{final_log}"
+        );
+        assert!(
+            !final_log.contains("AWEOS SELFTEST: NMI not received before timeout"),
+            "the monitor-injected NMI never reached the kernel:
+{final_log}"
+        );
+
+        let _ = std::fs::remove_file(&log_file);
+        let _ = std::fs::remove_file(&monitor_path);
+        let _ = std::fs::remove_file(&iso_path);
+        let _ = std::fs::remove_dir_all(&iso_root);
     }
 }

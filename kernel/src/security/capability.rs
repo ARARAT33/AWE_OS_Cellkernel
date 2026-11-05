@@ -60,6 +60,7 @@ pub enum CapabilityError {
     NotFound,
     Revoked,
     InvalidId,
+    IdExhausted,
 }
 
 pub struct CapabilityTable<const N: usize> {
@@ -99,8 +100,14 @@ impl<const N: usize> CapabilityTable<N> {
         let mut i = 0;
         while i < N {
             if self.entries[i].is_none() {
-                let id = CapabilityId(self.next_id);
-                self.next_id = self.next_id.wrapping_add(1).max(1);
+                // Zero is an exhausted sentinel. Never wrap an issued ID
+                // back to one: stale handles must not become valid again.
+                if self.next_id == 0 {
+                    return Err(CapabilityError::IdExhausted);
+                }
+                let raw_id = self.next_id;
+                self.next_id = raw_id.checked_add(1).unwrap_or(0);
+                let id = CapabilityId(raw_id);
                 self.entries[i] = Some(Capability { id, rights });
                 return Ok(id);
             }
@@ -176,6 +183,23 @@ mod tests {
         assert!(table.remove(id).is_ok());
         assert!(table.insert(Rights::WRITE).is_ok());
     }
+    #[test]
+    fn capability_ids_exhaust_without_wrapping_or_reusing_handles() {
+        let mut table: CapabilityTable<3> = CapabilityTable::new();
+        let first = table.insert(Rights::READ).unwrap();
+
+        table.next_id = u64::MAX;
+        let last = table.insert(Rights::WRITE).unwrap();
+        assert_eq!(last, CapabilityId(u64::MAX));
+        assert_eq!(
+            table.insert(Rights::ADMIN),
+            Err(CapabilityError::IdExhausted)
+        );
+
+        assert_eq!(table.get(first).unwrap().rights, Rights::READ);
+        assert_eq!(table.get(last).unwrap().rights, Rights::WRITE);
+    }
+
     #[test]
     fn zero_capacity_fails_closed() {
         let mut table: CapabilityTable<0> = CapabilityTable::new();

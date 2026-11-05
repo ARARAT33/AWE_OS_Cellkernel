@@ -30,9 +30,11 @@ able to print diagnostics.
   - `configure_ist_stacks(&mut Tss64, &mut Idt)` — wires TSS and IDT
     consistently and fails closed if a critical handler is missing.
   - `ist_index_for_vector()` — single source of truth for the mapping.
-- `kernel/src/arch/x86_64/isr.rs`: documentation of
-  `interrupted_stack_pointer` updated — IST-backed vectors switch RSP before
-  the frame is built, but the same-ring RSP/SS derivation stays valid.
+- `kernel/src/arch/x86_64/isr.rs`: the historical implementation used
+  a same-ring RSP derivation. **Correction 2026-11-05:** Intel SDM Vol. 3A
+  §6.14.2 specifies that 64-bit mode always saves SS:RSP, regardless of CPL
+  change or IST. The current accessor reads the hardware-saved fields for
+  every vector; see `docs/INTERRUPT_ENTRY_HARDENING_2026-11-02.md`.
 
 ## Test coverage added (host-runnable unit tests)
 
@@ -52,8 +54,9 @@ able to print diagnostics.
   NMI/#DF/#MC delivery, including IST switch correctness on hardware, is a
   QEMU/runtime validation task (next rung: QEMU tests that deliberately
   trigger #DE/#UD/#PF and a fault on a corrupted stack).
-- `configure_ist_stacks` is not yet called from the boot path; wiring it
-  into boot order (after IDT stub installation, before `lidt` or before the
-  first `sti`) is the follow-up once CI validates this layer.
+- The original 2026-11-03 branch did not call
+  `configure_ist_stacks` from the boot path. The follow-up wiring is tracked
+  in PR #57; it must pass the current CI/QEMU gates before it is treated as
+  validated.
 - APIC/IOAPIC runtime and FPU/XSAVE remain open (risks #2 and #3 of the
   2026-11-02 pass).

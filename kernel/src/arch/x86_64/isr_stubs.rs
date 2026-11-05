@@ -884,10 +884,8 @@ fn print_u64_hex(mut val: u64) {
 fn print_stack_context(frame: &InterruptFrame) {
     serial_write_str("  RSP: 0x");
     print_u64_hex(frame.interrupted_stack_pointer());
-    if let Some(ss) = frame.interrupted_stack_segment() {
-        serial_write_str(" SS: 0x");
-        print_u64_hex(ss);
-    }
+    serial_write_str(" SS: 0x");
+    print_u64_hex(frame.interrupted_stack_segment());
     serial_write_str("\r\n");
 }
 
@@ -1142,6 +1140,14 @@ pub extern "C" fn awe_interrupt_handler(frame: &mut InterruptFrame) {
         print_u64_hex(vector as u64);
         serial_write_str("\r\n");
         halt_after_exception();
+    }
+    // QEMU exception-injection self-test (validation builds only, cargo
+    // feature "kernel-selftest"). When the self-test armed this vector, the
+    // recovery path validates the frame and fixes up RIP/RSP so the ISR
+    // returns into the self-test driver instead of halting.
+    #[cfg(feature = "kernel-selftest")]
+    if crate::arch::x86_64::selftest::try_recover(frame) {
+        return;
     }
     // Handle CPU exceptions
     if vector < 32 {

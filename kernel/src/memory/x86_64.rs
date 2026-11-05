@@ -12,8 +12,13 @@ use super::paging::{PageFlags, PageTableEntry};
 
 const ENTRIES: usize = 512;
 const HUGE_2M: u64 = 1 << 7;
-const TABLE_FLAGS: u64 = PageFlags::PRESENT.0 | PageFlags::WRITABLE.0 | PageFlags::USER.0;
-const LEAF_FLAGS: u64 = TABLE_FLAGS | HUGE_2M;
+
+/// Permissions for non-leaf bootstrap page-table entries. User access is
+/// deliberately absent until a real per-process address space is installed.
+pub const BOOTSTRAP_TABLE_FLAGS: u64 = PageFlags::PRESENT.0 | PageFlags::WRITABLE.0;
+
+/// Permissions for the 2 MiB bootstrap identity-map leaves.
+pub const BOOTSTRAP_LEAF_FLAGS: u64 = BOOTSTRAP_TABLE_FLAGS | HUGE_2M;
 
 #[repr(C, align(4096))]
 struct Table([u64; ENTRIES]);
@@ -41,14 +46,14 @@ pub unsafe fn activate_bootstrap_identity_map() {
         let pd = core::ptr::addr_of_mut!(PD);
 
         // Non-leaf entries must not carry PS/HUGE; only the PD leafs do.
-        (*pml4).0[0] = (pdpt as u64) | TABLE_FLAGS;
-        (*pdpt).0[0] = (pd as u64) | TABLE_FLAGS;
+        (*pml4).0[0] = (pdpt as u64) | BOOTSTRAP_TABLE_FLAGS;
+        (*pdpt).0[0] = (pd as u64) | BOOTSTRAP_TABLE_FLAGS;
 
         // Identity-map 0..1 GiB with 2 MiB leaf entries.
         let mut index = 0usize;
         while index < ENTRIES {
             let physical = (index as u64) * 0x20_0000;
-            (*pd).0[index] = physical | LEAF_FLAGS;
+            (*pd).0[index] = physical | BOOTSTRAP_LEAF_FLAGS;
             index += 1;
         }
 
@@ -68,15 +73,31 @@ mod tests {
     #[test]
     fn two_megabyte_leafs_cover_one_gib() {
         assert_eq!(ENTRIES as u64 * 0x20_0000, 0x4000_0000);
-        assert_eq!(TABLE_FLAGS & HUGE_2M, 0);
-        assert_eq!(LEAF_FLAGS & PageFlags::PRESENT.0, PageFlags::PRESENT.0);
-        assert_eq!(LEAF_FLAGS & HUGE_2M, HUGE_2M);
+        assert_eq!(BOOTSTRAP_TABLE_FLAGS & HUGE_2M, 0);
+        assert_eq!(
+            BOOTSTRAP_LEAF_FLAGS & PageFlags::PRESENT.0,
+            PageFlags::PRESENT.0
+        );
+        assert_eq!(BOOTSTRAP_LEAF_FLAGS & HUGE_2M, HUGE_2M);
+    }
+
+    fn assert_supervisor_only(table_flags: u64, leaf_flags: u64) {
+        assert!(table_flags & PageFlags::PRESENT.0 != 0);
+        assert!(table_flags & PageFlags::WRITABLE.0 != 0);
+        assert_eq!(table_flags & PageFlags::USER.0, 0);
+        assert!(leaf_flags & HUGE_2M != 0);
+        assert_eq!(leaf_flags & PageFlags::USER.0, 0);
+    }
+
+    #[test]
+    fn bootstrap_identity_map_is_supervisor_only() {
+        assert_supervisor_only(BOOTSTRAP_TABLE_FLAGS, BOOTSTRAP_LEAF_FLAGS);
     }
 
     #[test]
     fn entry_address_masks_flags() {
         assert_eq!(
-            bootstrap_entry_address(0x1234_5000 | LEAF_FLAGS),
+            bootstrap_entry_address(0x1234_5000 | BOOTSTRAP_LEAF_FLAGS),
             0x1234_5000
         );
     }

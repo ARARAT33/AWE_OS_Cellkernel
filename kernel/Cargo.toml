@@ -9,3 +9,8 @@ path = "src/lib.rs"
 
 [dependencies]
 awe-boot-protocol = { workspace = true }
+
+[features]
+# QEMU exception-injection validation builds. Never enable in production
+# images: the self-test deliberately faults the CPU to exercise IST paths.
+kernel-selftest = []

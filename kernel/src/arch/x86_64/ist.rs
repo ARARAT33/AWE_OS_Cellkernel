@@ -62,6 +62,14 @@ pub fn critical_stack_tops() -> [u64; 3] {
     bases.map(|base| (base + IST_STACK_SIZE) as u64)
 }
 
+/// Base..top address bounds of the three critical IST stacks, in the same
+/// NMI/#DF/#MC order as critical_stack_tops. Runtime consumers (such as the
+/// exception-injection self-test) use these to prove that a handler is
+/// actually running inside its dedicated stack.
+pub fn critical_stack_bounds() -> [(u64, u64); 3] {
+    critical_stack_tops().map(|top| (top - IST_STACK_SIZE as u64, top))
+}
+
 /// The IST slot assigned to a critical vector, if this vector is managed here.
 pub const fn ist_index_for_vector(vector: u8) -> Option<u8> {
     match vector {
@@ -79,21 +87,36 @@ pub const fn ist_index_for_vector(vector: u8) -> Option<u8> {
 /// handlers installed for the critical vectors or if a TSS slot is rejected.
 pub fn configure_ist_stacks(tss: &mut Tss64, idt: &mut Idt) -> Result<(), &'static str> {
     let tops = critical_stack_tops();
+    let assignments = [
+        (NMI_VECTOR, NMI_IST_INDEX, tops[0]),
+        (DOUBLE_FAULT_VECTOR, DOUBLE_FAULT_IST_INDEX, tops[1]),
+        (MACHINE_CHECK_VECTOR, MACHINE_CHECK_IST_INDEX, tops[2]),
+    ];
 
-    tss.set_ist(NMI_IST_INDEX, tops[0])
-        .map_err(|_| "NMI IST slot rejected")?;
-    tss.set_ist(DOUBLE_FAULT_IST_INDEX, tops[1])
-        .map_err(|_| "double-fault IST slot rejected")?;
-    tss.set_ist(MACHINE_CHECK_IST_INDEX, tops[2])
-        .map_err(|_| "machine-check IST slot rejected")?;
+    // Preflight every IDT gate and stack address before mutating either
+    // structure. This keeps a failed configuration from leaving a partially
+    // updated TSS/IDT contract behind.
+    for (vector, _, _) in assignments {
+        if !idt.is_present(vector) {
+            return Err("critical vector handler missing");
+        }
+    }
+    for (_, _, top) in assignments {
+        let upper = top >> 48;
+        if top == 0 || (top & 0xF) != 0 || (upper != 0 && upper != 0xffff) {
+            return Err("critical IST stack top is invalid");
+        }
+    }
 
-    for (vector, ist) in [
-        (NMI_VECTOR, NMI_IST_INDEX),
-        (DOUBLE_FAULT_VECTOR, DOUBLE_FAULT_IST_INDEX),
-        (MACHINE_CHECK_VECTOR, MACHINE_CHECK_IST_INDEX),
-    ] {
-        if !idt.set_ist(vector, ist) {
-            return Err("critical vector IST assignment failed (handler missing?)");
+    for (_, index, top) in assignments {
+        tss.set_ist(index, top)
+            .map_err(|_| "critical IST slot rejected")?;
+    }
+    for (vector, index, _) in assignments {
+        // This cannot fail after the preflight above unless the IDT is
+        // concurrently mutated, which is forbidden during single-CPU boot.
+        if !idt.set_ist(vector, index) {
+            return Err("critical vector IST assignment failed");
         }
     }
     Ok(())
@@ -185,5 +208,34 @@ mod tests {
         let mut idt = Idt::new();
         // Empty IDT: the critical vectors have no handler to mark.
         assert!(configure_ist_stacks(&mut tss, &mut idt).is_err());
+        // Failure must not leave partially assigned TSS or IDT state.
+        assert_eq!(tss.ist(NMI_IST_INDEX), 0);
+        assert_eq!(tss.ist(DOUBLE_FAULT_IST_INDEX), 0);
+        assert_eq!(tss.ist(MACHINE_CHECK_IST_INDEX), 0);
+        assert_eq!(idt.ist_index(NMI_VECTOR), None);
+        assert_eq!(idt.ist_index(DOUBLE_FAULT_VECTOR), None);
+        assert_eq!(idt.ist_index(MACHINE_CHECK_VECTOR), None);
+    }
+
+    #[test]
+    fn boot_order_contract_configure_after_stub_install() {
+        // Boot-order contract for kernel_entry: configure_ist_stacks runs
+        // after init_idt_stubs and before Idt::load. Pin the "after" half on
+        // the host: without installed handlers it must fail closed, and
+        // once stubs are installed it must succeed and leave every critical
+        // vector IST-marked.
+        let mut tss = Tss64::new();
+        let mut idt = Idt::new();
+        assert!(
+            configure_ist_stacks(&mut tss, &mut idt).is_err(),
+            "must fail before handlers are installed"
+        );
+        for vector in 0..=255u8 {
+            idt.set_handler(vector, stub as *const () as usize as u64, 0x08);
+        }
+        assert!(configure_ist_stacks(&mut tss, &mut idt).is_ok());
+        for vector in [NMI_VECTOR, DOUBLE_FAULT_VECTOR, MACHINE_CHECK_VECTOR] {
+            assert_eq!(idt.ist_index(vector), ist_index_for_vector(vector));
+        }
     }
 }

@@ -1,0 +1,57 @@
+name: CI Diagnostics
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  diagnose:
+    name: cargo failure diagnostics
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+          components: clippy
+          targets: x86_64-unknown-none
+
+      - name: Collect cargo diagnostics
+        shell: bash
+        run: |
+          {
+            echo "## CI diagnostics (head ${{ github.sha }})"
+            echo '~~~text'
+            echo '--- clippy: kernel with kernel-selftest feature ---'
+            cargo clippy -p aweos-kernel --features kernel-selftest 2>&1 | tail -n 120
+            echo "CLIPPY_SELFTEST_EXIT=${PIPESTATUS[0]}"
+            echo '--- check: kernel-bin with selftest feature (x86_64-unknown-none) ---'
+            cargo check -p aweos-kernel-bin --target x86_64-unknown-none --features selftest 2>&1 | tail -n 80
+            echo "CHECK_SELFTEST_EXIT=${PIPESTATUS[0]}"
+            echo '--- test: workspace, all targets (virtio job parity) ---'
+            cargo test --workspace --all-targets 2>&1 | tail -n 200
+            echo "TEST_ALL_TARGETS_EXIT=${PIPESTATUS[0]}"
+            echo '~~~'
+          } > /tmp/diag.txt
+          cat /tmp/diag.txt
+
+      - name: Comment diagnostics on PR
+        if: always()
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const fs = require('fs');
+            const body = fs.readFileSync('/tmp/diag.txt', 'utf8').slice(0, 60000);
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body
+            });

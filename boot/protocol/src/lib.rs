@@ -2,6 +2,12 @@
 
 pub const AWE_BOOT_MAGIC: u64 = 0x4157_4542_4F4F_5431;
 pub const AWE_BOOT_VERSION: u32 = 1;
+pub const MAX_MEMORY_REGIONS: u32 = 4096;
+
+pub const MEMORY_REGION_USABLE: u32 = 1;
+pub const MEMORY_REGION_RESERVED: u32 = 2;
+pub const MEMORY_REGION_RECLAIMABLE: u32 = 3;
+pub const MEMORY_REGION_MMIO: u32 = 4;
 
 #[repr(u32)]
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -24,6 +30,9 @@ impl Architecture {
     }
 }
 
+/// Version-1 memory descriptors must have nonzero lengths, be sorted by
+/// ascending base address, and not overlap. The kernel validates the array
+/// before using it for physical frame allocation.
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct MemoryRegion {
@@ -83,6 +92,7 @@ pub const fn validate(info: &BootInfo) -> bool {
         && info.size >= core::mem::size_of::<BootInfo>() as u32
         && info.cpu_count != 0
         && info.architecture.is_supported()
+        && info.memory_region_count <= MAX_MEMORY_REGIONS
         && (info.memory_region_count == 0 || !info.memory_regions.is_null())
 }
 
@@ -92,8 +102,7 @@ mod tests {
 
     #[test]
     fn valid_boot_info_passes() {
-        let info = BootInfo::empty(Architecture::X86_64);
-        assert!(validate(&info));
+        assert!(validate(&BootInfo::empty(Architecture::X86_64)));
     }
 
     #[test]
@@ -105,7 +114,20 @@ mod tests {
 
     #[test]
     fn unsupported_architecture_fails() {
-        let info = BootInfo::empty(Architecture::X86);
+        assert!(!validate(&BootInfo::empty(Architecture::X86)));
+    }
+
+    #[test]
+    fn nonempty_memory_map_requires_a_pointer() {
+        let mut info = BootInfo::empty(Architecture::X86_64);
+        info.memory_region_count = 1;
+        assert!(!validate(&info));
+    }
+
+    #[test]
+    fn memory_map_descriptor_count_is_bounded() {
+        let mut info = BootInfo::empty(Architecture::X86_64);
+        info.memory_region_count = MAX_MEMORY_REGIONS + 1;
         assert!(!validate(&info));
     }
 }

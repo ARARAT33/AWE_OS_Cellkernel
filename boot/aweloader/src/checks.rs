@@ -1,11 +1,11 @@
 #![no_std]
 
-use awe_boot_protocol::BootInfo;
+use awe_boot_protocol::{BootInfo, MAX_MEMORY_REGIONS, validate};
 
 pub fn boot_info_valid(info: &BootInfo) -> bool {
-    awe_boot_protocol::validate(info)
+    validate(info)
         && info.kernel_base.checked_add(info.kernel_size).is_some()
-        && info.memory_region_count < 1_000_000
+        && info.memory_region_count <= MAX_MEMORY_REGIONS
 }
 
 pub fn address_range_valid(base: u64, size: u64) -> bool {
