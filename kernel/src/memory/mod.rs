@@ -16,7 +16,7 @@ pub use allocator::BumpAllocator;
 pub use boot_mapper::{BootMapError, BootMapper};
 pub use frame::{
     BitmapFrameAllocator, BitmapFrameError, Frame, FrameAllocatorError, PAGE_SIZE,
-    PhysicalFrameAllocator, frame_at, frame_end,
+    PhysicalFrameAllocator, checked_frame_end, frame_at, frame_end,
 };
 pub use mapper::{MapError, PageMapper};
 pub use paging::{
