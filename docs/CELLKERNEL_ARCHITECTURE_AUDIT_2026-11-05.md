@@ -79,3 +79,25 @@ The current IST boot-wiring PR's first workflow runs were marked `action_require
 6. Add fuzz/stress coverage for boot parsers, IPC, capabilities, storage metadata and network packet boundaries.
 
 No completion percentage is assigned. Interfaces, tests, builds and runtime validation are reported separately.
+
+
+## Addendum — boot memory-map and physical-frame boundary (2026-11-05)
+
+The current PR #57 development pass found that the loader-to-kernel memory-map boundary was less strict than the allocator requires.
+
+Implemented on the PR branch:
+
+- Version-1 BootInfo now caps the descriptor count at 4096 and documents the required descriptor shape: nonzero length, ascending base addresses and no overlap.
+- The kernel's checked frame-cursor constructor validates BootInfo, pointer non-nullness/alignment, descriptor-array address arithmetic, known region kinds, nonzero lengths, checked region ends, and sorted/non-overlapping order before reading descriptors into allocator state.
+- The cursor uses checked start/end arithmetic rather than saturating addition. Invalid maps are returned as KernelBootStatus::InvalidMemoryMap; a valid map with no complete usable frame remains NoUsableMemory.
+- Bitmap allocator constructors reject capacity/range overflow and unaligned bases. Checked free APIs report out-of-range, unaligned and double-free attempts. Legacy wrappers remain for source compatibility; new code should use the checked APIs.
+- The UEFI descriptor converter rejects zero-page and overflowing ranges. Multiboot1 entry parsing now bounds each entry by the remaining map bytes; Multiboot1/2 memory types are normalized so unknown/bad/NVS types are treated as reserved, never usable.
+
+Important limitations retained explicitly:
+
+- PhysicalFrameAllocator is still an early-boot cursor used to prove that at least one usable frame exists. kernel_entry drops it after that probe. It is not yet the persistent physical-frame allocator feeding page-table and VM allocation.
+- The kernel relies on the bootloader memory map to mark the kernel image, boot-info object, memory-map storage, framebuffer and firmware-owned ranges as reserved. This pass validates descriptor structure but does not independently subtract every such object from a falsely usable descriptor; loader reservation correctness still needs an end-to-end contract/test.
+- The UEFI module currently converts an individual descriptor; a complete GetMemoryMap buffer lifecycle and ExitBootServices handoff are not proven.
+- ARM64/RISC-V boot managers still contain placeholder/hardcoded memory-region descriptions rather than complete firmware memory-map parsing.
+
+The PR-head CI run after these changes is still pending at the time this addendum was written. No test, QEMU or hardware success is claimed by this audit entry until the corresponding workflow finishes.
