@@ -25,6 +25,14 @@ mod product_core {
         BLOCK_SIZE, BlockDevice, NodeKind, RamBlockDevice, RecoveryAction, Vfs,
     };
 
+    /// QEMU-backed tests spawn nested `cargo build` invocations and full
+    /// machine emulators, so they must never run concurrently with each
+    /// other: parallel runs contend for cargo package-cache locks and CPU,
+    /// which starved the emulator boot on small CI runners and produced
+    /// a flaky monitor-socket failure (`Failed to connect ... No such
+    /// file or directory`, then a phase-1 milestone timeout).
+    static QEMU_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     fn asd_package(manifest: usize, payload: usize, signature: usize, sig_byte0: u8) -> Vec<u8> {
         let mut bytes = Vec::with_capacity(ASD_HEADER_LEN + manifest + payload + signature);
         bytes.extend_from_slice(&ASD_MAGIC);
@@ -493,6 +501,10 @@ mod product_core {
         use std::process::Command;
         use std::time::{Duration, Instant};
 
+        let _qemu_guard = QEMU_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+
         let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
         let workspace_root = manifest_dir.parent().unwrap().parent().unwrap();
         let kernel_bin = workspace_root.join("target/x86_64-unknown-none/debug/aweos");
@@ -818,6 +830,10 @@ mod product_core {
         use std::process::Command;
         use std::time::{Duration, Instant};
 
+        let _qemu_guard = QEMU_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+
         let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
         let workspace_root = manifest_dir.parent().unwrap().parent().unwrap();
 
@@ -903,7 +919,7 @@ mod product_core {
                 "-serial",
                 &format!("file:{}", log_file.display()),
                 "-monitor",
-                &format!("unix:{}", monitor_path.display()),
+                &format!("unix:{},server,nowait", monitor_path.display()),
                 "-no-reboot",
             ])
             .spawn()
