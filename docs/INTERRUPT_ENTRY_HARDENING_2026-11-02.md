@@ -18,7 +18,7 @@
 ## Prioritized execution plan
 
 1. **Interrupt ABI correctness (critical):** align the stack to the System V AMD64 call boundary before calling Rust from the common ISR; restore the original saved-register frame exactly; clear DF for Rust code while allowing `iretq` to restore the interrupted RFLAGS.
-2. **Exception frame correctness (critical):** stop treating RSP/SS as hardware-pushed fields for same-privilege interrupts. Add ring-aware accessors and validate the actual interrupted stack pointer.
+2. **Exception frame correctness (critical):** use the unconditional SS:RSP saved by 64-bit mode for every vector, including same-CPL interrupts with IST=0. Validate the actual interrupted stack pointer from the hardware frame.
 3. **Error-code stub correctness (critical):** keep the assembly stubs synchronized with architectural error-code vectors (#DF, #TS, #NP, #SS, #GP, #PF, #AC, #CP, #VC, #SX); keep #VE (vector 20) as no-error-code.
 4. **Safe exception diagnostics:** dispatch #DE (vector 0) as divide error, and do not dereference an arbitrary faulting RIP while handling #UD.
 5. **Regression coverage:** test error-code classification, ring-0/ring-3 stack-frame interpretation, and that all 256 IDT entries are populated.
@@ -36,7 +36,7 @@ A change is considered validated only when the corresponding GitHub Actions run 
 
 ## Implemented on `main`
 
-- `kernel/src/arch/x86_64/isr.rs`: ring-aware interrupted RSP/SS accessors; same-ring RSP is derived from the hardware frame boundary instead of reading a non-existent CPU-pushed field. Error-code classification covers #DF, #TS, #NP, #SS, #GP, #PF, #AC, #CP, #VC and #SX; #VE remains no-error-code.
+- `kernel/src/arch/x86_64/isr.rs`: interrupted RSP/SS accessors read the hardware-saved long-mode fields for all vectors. The 2026-11-05 correction supersedes the earlier same-ring derivation. Error-code classification covers #DF, #TS, #NP, #SS, #GP, #PF, #AC, #CP, #VC and #SX; #VE remains no-error-code.
 - `kernel/src/arch/x86_64/isr_stubs.rs`: the common ISR aligns RSP to 16 bytes before the Rust ABI call, clears DF for Rust, and restores the original saved-register frame before `iretq`. #DE now has its own diagnostic path; #UD no longer dereferences an arbitrary faulting RIP. #CP/#VC stubs now preserve the CPU-pushed error-code layout.
 - The APIC path now fails visibly for vectors 48-254 when no EOI backend is initialized; vector 255 is treated as the APIC spurious vector and returns without EOI. This is fail-closed behavior, **not** APIC runtime support.
 - Added regression tests for ring-0/ring-3 stack interpretation, exception error-code classification, assembly stub/error-code agreement, all 256 IDT entries, and common ISR ABI alignment/restoration.
