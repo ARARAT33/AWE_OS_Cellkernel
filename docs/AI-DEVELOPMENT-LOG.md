@@ -215,3 +215,69 @@ merging it also restores `main` to green.
    existing `build-and-smoke-test-image` pipeline.
 3. Begin APIC/IOAPIC runtime design (EOI backend first, then IOAPIC
    routing), replacing the legacy PIC path in a follow-up PR.
+
+---
+
+## 2026-11-05 — IST boot wiring, long-mode frame correctness and bootstrap privilege boundary
+
+### Repository audit and plan
+- Audited the current `main` snapshot at `6b77c7bb2d5d2b27878811107935ce346b8d8148`, enumerated 447 tracked tree entries, 29 Cargo manifests and 9 workflow files, and reviewed the boot, memory, interrupt, process/scheduler, IPC, capability, driver, storage, network, AWOSA and AYUI boundaries.
+- Added `docs/AI-DEVELOPMENT-PLAN-2026-11-05.md` and `docs/CELLKERNEL_ARCHITECTURE_AUDIT_2026-11-05.md`. The audit distinguishes implemented primitives/contracts from end-to-end runtime functionality; it does not assign a completion percentage.
+- Work is on the existing safe branch `feat/x86_64-ist-boot-wiring` / PR #57. No branch was created or deleted, no force-push was used, and no unverified changes were merged.
+
+### Critical findings and fixes
+1. **IST boot integration**
+   - `kernel/src/entry.rs` configures NMI, double-fault and machine-check IST stacks after all IDT stubs are installed and before `lidt`; configuration failure prints a fatal diagnostic and halts.
+   - `kernel/src/arch/x86_64/ist.rs` now preflights all required gates and canonical/aligned stack tops before mutating TSS/IDT state. The empty-IDT test also verifies no partial state is left behind.
+
+2. **Correct 64-bit interrupt frame**
+   - The previous same-CPL accessor incorrectly derived RSP and treated SS as absent.
+   - Intel SDM Vol. 3A §6.14.2 and AMD64 APM Vol. 2 §8.9.3 specify that long mode unconditionally saves SS:RSP for every interrupt/exception, even with no CPL change and no IST.
+   - `InterruptFrame` now reads the hardware-saved RSP/SS for all vectors; diagnostics print SS unconditionally. Tests cover same-CPL/no-IST, same-CPL/IST and Ring 3 frames.
+   - Earlier historical notes in `docs/INTERRUPT_ENTRY_HARDENING_2026-11-02.md` and `docs/IST_STACK_HARDENING_2026-11-03.md` were corrected with an explicit superseding note.
+
+3. **Bootstrap privilege boundary**
+   - The original bootstrap PML4/PDPT/2 MiB leaf flags included U/S=1, and the Rust identity-map helper also granted USER. A Ring 3 transition using that shared 1 GiB identity map would expose supervisor memory.
+   - Both bootstrap page-table builders now use shared supervisor-only permission constants. Tests verify U/S is clear at table and leaf levels.
+   - The boot path no longer enters the bootstrap Ring 3 stub. Ring 3 is deliberately deferred until dedicated per-process user code/data/stack mappings exist. The unsafe helper remains documented with its mapping preconditions, but is not called by boot.
+
+4. **Host test linkability**
+   - Changed the x86_64 context-switch resume-label address to RIP-relative form, fixing the PIE test-linker relocation error observed on the earlier PR head.
+
+### Files changed in this pass
+- `kernel/src/entry.rs`
+- `kernel/src/arch/x86_64/ist.rs`
+- `kernel/src/arch/x86_64/isr.rs`
+- `kernel/src/arch/x86_64/isr_stubs.rs`
+- `kernel/src/memory/x86_64.rs`
+- `kernel-bin/src/main.rs`
+- `kernel/src/process/x86_64_switch.S`
+- `docs/AI-DEVELOPMENT-PLAN-2026-11-05.md`
+- `docs/CELLKERNEL_ARCHITECTURE_AUDIT_2026-11-05.md`
+- `docs/INTERRUPT_ENTRY_HARDENING_2026-11-02.md`
+- `docs/IST_STACK_HARDENING_2026-11-03.md`
+- this development log
+
+### Validation evidence for PR head `9507d193538f5d9e5d3d1d1ef1f3695fb3b3b8d8`
+- AWEOS CI Pipeline: workspace compilation, workspace tests, formatting, boot-image build and artifact verification — **passed**.
+- AWEOS Quality Gate: formatting, workspace check/tests, product-core evidence, Clippy and UEFI loader check — **passed**.
+- Clippy PR diagnostics — **passed**.
+- Bootable Image Pipeline: QEMU ISO smoke test — **passed**.
+- Cloud Security Gate — **passed**.
+- Multi-Architecture image build/artifact verification — **passed**.
+- AOSIN cross-platform installer matrix — **passed**.
+- VirtIO Runtime (including QEMU VirtIO block boot) — **still in progress at log time; not claimed as passed**.
+- Local `cargo`, `rustc` and QEMU were unavailable in this automation container; the Rust and QEMU evidence above is from GitHub Actions, not a local run.
+- No physical hardware validation or injected NMI/#DF/#MC runtime test was performed.
+
+Earlier PR-head failures were investigated: stale flag identifiers, Clippy constant-assertion warnings, a formatting mismatch, and an x86_64 PIE relocation. They were corrected; the current CI/Quality Gate/Clippy/boot-image checks above pass on the later head.
+
+### Remaining risks / next priorities
+1. Add QEMU exception-injection tests for #DE/#UD/#PF and actual NMI/#DF/#MC IST delivery.
+2. Fix capability ID exhaustion: `CapabilityTable::insert` currently wraps its `u64` ID counter back to 1 and can reuse stale handle IDs.
+3. Implement per-process page tables and user-only code/data/stack mappings before any Ring 3 re-enable.
+4. Implement APIC/IOAPIC EOI/routing and timer-driven context switching; current timer programming is not a preemptive scheduler.
+5. Prove persistent block-device I/O/recovery, real network-device I/O and AWOSA service supervision end-to-end.
+6. Add guard pages for IST stacks, FPU/XSAVE ownership, and fuzz/stress tests for capability, IPC, storage and network boundaries.
+
+PR #57 remains open and unmerged pending the remaining VirtIO check and review.
