@@ -79,7 +79,7 @@ impl PhysicalFrameAllocator {
 
         let regions = info.memory_regions;
         let address = regions as usize;
-        if address % align_of::<MemoryRegion>() != 0 {
+        if !address.is_multiple_of(align_of::<MemoryRegion>()) {
             return Err(FrameAllocatorError::MisalignedMemoryMap);
         }
         let count = info.memory_region_count as usize;
