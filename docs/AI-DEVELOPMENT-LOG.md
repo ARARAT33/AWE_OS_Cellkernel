@@ -564,3 +564,18 @@ Workflow run references:
 ### Honest validation state
 - No green result is claimed for the cleaned tree until the full check
   set finishes on this head. Results will be recorded in the next entry.
+
+---
+
+## 2026-11-05 (session 3, continued): selftest lint fix, virtio job diagnosis
+
+**Work done:**
+- Commit c8f3697: added `#![allow(bad_asm_style)]` to `kernel/src/arch/x86_64/selftest.rs`, mirroring `isr_stubs.rs`. The exception-injection-selftest job lints the kernel with -D warnings on the kernel-selftest feature and the .intel_syntax/.att_syntax directives tripped the bad_asm_style lint. Result: exception-injection-selftest now passes end-to-end (build + QEMU exception-injection self-test).
+- Commit e7e6594: extended ci-diagnostics.yml to also run `cargo test --workspace --all-targets` (virtio job parity) and comment the output on the PR. On the current head that command passes locally in CI (311 tests, exit 0).
+- Commit 113abee: virtio-runtime.yml test step now tees output and dumps the last 200 lines into the job step summary on failure, and adds the log to the always-uploaded evidence artifact (raw job logs are not anonymously accessible).
+
+**Real test results (head c8f3697/e7e6594):** Rust workspace, Workspace Build & Validation, Workspace clippy, cloud-security, cloud-release-contract, UEFI loader, build-and-smoke-test-image (QEMU boot smoke), Build Multi-Arch Boot Images, exception-injection-selftest, all 4 AOSIN installers, cargo failure diagnostics: ALL SUCCESS.
+
+**Open problem:** virtio-block-contract-and-qemu failed twice at "Run storage and driver contract tests" (cargo test --workspace --all-targets, exit 101) even though the identical command passes in the diagnostics job, then one run was cancelled by concurrency. Root cause not yet visible; the new step-summary capture should reveal it on the next run.
+
+**Next priorities:** (1) read the virtio job step summary, fix the environmental cause, (2) get a fully green check set incl. virtio, (3) merge PR #57 to main, (4) then per-process page tables, persistent frame allocator, APIC/IOAPIC EOI, bounded CellManager.
