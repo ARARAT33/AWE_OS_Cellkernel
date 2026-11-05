@@ -73,9 +73,9 @@ mod tests {
     #[test]
     fn two_megabyte_leafs_cover_one_gib() {
         assert_eq!(ENTRIES as u64 * 0x20_0000, 0x4000_0000);
-        assert_eq!(TABLE_FLAGS & HUGE_2M, 0);
-        assert_eq!(LEAF_FLAGS & PageFlags::PRESENT.0, PageFlags::PRESENT.0);
-        assert_eq!(LEAF_FLAGS & HUGE_2M, HUGE_2M);
+        assert_eq!(BOOTSTRAP_TABLE_FLAGS & HUGE_2M, 0);
+        assert_eq!(BOOTSTRAP_LEAF_FLAGS & PageFlags::PRESENT.0, PageFlags::PRESENT.0);
+        assert_eq!(BOOTSTRAP_LEAF_FLAGS & HUGE_2M, HUGE_2M);
     }
 
     #[test]
@@ -90,7 +90,7 @@ mod tests {
     #[test]
     fn entry_address_masks_flags() {
         assert_eq!(
-            bootstrap_entry_address(0x1234_5000 | LEAF_FLAGS),
+            bootstrap_entry_address(0x1234_5000 | BOOTSTRAP_LEAF_FLAGS),
             0x1234_5000
         );
     }
