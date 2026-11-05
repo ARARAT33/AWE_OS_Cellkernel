@@ -340,3 +340,56 @@ PR #57 remains open and unmerged pending the remaining VirtIO check and review.
 5. Continue toward per-process page tables, persistent frame allocator integration, APIC/IOAPIC EOI/routing, timer-driven scheduling and FPU/XSAVE ownership.
 
 Local `cargo`, `rustc` and QEMU were not available in this automation environment. All reported test/build/QEMU results are from the linked GitHub Actions jobs. No physical hardware validation was performed.
+
+
+---
+
+## Final validation update — 2026-11-05
+
+The Clippy remediation and the full workflow set have now completed.
+
+### Source fixes
+- `kernel/src/memory/frame.rs`: replaced the manual alignment modulus with `address.is_multiple_of(align_of::<MemoryRegion>())`.
+- `kernel-bin/src/main.rs`: replaced the manual Multiboot2 entry-size divisibility check with `!(size - 16).is_multiple_of(entry_size)`; the preceding short-circuit guard rejects `entry_size < 24` before the division operation.
+- Fix commits: `c3b48e5` and `5bd894b`.
+
+### Verified GitHub Actions results on code head `5bd894b` (same source tree as documentation head `537f7aa`)
+- AWEOS CI Pipeline — **success**: workspace check, workspace tests, formatting, boot image build and artifact verification.
+- AWEOS Quality Gate — **success**: formatting, workspace check/tests, product-core evidence, Clippy and UEFI loader check.
+- Dedicated Clippy diagnostics — **success**.
+- AWEOS Cloud Security Gate — **success**: workspace/security tests, Clippy, dependency audit surface and release blocker gate.
+- AWEOS Bootable Image Pipeline — **success**: kernel build, Multiboot2 header validation, ISO/GPT image generation and QEMU ISO smoke test. The serial assertion observed `AWEOS: kernel is alive`.
+- AWEOS VirtIO Runtime — **success**: formatting, storage/driver contract tests, kernel build, ELF validation, VirtIO PCI transport visibility and QEMU boot with a VirtIO block device.
+- AWEOS Multi-Architecture Images — **success**: image build and artifact verification. This does not certify ARM64/RISC-V runtime boot on physical devices.
+- AOSIN Cross-Platform Installers — **success**: all four Ubuntu/Windows GUI/CLI build/package jobs.
+
+Workflow run references:
+- CI Pipeline: `42066334594`
+- Quality Gate: `42066334865`
+- Clippy: `42066334569`
+- Cloud Security Gate: `42066334597`
+- Bootable Image / QEMU: `42066334536`
+- VirtIO Runtime / QEMU: `42066334802`
+- Multi-Architecture Images: `42066334493`
+- AOSIN installers: `42066334825`
+
+### Evidence limits
+- The QEMU checks prove the current boot smoke path and the VirtIO PCI device/boot contract in the configured virtual machine. They do **not** prove durable filesystem writes, power-loss recovery, or full hardware support.
+- No deliberate #DE/#UD/#PF or NMI/#DF/#MC injection test has been run. IST wiring has host tests and is present in the boot path, but exception delivery on IST stacks remains unverified.
+- No physical hardware test was performed.
+- Local `cargo`, `rustc` and QEMU were unavailable in this automation environment; all build/test/boot evidence above comes from the linked GitHub Actions workflows.
+
+### Architecture finding carried forward
+- Repository search found no kernel `CellId`, `CellState` or `CellRuntime` implementation. Existing service descriptors/registries and bounded IPC are useful primitives, not a complete cell runtime. The prioritized plan now explicitly defines the next CellManager milestone and its required process/IPC/capability integration.
+
+### Branch / PR state
+- Default branch: `main`, unchanged at `6b77c7b` during this session.
+- Work branch: `feat/x86_64-ist-boot-wiring`.
+- PR #57 remains open against `main`; no merge, force-push or branch deletion was performed.
+- Latest implementation fix: `5bd894b`; validation log/plan updates are documentation-only commits. Keep PR #57 open until the missing exception/IST runtime validation and review are addressed.
+
+### Next session priorities
+1. Add QEMU exception injection and controlled IST-delivery tests.
+2. Complete per-process address-space isolation and persistent physical-frame allocator integration.
+3. Implement the actual bounded CellManager runtime and bind cells to ProcessManager, scheduler, capabilities and IPC.
+4. Continue APIC/IOAPIC, timer-driven scheduling and FPU/XSAVE work.
