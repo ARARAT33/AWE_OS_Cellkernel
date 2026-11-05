@@ -80,3 +80,24 @@ executable evidence.
 6. Keep the boot cursor explicitly documented as an early-boot probe, not a fully integrated physical allocator; do not claim persistent frame allocation until it is retained and wired into VM/page-table allocation.
 
 Validation must include workspace tests, formatting, Clippy, UEFI loader checks and the existing QEMU boot/VirtIO jobs. A passing unit test is not evidence of durable physical-memory ownership or hardware validation.
+
+
+## P1 — Turn service metadata into a real Cell runtime
+
+The repository search on `main` found no kernel `CellId`, `CellState` or `CellRuntime` implementation. The existing `ServiceDescriptor`/`ServiceRegistry` are bounded service metadata, and `AuthorizedMailbox` is a local IPC primitive; neither alone constitutes a cell runtime. Do not relabel these structures as completed cells.
+
+1. Define a versioned cell contract: non-reused `CellId`, `CellKind`, lifecycle state, capability set, CPU/memory/IPC quotas, interface ABI versions, declared dependencies, communication endpoints, health state and recovery policy.
+2. Implement a bounded `CellManager<const N>` with duplicate/identity checks, explicit transition validation, dependency admission, capability validation, resource admission and quarantine on repeated failure.
+3. Bind each admitted cell to an actual kernel `ProcessId` and the existing process/scheduler lifecycle. A cell must not be reported Running until its process has been admitted and the runtime confirms the transition.
+4. Bind local cell channels to the existing capability-aware IPC boundary. Reject unauthorized senders and tear down queued messages when a cell exits.
+5. Add tests for ID exhaustion/non-reuse, lifecycle transition matrix, duplicate registration, quota exhaustion, dependency failure, unauthorized IPC, teardown, crash/restart and quarantine.
+6. Keep remote cells out of scope until a versioned authenticated transport and replay/identity policy exist. Local IPC and remote IPC must share message semantics, not trust assumptions.
+7. Do not claim memory isolation until per-process page tables, user-only mappings, guard pages and a real Ring-3 entry/exit path are exercised.
+
+## Next milestone order
+
+1. Complete review of PR #57; keep it unmerged until required checks and the missing exception/IST runtime evidence are addressed.
+2. Add QEMU exercises for #DE/#UD/#PF and controlled NMI/#DF/#MC IST delivery, with serial assertions that distinguish handled events from triple-fault resets.
+3. Integrate a persistent physical-frame allocator with page-table/VM allocation and reserve kernel, boot-info, framebuffer and firmware ranges explicitly.
+4. Implement the bounded CellManager described above and integrate it with process, scheduler, capability and IPC lifecycles.
+5. Implement APIC/IOAPIC EOI/routing, timer-driven scheduling and per-task FPU/XSAVE ownership.
