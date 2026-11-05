@@ -215,13 +215,17 @@ mod bootstrap_paging_tests {
         x86_64::{BOOTSTRAP_LEAF_FLAGS, BOOTSTRAP_TABLE_FLAGS},
     };
 
+    fn assert_supervisor_only(table_flags: u64, leaf_flags: u64) {
+        assert!(table_flags & PageFlags::PRESENT.0 != 0);
+        assert!(table_flags & PageFlags::WRITABLE.0 != 0);
+        assert_eq!(table_flags & PageFlags::USER.0, 0);
+        assert!(leaf_flags & PageFlags::HUGE.0 != 0);
+        assert_eq!(leaf_flags & PageFlags::USER.0, 0);
+    }
+
     #[test]
     fn bootstrap_page_table_flags_never_grant_user_access() {
-        assert!(BOOTSTRAP_TABLE_FLAGS & PageFlags::PRESENT.0 != 0);
-        assert!(BOOTSTRAP_TABLE_FLAGS & PageFlags::WRITABLE.0 != 0);
-        assert_eq!(BOOTSTRAP_TABLE_FLAGS & PageFlags::USER.0, 0);
-        assert!(BOOTSTRAP_LEAF_FLAGS & PageFlags::HUGE.0 != 0);
-        assert_eq!(BOOTSTRAP_LEAF_FLAGS & PageFlags::USER.0, 0);
+        assert_supervisor_only(BOOTSTRAP_TABLE_FLAGS, BOOTSTRAP_LEAF_FLAGS);
     }
 }
 
