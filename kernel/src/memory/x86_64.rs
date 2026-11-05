@@ -12,8 +12,13 @@ use super::paging::{PageFlags, PageTableEntry};
 
 const ENTRIES: usize = 512;
 const HUGE_2M: u64 = 1 << 7;
-const TABLE_FLAGS: u64 = PageFlags::PRESENT.0 | PageFlags::WRITABLE.0 | PageFlags::USER.0;
-const LEAF_FLAGS: u64 = TABLE_FLAGS | HUGE_2M;
+
+/// Permissions for non-leaf bootstrap page-table entries. User access is
+/// deliberately absent until a real per-process address space is installed.
+pub const BOOTSTRAP_TABLE_FLAGS: u64 = PageFlags::PRESENT.0 | PageFlags::WRITABLE.0;
+
+/// Permissions for the 2 MiB bootstrap identity-map leaves.
+pub const BOOTSTRAP_LEAF_FLAGS: u64 = BOOTSTRAP_TABLE_FLAGS | HUGE_2M;
 
 #[repr(C, align(4096))]
 struct Table([u64; ENTRIES]);
@@ -41,14 +46,14 @@ pub unsafe fn activate_bootstrap_identity_map() {
         let pd = core::ptr::addr_of_mut!(PD);
 
         // Non-leaf entries must not carry PS/HUGE; only the PD leafs do.
-        (*pml4).0[0] = (pdpt as u64) | TABLE_FLAGS;
-        (*pdpt).0[0] = (pd as u64) | TABLE_FLAGS;
+        (*pml4).0[0] = (pdpt as u64) | BOOTSTRAP_TABLE_FLAGS;
+        (*pdpt).0[0] = (pd as u64) | BOOTSTRAP_TABLE_FLAGS;
 
         // Identity-map 0..1 GiB with 2 MiB leaf entries.
         let mut index = 0usize;
         while index < ENTRIES {
             let physical = (index as u64) * 0x20_0000;
-            (*pd).0[index] = physical | LEAF_FLAGS;
+            (*pd).0[index] = physical | BOOTSTRAP_LEAF_FLAGS;
             index += 1;
         }
 
@@ -71,6 +76,15 @@ mod tests {
         assert_eq!(TABLE_FLAGS & HUGE_2M, 0);
         assert_eq!(LEAF_FLAGS & PageFlags::PRESENT.0, PageFlags::PRESENT.0);
         assert_eq!(LEAF_FLAGS & HUGE_2M, HUGE_2M);
+    }
+
+    #[test]
+    fn bootstrap_identity_map_is_supervisor_only() {
+        assert!(BOOTSTRAP_TABLE_FLAGS & PageFlags::PRESENT.0 != 0);
+        assert!(BOOTSTRAP_TABLE_FLAGS & PageFlags::WRITABLE.0 != 0);
+        assert_eq!(BOOTSTRAP_TABLE_FLAGS & PageFlags::USER.0, 0);
+        assert!(BOOTSTRAP_LEAF_FLAGS & HUGE_2M != 0);
+        assert_eq!(BOOTSTRAP_LEAF_FLAGS & PageFlags::USER.0, 0);
     }
 
     #[test]
