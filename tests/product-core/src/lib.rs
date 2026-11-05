@@ -669,7 +669,8 @@ mod product_core {
         std::thread::sleep(Duration::from_millis(100));
         let final_log = std::fs::read_to_string(&log_file).unwrap_or_default();
         assert!(
-            final_log.contains("AWEOS: Ring 3 deferred: isolated user address spaces are not installed"),
+            final_log
+                .contains("AWEOS: Ring 3 deferred: isolated user address spaces are not installed"),
             "Ring 3 must remain deferred until isolated user mappings exist:\n{final_log}"
         );
         assert!(
