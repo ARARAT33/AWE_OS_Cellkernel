@@ -656,3 +656,66 @@ PR #57 (feat/x86_64-ist-boot-wiring) merged to main as 25c91da. All 6 workflows 
 The QEMU test serialization + unix-socket monitor fix and the virtio cargo cache hygiene fix (v2 key, no target dir in cache, no restore-keys) are now verified on main.
 
 Next priorities (unchanged): per-process page tables, persistent frame allocator, APIC/IOAPIC EOI, bounded CellManager, re-evaluate stale PRs #55/#53/#52/#50/#48 against new main.
+
+
+---
+
+## Session 2026-11-06 — bounded CellManager dependency lifecycle hardening
+
+### Repository audit performed first
+
+- Confirmed the default branch is `main` at `499ec2b4397c73ead52a0831c3ffc0e8379714b9`; the repository default branch is `main`.
+- Reviewed `Cargo.toml` (29 workspace members), `PROJECT_STATUS.md`, `PRODUCT_READINESS.md`, and the existing development log. The product-readiness document correctly treats boot/runtime gates as unchecked and does not treat historical percentage checkpoints as certification.
+- Reviewed the current open draft PR #58 (`feat/cell-runtime-core-2026-11-06`), its diff, and the new `kernel/src/cell.rs` implementation. The PR is 24 commits ahead of main and 0 behind at the reviewed base; main was not modified.
+- The initial CellManager already had fixed-capacity identities, process binding, bounded local IPC, explicit quotas, lifecycle/restart policy and tests. The audit found a dependency lifecycle gap: a provider could be gracefully stopped while a dependent was active; a provider failure did not degrade dependents; and dependency availability was not rechecked at the final Running confirmation boundary.
+
+### Chosen task
+
+Harden dependency ordering and failure propagation before adding more cell features. Preserve the existing local-only scope; do not claim address-space isolation or distributed IPC.
+
+### Implementation
+
+- `kernel/src/cell.rs`:
+  - Centralized dependency availability checks and use them in both `begin_start` and `confirm_running`.
+  - Recheck dependencies after the bound process has entered ProcessState::Running, closing the start/confirmation race.
+  - Reject graceful provider shutdown with `DependencyInUse` while any dependent is Starting or Running.
+  - Permit a supervisor to cancel a Starting cell through the same deferred-reap path.
+  - On unexpected provider failure, mark active dependents Degraded.
+  - Reject a Healthy status update while any declared dependency is not Running.
+  - Added regression tests for graceful shutdown ordering, failure-to-dependent degradation, final dependency revalidation and startup cancellation.
+- `docs/CELL_RUNTIME.md`: documented the dependency shutdown, degradation, recovery and startup-cancellation contract.
+- `docs/CELL_RUNTIME_IMPLEMENTATION_PLAN_2026-11-06.md`: added a P0.1 dependency lifecycle hardening gate.
+- Commits: `ae3a9c4` (dependency checks/propagation), `5283e03` (runtime contract docs), `1379c95` (plan update), `178e5d8` (startup cancellation), `f8afe6e` (cancellation docs), `12c59d0` (rustfmt bot formatting).
+
+### Validation evidence and failures
+
+- On the first hardening commit `ae3a9c4`, GitHub Actions showed workspace compilation **success** and workspace tests **success**. The same run failed at `cargo fmt --all -- --check` because the chunked remote source update had joined two line boundaries without newlines. The exact rustfmt diff was inspected in the job log; it was not ignored.
+- The repository's rustfmt bot produced commit `12c59d0` and fixed the four reported formatting boundaries in `kernel/src/cell.rs`. The latest branch head is `12c59d00e1dc8005c163a52ecd660e73d8346720`.
+- The bot-authored commit's workflow runs returned `action_required` with no jobs created. This is not a pass; the latest code head still needs a user-authored push/approved Actions run before its full check set can be certified.
+- On the preceding PR base head `2f000b3`, all 9 listed workflow runs had completed successfully, including workspace check/tests, Clippy, security, QEMU boot smoke, exception injection, VirtIO QEMU boot, multi-architecture image generation and AOSIN installers. That validates the initial CellManager implementation, not the dependency-hardening delta.
+- No local `cargo`, `rustc`, `rustfmt` or `qemu-system-x86_64` executable was available in this automation environment. No physical hardware test was performed.
+
+### Changed files in this session
+
+- `kernel/src/cell.rs`
+- `docs/CELL_RUNTIME.md`
+- `docs/CELL_RUNTIME_IMPLEMENTATION_PLAN_2026-11-06.md`
+- `docs/AI-DEVELOPMENT-LOG.md`
+
+### Unresolved issues
+
+- Latest dependency-hardening head has not yet received a complete green Actions run; the rustfmt bot run is `action_required`.
+- Caller ProcessId values are only trustworthy when supplied by a future kernel/syscall dispatch context; the public manager methods do not themselves mint an unforgeable caller token.
+- Cell capabilities are still coarse bitset grants supplied by the privileged registration path, not a complete object-capability handle system.
+- CPU and memory quota methods remain explicit hooks, not automatically charged by timer ticks or the physical allocator.
+- No per-process address spaces, Ring-3 execution, cell memory isolation, DMA/IOMMU enforcement, remote cell transport or authenticated network IPC.
+- Graceful provider stop is ordered, but an unexpected provider crash only degrades dependents; a supervisor must still stop/recover those dependents.
+
+### Next priorities
+
+1. Obtain a complete green GitHub Actions run on the latest formatted PR #58 head; inspect the exact job steps, not just run titles.
+2. Bind caller identity to an unforgeable kernel dispatch context before exposing CellManager operations through syscalls.
+3. Integrate CPU quota charging with the timer/scheduler and memory charging with the allocator using explicit CellId ownership.
+4. Implement per-process page tables and user-only mappings before any Ring-3 cell execution.
+5. Add CellManager runtime integration to AWOSA service supervision; only then design remote-cell transport over authenticated standard protocols.
+
