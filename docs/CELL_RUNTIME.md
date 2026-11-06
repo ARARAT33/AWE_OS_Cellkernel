@@ -1,4 +1,4 @@
-# CellKernel Local Cell Runtime — ABI 1.0
+# CellKernel Local Cell Runtime — ABI 1.1
 
 **Status:** implemented on `feat/cell-runtime-core-2026-11-06`; latest full validation is recorded in `docs/AI-DEVELOPMENT-LOG.md`.  
 **Scope:** bounded, local, process-backed cell lifecycle and IPC. This document does not claim per-cell memory isolation or distributed execution.
@@ -8,7 +8,7 @@
 The kernel module is `aweos_kernel::cell`. Its ABI constants are:
 
 - `CELL_ABI_MAJOR = 1`
-- `CELL_ABI_MINOR = 0`
+- `CELL_ABI_MINOR = 1`
 
 A `CellId` and `CellChannelId` are non-zero monotonically allocated identifiers. Once the 64-bit identifier space is exhausted, allocation fails closed; identifiers are not reused when a registry slot is freed.
 
@@ -48,12 +48,12 @@ The architecture/scheduler integration must call the confirmation methods only a
 
 ## Local IPC contract
 
-Only a currently running cell with both `Security` and `Ipc` capabilities may create a channel. The caller's `ProcessId` is checked against the broker cell's bound process and must be the process currently marked `Running`.
+Only a currently running cell with both `Security` and `Ipc` capabilities may create a channel. Caller identity is not accepted as a user-supplied `ProcessId`: `create_channel`, `send`, and `receive` derive it from `ProcessManager::current_process_id()`, which returns only the tracked process whose descriptor remains `Running`. The architecture/context-switch path must call `mark_running` only after the selected context is actually executing; no userspace PID can select its own authority. This manager currently tracks one current process (single-core); SMP must use per-CPU current-task identity and appropriate synchronization before multi-core execution.
 
 A channel declares one receiver, a bounded explicit list of sender `CellId` values and a receiver interface ID. Every sender must have the same interface major version and a minor version at least as new as the receiver's declared minor version.
 
-- `send` accepts a typed `CellSendRequest` and checks the caller process identity supplied by the trusted syscall/kernel dispatch path, sender allowlist, sender/receiver cell states, IPC capabilities, process state, non-zero request/opcode, bounded queue capacity and sender IPC quota before committing the message.
-- `receive` checks the receiver cell and caller process identity supplied by the trusted kernel path and requires the receiver process to be `Running`.
+- `send` accepts a typed `CellSendRequest` and derives caller identity from the manager's tracked current process; no caller PID is accepted in the request. It also checks the sender allowlist, sender/receiver cell states, IPC capabilities, process state, non-zero request/opcode, bounded queue capacity and sender IPC quota before committing the message.
+- `receive` checks the receiver cell against the manager's tracked current process and requires the receiver process to be `Running`; no caller PID is accepted in the call.
 - Messages contain only fixed-width metadata and four 64-bit payload words; they do not carry unchecked pointers.
 - Stopping/failing a receiver destroys its channels. Stopping/failing a sender removes that sender and compacts queued messages so stale messages cannot be delivered.
 
@@ -65,7 +65,7 @@ The endpoint table and per-channel queue are fixed-capacity. Full queues and quo
 
 ## Security and isolation limits
 
-This milestone uses the existing kernel `CapabilitySet` bitset for coarse admission and IPC rights. The security broker and explicit sender allowlist are enforced by the local CellManager API, but this is not yet a complete object-capability distribution system or a substitute for syscall caller-context enforcement.
+This milestone uses the existing kernel `CapabilitySet` bitset for coarse admission and IPC rights. The security broker and explicit sender allowlist are enforced by the local CellManager API, and IPC caller identity is derived from `ProcessManager`'s tracked current process rather than a caller-supplied PID. This still depends on the architecture path maintaining the current-process field correctly; the early syscall dispatcher is not yet wired to CellManager and must pass through a trusted kernel context before any user-facing cell syscall is exposed. This is not yet a complete object-capability distribution system.
 
 The module does **not** create per-process page tables, user-only mappings, guard pages, DMA/IOMMU restrictions or a Ring-3 execution environment. It therefore does not prove that one cell's memory is inaccessible to another. The boot path must continue to defer Ring 3 until those mechanisms are implemented and runtime-tested.
 
@@ -79,7 +79,7 @@ Remote cells, network discovery, authenticated peer IPC, replay protection, dist
 - Health updates reject an exited bound process.
 - Process-backed start/stop and deferred process reaping.
 - Restart with a fresh process and quarantine threshold.
-- IPC caller spoof rejection, sender allowlist, interface compatibility, queue backpressure, quota accounting and endpoint teardown.
+- current-process identity enforcement, non-current-process rejection, idle-context rejection, sender allowlist, interface compatibility, queue backpressure, quota accounting and endpoint teardown.
 - Workspace formatting, tests, Clippy, boot/QEMU and VirtIO workflows.
 
 A green build is not proof of memory isolation, remote security, durable storage or physical-hardware support.
