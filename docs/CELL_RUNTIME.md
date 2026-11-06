@@ -38,7 +38,10 @@ Declared -> Admitted -> Starting -> Running -> Stopping -> Stopped
 - `begin_start` calls `ProcessManager::make_runnable` first. The cell remains `Admitted` if scheduler admission fails.
 - `confirm_running` publishes `Running` only after the bound process descriptor is `ProcessState::Running`.
 - `begin_stop` exits the process and closes cell channels. `confirm_stopped` delegates reclamation to `ProcessManager::reap`; it therefore fails while the process is still current or queued.
-- `record_failure` exits the bound process, tears down channels, increments a non-wrapping failure counter and quarantines after the configured restart limit.
+- `record_failure` exits the bound process, tears down channels, increments a non-wrapping failure counter and quarantines after the configured restart limit. An unexpected provider failure marks active dependent cells `Degraded`; their supervisors must stop or recover them.
+- `begin_stop` rejects a graceful provider shutdown with `DependencyInUse` while any dependent is `Starting` or `Running`. Stop dependents first, then their providers.
+- `confirm_running` revalidates dependencies after the process has actually entered `Running`, closing the race where a provider fails between `begin_start` and confirmation. A rejected confirmation leaves the cell in `Starting`; the supervisor must record failure or stop it.
+- A dependent can be marked `Healthy` again only after every declared dependency has returned to the `Running` cell state.
 - `rebind_process` accepts only a new `Created` process after the old process has been safely reaped. It never revives an old CPU context.
 
 The architecture/scheduler integration must call the confirmation methods only after the corresponding execution transition has actually completed.
