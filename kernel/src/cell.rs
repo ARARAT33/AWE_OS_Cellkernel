@@ -498,7 +498,6 @@ impl<const N: usize, const C: usize, const Q: usize, const S: usize> CellManager
             next_channel_id: 1,
         }
     }
-
     pub const fn len(&self) -> usize {
         self.count
     }
@@ -672,7 +671,7 @@ impl<const N: usize, const C: usize, const Q: usize, const S: usize> CellManager
     ) -> Result<(), CellError> {
         let index = self.find_index(id).ok_or(CellError::NotFound)?;
         let mut cell = self.cells[index].ok_or(CellError::NotFound)?;
-        if cell.state != CellState::Running {
+        if !matches!(cell.state, CellState::Starting | CellState::Running) {
             return Err(CellError::InvalidTransition);
         }
         // Graceful dependency shutdown is ordered: active dependents must be
@@ -997,8 +996,7 @@ impl<const N: usize, const C: usize, const Q: usize, const S: usize> CellManager
             }
             senders[index] = Some(sender_id);
         }
-        let slot = self
-            .channels
+        let slot = self            .channels
             .iter()
             .position(Option::is_none)
             .ok_or(CellError::ChannelTableFull)?;
@@ -1491,14 +1489,20 @@ mod tests {
             Err(CellError::DependencyUnavailable)
         );
         assert_eq!(cells.cell(dependent).unwrap().state(), CellState::Starting);
+
+        // A supervisor can cancel a process that reached CPU Running but
+        // whose cell never passed dependency confirmation.
+        cells.begin_stop(dependent, &mut processes).unwrap();
+        processes.confirm_switched_to_idle();
+        cells.confirm_stopped(dependent, &mut processes).unwrap();
+        assert_eq!(cells.cell(dependent).unwrap().state(), CellState::Stopped);
     }
 
     #[test]
     fn quota_accounting_is_bounded_and_failure_is_atomic() {
         let mut processes = ProcessManager::<1>::new();
         register_process(&mut processes, 1, process_budget());
-        let mut cells = CellManager::<1>::new();
-        let id = cells.register(spec(1, IPC_CAPS, 1), &processes).unwrap();
+        let mut cells = CellManager::<1>::new();        let id = cells.register(spec(1, IPC_CAPS, 1), &processes).unwrap();
         start_cell(&mut cells, &mut processes, id);
 
         cells.charge_cpu(id, 10).unwrap();
