@@ -1328,6 +1328,7 @@ mod tests {
         processes.mark_running(ProcessId(1)).unwrap();
         cells.confirm_running(id, &processes).unwrap();
         assert_eq!(cells.cell(id).unwrap().state(), CellState::Running);
+        cells.charge_memory(id, 512).unwrap();
 
         cells.begin_stop(id, &mut processes).unwrap();
         assert_eq!(
@@ -1338,6 +1339,8 @@ mod tests {
         cells.confirm_stopped(id, &mut processes).unwrap();
         assert_eq!(cells.cell(id).unwrap().state(), CellState::Stopped);
         assert!(processes.descriptor(ProcessId(1)).is_none());
+        assert_eq!(cells.remove(id, &processes), Err(CellError::OutstandingResources));
+        cells.release_memory(id, 512).unwrap();
         cells.remove(id, &processes).unwrap();
         assert!(cells.is_empty());
     }
@@ -1658,6 +1661,7 @@ mod tests {
         let mut cells = CellManager::<2>::new();
         let id = cells.register(spec(1, IPC_CAPS, 1), &processes).unwrap();
         start_cell(&mut cells, &mut processes, id);
+        cells.charge_memory(id, 256).unwrap();
 
         processes.exit(ProcessId(1)).unwrap();
         assert_eq!(
@@ -1671,6 +1675,11 @@ mod tests {
 
         processes.confirm_switched_to_idle();
         cells.reap_failed(id, &mut processes).unwrap();
+        assert_eq!(
+            cells.rebind_process(id, ProcessId(2), &processes),
+            Err(CellError::OutstandingResources)
+        );
+        cells.release_memory(id, 256).unwrap();
         register_process(&mut processes, 2, process_budget());
         cells.rebind_process(id, ProcessId(2), &processes).unwrap();
         let restarted = cells.cell(id).unwrap();
