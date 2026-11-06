@@ -823,7 +823,12 @@ impl<const N: usize, const C: usize, const Q: usize, const S: usize> CellManager
         Ok(())
     }
 
-    pub fn set_health(&mut self, id: CellId, health: CellHealth) -> Result<(), CellError> {
+    pub fn set_health<const P: usize>(
+        &mut self,
+        id: CellId,
+        health: CellHealth,
+        processes: &ProcessManager<P>,
+    ) -> Result<(), CellError> {
         if matches!(
             health,
             CellHealth::Unknown | CellHealth::Faulted | CellHealth::Stopped
@@ -835,13 +840,14 @@ impl<const N: usize, const C: usize, const Q: usize, const S: usize> CellManager
         if cell.state != CellState::Running {
             return Err(CellError::InvalidTransition);
         }
+        let process = processes
+            .descriptor(cell.process)
+            .ok_or(CellError::ProcessNotFound)?;
+        if process.state == ProcessState::Exited {
+            return Err(CellError::ProcessStateMismatch);
+        }
         if health == CellHealth::Healthy {
-            for dependency in cell.dependencies().iter().flatten() {
-                let dependency_cell = self.cell(*dependency).ok_or(CellError::InvalidDependency)?;
-                if dependency_cell.state != CellState::Running {
-                    return Err(CellError::DependencyUnavailable);
-                }
-            }
+            self.dependencies_available(&cell, processes)?;
         }
         cell.health = health;
         self.cells[index] = Some(cell);
@@ -1198,7 +1204,9 @@ impl<const N: usize, const C: usize, const Q: usize, const S: usize> CellManager
     ) -> Result<(), CellError> {
         for dependency in cell.dependencies().iter().flatten() {
             let dependency_cell = self.cell(*dependency).ok_or(CellError::InvalidDependency)?;
-            if dependency_cell.state != CellState::Running {
+            if dependency_cell.state != CellState::Running
+                || dependency_cell.health != CellHealth::Healthy
+            {
                 return Err(CellError::DependencyUnavailable);
             }
             let dependency_process = processes
@@ -1219,11 +1227,44 @@ impl<const N: usize, const C: usize, const Q: usize, const S: usize> CellManager
     }
 
     fn degrade_dependents(&mut self, id: CellId) {
-        for dependent in self.cells.iter_mut().flatten() {
-            if dependent.dependencies().contains(&Some(id))
-                && matches!(dependent.state, CellState::Starting | CellState::Running)
+        // Propagate degradation through the dependency DAG, not just to
+        // direct children. Registration order prevents cycles in this ABI.
+        let mut degraded = [false; N];
+        if let Some(index) = self.find_index(id) {
+            degraded[index] = true;
+        }
+
+        for _ in 0..N {
+            let mut changed = false;
+            for index in 0..N {
+                let Some(cell) = self.cells[index] else {
+                    continue;
+                };
+                if degraded[index]
+                    || !matches!(cell.state, CellState::Starting | CellState::Running)
+                {
+                    continue;
+                }
+                let depends_on_degraded = cell.dependencies().iter().flatten().any(|dependency| {
+                    self.find_index(*dependency)
+                        .is_some_and(|dependency_index| degraded[dependency_index])
+                });
+                if depends_on_degraded {
+                    degraded[index] = true;
+                    changed = true;
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+
+        for (index, should_degrade) in degraded.into_iter().enumerate() {
+            if should_degrade
+                && let Some(cell) = self.cells[index].as_mut()
+                && matches!(cell.state, CellState::Starting | CellState::Running)
             {
-                dependent.health = CellHealth::Degraded;
+                cell.health = CellHealth::Degraded;
             }
         }
     }
@@ -1444,29 +1485,63 @@ mod tests {
     }
 
     #[test]
-    fn dependency_failure_degrades_active_dependents() {
-        let mut processes = ProcessManager::<2>::new();
-        register_process(&mut processes, 1, process_budget());
-        register_process(&mut processes, 2, process_budget());
-        let mut cells = CellManager::<2>::new();
-        let dependency = cells.register(spec(1, IPC_CAPS, 1), &processes).unwrap();
-        let mut dependent_spec = spec(2, IPC_CAPS, 1);
-        dependent_spec.add_dependency(dependency).unwrap();
-        let dependent = cells.register(dependent_spec, &processes).unwrap();
+    fn dependency_failure_degrades_transitive_dependents_and_recovers_in_order() {
+        let mut processes = ProcessManager::<4>::new();
+        for id in 1..=4 {
+            register_process(&mut processes, id, process_budget());
+        }
+        let mut cells = CellManager::<4>::new();
+        let root = cells.register(spec(1, IPC_CAPS, 1), &processes).unwrap();
+        let mut middle_spec = spec(2, IPC_CAPS, 1);
+        middle_spec.add_dependency(root).unwrap();
+        let middle = cells.register(middle_spec, &processes).unwrap();
+        let mut leaf_spec = spec(3, IPC_CAPS, 1);
+        leaf_spec.add_dependency(middle).unwrap();
+        let leaf = cells.register(leaf_spec, &processes).unwrap();
 
-        start_cell(&mut cells, &mut processes, dependency);
-        start_cell(&mut cells, &mut processes, dependent);
+        start_cell(&mut cells, &mut processes, root);
+        start_cell(&mut cells, &mut processes, middle);
+        start_cell(&mut cells, &mut processes, leaf);
         assert_eq!(
-            cells.record_failure(dependency, &mut processes),
+            cells.record_failure(root, &mut processes),
             Ok(CellState::Failed)
         );
+        assert_eq!(cells.cell(middle).unwrap().health(), CellHealth::Degraded);
+        assert_eq!(cells.cell(leaf).unwrap().health(), CellHealth::Degraded);
         assert_eq!(
-            cells.cell(dependent).unwrap().health(),
-            CellHealth::Degraded
+            cells.set_health(middle, CellHealth::Healthy, &processes),
+            Err(CellError::DependencyUnavailable)
         );
         assert_eq!(
-            cells.set_health(dependent, CellHealth::Healthy),
+            cells.set_health(leaf, CellHealth::Healthy, &processes),
             Err(CellError::DependencyUnavailable)
+        );
+
+        // Recovery requires a fresh process for the provider and health
+        // restoration from the root toward its dependents.
+        cells.reap_failed(root, &mut processes).unwrap();
+        cells.rebind_process(root, ProcessId(4), &processes).unwrap();
+        cells.begin_start(root, &mut processes).unwrap();
+        processes.mark_running(ProcessId(4)).unwrap();
+        cells.confirm_running(root, &processes).unwrap();
+        cells.set_health(middle, CellHealth::Healthy, &processes).unwrap();
+        cells.set_health(leaf, CellHealth::Healthy, &processes).unwrap();
+        assert_eq!(cells.cell(middle).unwrap().health(), CellHealth::Healthy);
+        assert_eq!(cells.cell(leaf).unwrap().health(), CellHealth::Healthy);
+    }
+
+    #[test]
+    fn health_updates_reject_an_exited_bound_process() {
+        let mut processes = ProcessManager::<1>::new();
+        register_process(&mut processes, 1, process_budget());
+        let mut cells = CellManager::<1>::new();
+        let id = cells.register(spec(1, IPC_CAPS, 1), &processes).unwrap();
+        start_cell(&mut cells, &mut processes, id);
+
+        processes.exit(ProcessId(1)).unwrap();
+        assert_eq!(
+            cells.set_health(id, CellHealth::Degraded, &processes),
+            Err(CellError::ProcessStateMismatch)
         );
     }
 
