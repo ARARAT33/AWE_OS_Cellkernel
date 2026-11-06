@@ -347,6 +347,8 @@ pub enum CellError {
     InterfaceCapacity,
     InvalidTransition,
     QuotaExceeded,
+    AccountingUnderflow,
+    OutstandingResources,
     RestartLimitExceeded,
     ChannelTableFull,
     ChannelIdExhausted,
@@ -618,7 +620,14 @@ impl<const N: usize, const C: usize, const Q: usize, const S: usize> CellManager
             return Err(CellError::InvalidTransition);
         }
         for dependency in cell.dependencies().iter().flatten() {
-            if self.cell(*dependency).map(|item| item.state) != Some(CellState::Running) {
+            let dependency_cell = self.cell(*dependency).ok_or(CellError::InvalidDependency)?;
+            if dependency_cell.state != CellState::Running {
+                return Err(CellError::DependencyUnavailable);
+            }
+            let dependency_process = processes
+                .descriptor(dependency_cell.process)
+                .ok_or(CellError::ProcessNotFound)?;
+            if dependency_process.state == ProcessState::Exited {
                 return Err(CellError::DependencyUnavailable);
             }
         }
@@ -781,6 +790,9 @@ impl<const N: usize, const C: usize, const Q: usize, const S: usize> CellManager
         if processes.descriptor(cell.process).is_some() {
             return Err(CellError::ProcessStateMismatch);
         }
+        if cell.usage.memory_bytes != 0 {
+            return Err(CellError::OutstandingResources);
+        }
         if self
             .cells
             .iter()
@@ -871,6 +883,31 @@ impl<const N: usize, const C: usize, const Q: usize, const S: usize> CellManager
         Ok(())
     }
 
+    /// Release accounted bytes after the allocator has actually freed them.
+    /// The manager refuses underflow and retains the charge across stop/failure
+    /// until the caller confirms cleanup.
+    pub fn release_memory(&mut self, id: CellId, bytes: u64) -> Result<(), CellError> {
+        let index = self.find_index(id).ok_or(CellError::NotFound)?;
+        let mut cell = self.cells[index].ok_or(CellError::NotFound)?;
+        if !matches!(
+            cell.state,
+            CellState::Running
+                | CellState::Stopping
+                | CellState::Stopped
+                | CellState::Failed
+                | CellState::Quarantined
+        ) {
+            return Err(CellError::InvalidTransition);
+        }
+        cell.usage.memory_bytes = cell
+            .usage
+            .memory_bytes
+            .checked_sub(bytes)
+            .ok_or(CellError::AccountingUnderflow)?;
+        self.cells[index] = Some(cell);
+        Ok(())
+    }
+
     /// Only a running Security-capable broker may create a local endpoint.
     /// Receiver and senders must declare compatible, versioned interfaces and
     /// hold the IPC capability. Sender authorization is an explicit CellId
@@ -909,6 +946,12 @@ impl<const N: usize, const C: usize, const Q: usize, const S: usize> CellManager
         {
             return Err(CellError::InvalidReceiver);
         }
+        let receiver_process = processes
+            .descriptor(receiver_cell.process)
+            .ok_or(CellError::ProcessNotFound)?;
+        if receiver_process.state == ProcessState::Exited {
+            return Err(CellError::InvalidReceiver);
+        }
         let interface = receiver_cell
             .has_interface(interface_id)
             .ok_or(CellError::InvalidInterface)?;
@@ -930,6 +973,12 @@ impl<const N: usize, const C: usize, const Q: usize, const S: usize> CellManager
             if !cell_can_host_endpoint(sender.state)
                 || !sender.has_capability(KernelCapability::Ipc)
             {
+                return Err(CellError::UnauthorizedSender);
+            }
+            let sender_process = processes
+                .descriptor(sender.process)
+                .ok_or(CellError::ProcessNotFound)?;
+            if sender_process.state == ProcessState::Exited {
                 return Err(CellError::UnauthorizedSender);
             }
             let sender_interface = sender
@@ -1104,6 +1153,9 @@ impl<const N: usize, const C: usize, const Q: usize, const S: usize> CellManager
         }
         if processes.descriptor(cell.process).is_some() {
             return Err(CellError::ProcessStateMismatch);
+        }
+        if cell.usage.memory_bytes != 0 {
+            return Err(CellError::OutstandingResources);
         }
         if self
             .cells
@@ -1324,11 +1376,13 @@ mod tests {
 
         cells.charge_cpu(id, 10).unwrap();
         cells.charge_memory(id, 1024).unwrap();
+        cells.release_memory(id, 512).unwrap();
+        assert_eq!(cells.release_memory(id, 513), Err(CellError::AccountingUnderflow));
         assert_eq!(cells.charge_cpu(id, 11), Err(CellError::QuotaExceeded));
         assert_eq!(cells.charge_memory(id, 4096), Err(CellError::QuotaExceeded));
         let usage = cells.cell(id).unwrap().usage();
         assert_eq!(usage.cpu_ticks, 10);
-        assert_eq!(usage.memory_bytes, 1024);
+        assert_eq!(usage.memory_bytes, 512);
     }
 
     #[test]
