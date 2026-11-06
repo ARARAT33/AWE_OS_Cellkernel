@@ -106,4 +106,4 @@ jobs:
           cargo check -p aweos-kernel-bin --target x86_64-unknown-none --features selftest
 
       - name: Run QEMU exception-injection self test
-        run: cargo test -p awe-product-core-tests qemu_exception_injection_selftest -- --exact --nocapture
+        run: cargo test -p awe-product-core-tests product_core::qemu_exception_injection_selftest -- --exact --nocapture
