@@ -788,3 +788,85 @@ The later documentation-only PR updates caused a new Actions cycle on PR head `6
 - **AWEOS Quality Gate #1004** — still pending because prior run #1003 has an in-progress UEFI-loader job while its Rust workspace job was cancelled by the next PR synchronization. Earlier Quality Gate #1001 on the same source-code commit `2b16188` passed workspace check/tests/formatting/Clippy and UEFI loader. The current #1004 result is not claimed as complete.
 
 The latest source-code commit remains `2b16188c8472412de3c73a21246d9dfde02ffdf9`; PR head `6ec7ba4` contains documentation-only follow-ups after that source commit. No source code changed after the validated source commit.
+
+---
+
+## Session 2026-11-06 — Cell ABI 1.1 trusted IPC caller identity
+
+### Repository state and audit
+
+- Confirmed `main` remains based at `499ec2b4397c73ead52a0831c3ffc0e8379714b9`; no changes were written to `main`.
+- Continued the existing draft PR #58 on `feat/cell-runtime-core-2026-11-06`; it remains open, mergeable, and unmerged. No new branch, PR, force-push, or merge was performed.
+- Reviewed the current CellManager API and tests, ProcessManager lifecycle/current tracking, `ExecutionCore`, scheduler dispatch preparation, syscall dispatch, and the service readiness documents.
+- `PROJECT_STATUS.md` is still dated 2026-08-27. `PRODUCT_READINESS.md` correctly labels AWE_OS as active development, not a finished daily-driver OS. `docs/PRODUCT_GAP_MATRIX.md` continues to mark page-table activation, APIC/IOAPIC/SMP runtime, VirtIO block read/write, Ethernet runtime, and several production gates as planned/missing rather than complete.
+- The workspace has 29 members. This was a focused cross-subsystem audit, not a line-by-line review of every file.
+
+### Prioritized plan
+
+1. Remove caller-supplied ProcessId values from local CellManager IPC authorization.
+2. Derive the caller from a kernel-owned current-process identity and fail closed when no current task is tracked.
+3. Add regression tests for non-owner and idle callers.
+4. Update the versioned Cell ABI contract and identify the remaining real context-switch/syscall integration gate.
+
+### Implementation
+
+- `kernel/src/process/mod.rs`:
+  - Documented that `mark_running` may be called only after the architecture layer has completed the context switch.
+  - Added kernel-internal `current_process_id()`, which returns only the tracked process whose descriptor still exists and is `Running`.
+  - Added `current_process_identity_requires_a_tracked_running_context` regression test, including the exited and idle cases.
+- `kernel/src/cell.rs`:
+  - Advanced `CELL_ABI_MINOR` from 0 to 1.
+  - Removed `caller_process` from `CellSendRequest` and its constructor.
+  - Removed caller PID parameters from `create_channel` and `receive`.
+  - Made `create_channel`, `send`, and `receive` derive the caller from `ProcessManager::current_process_id()` and reject missing/non-matching current identity.
+  - Updated IPC tests to switch the tracked current process rather than spoof a caller PID; added a test proving send/receive fail closed when no current process is tracked.
+- `docs/CELL_RUNTIME.md`: documented ABI 1.1, current-process-derived authority, single-core limitation, and the fact that CellManager is not yet boot/syscall integrated.
+- `docs/CELL_RUNTIME_IMPLEMENTATION_PLAN_2026-11-06.md`: added P0.2 completion and P0.3 process/context-switch integration requirements.
+- `docs/AI-DEVELOPMENT-LOG.md`: this session record.
+
+### Commits and source validation target
+
+- Plan: `c291bf5e053797c2ae046a9663e39823c267f019`.
+- ProcessManager authority accessor/test: `0a9a2317ebe154b9e2e3091729c4893704994317`.
+- CellManager caller-identity hardening: `bf0350e6f6b2b73bc7b0532cc960f697109735e9`.
+- Runtime ABI documentation: `fed5ba507c5c15e7a878c3740bb343a809657f30`.
+- Plan checkpoint: `37616610139b671c5b30628d29fc4aace00fd92d`.
+- Test setup correction: `0cc11317227faba30af70ea0ba31c51efaf4c84a`.
+- Receiver mismatch test ordering correction: `1b068f84b902e1731dfc8b866c36a6709d090394`.
+- Rust source validation target: `1b068f84b902e1731dfc8b866c36a6709d090394`. Later commits `0be3815` and `7a243f6` only update documentation.
+
+### Exact CI/QEMU evidence on source head `1b068f84`
+
+- **AWEOS CI Pipeline #373** — success. Workspace compilation, workspace tests, formatting, boot-image build and artifact verification all passed. Test logs show **441 passed / 0 failed** across the workspace test binaries.
+- **AWEOS Quality Gate #1013** — success. UEFI loader and Rust workspace jobs passed; formatting, workspace check, workspace tests, product-core evidence and Clippy completed successfully.
+- **AWEOS VirtIO Runtime #366** — success. Formatting, storage/driver contract tests, kernel build, ELF validation, QEMU image generation, VirtIO PCI visibility and QEMU boot with an attached VirtIO block device passed. Serial output included `AWEOS: kernel is alive`. This is not block read/write or durable-filesystem evidence.
+- **AWEOS Bootable Image Pipeline #984** — image build and QEMU ISO smoke job passed; log contained `ISO Boot Successful!`. The separate exception-injection job was still running at the last status check, so it is not counted as passed.
+- **AWEOS Cloud Security Gate #958** — cloud-security and release-contract jobs passed.
+- **AWEOS Multi-Architecture Images #287** — image build/artifact job passed; no ARM64/RISC-V runtime certification.
+- **AOSIN Cross-Platform Installers #325** — all four Linux/Windows GUI/CLI jobs passed.
+- No physical hardware test was performed. No local Rust or QEMU toolchain was available; validation came from GitHub Actions.
+
+### Important integration gap discovered
+
+- A repository-wide code search and direct source inspection found no production call site invoking `ProcessManager::mark_running`; current uses are unit/CellManager tests. `ExecutionCore` maintains a separate scheduler/current-process model, while `process::dispatch_runtime` only prepares a switch frame. These are not yet one integrated process runtime.
+- Therefore the new caller-identity contract is fail-closed and testable, but it does not make CellManager IPC boot-operational. Until the real x86_64 context-switch completion path updates one authoritative process model and syscall dispatch uses that trusted context, user-facing Cell IPC must remain unavailable.
+- `kernel/src/syscall/dispatch.rs` is still a placeholder surface: IPC returns an argument after budget accounting, Map/Unmap do not perform real page-table operations, Read returns a fixed initrd marker, and Read/Write dereference raw pointers without a validated user address-space contract. Do not expose this path to Ring 3; next priority is fail-closed syscall behavior and validated address-space access.
+- `services/initd` has a bounded ServiceTable but is not yet bound to real ProcessManager/CellIds. `services/netd` increments socket/rule IDs without checked exhaustion and accepts owner PID values without validating them against a live process table. `services/storaged` metadata/cache code does not prove durable block I/O or power-loss recovery. AYUI still needs coordinate/grid overflow hardening before hardware desktop integration.
+
+### Remaining risks
+
+- `ProcessManager` and `ExecutionCore`/`Dispatcher` still maintain separate process/scheduler state; no real context-switch completion integration is proven.
+- No per-process address spaces, Ring-3 execution, cell memory isolation, object-capability handles, automatic CPU/memory quota charging, or authenticated remote cell transport.
+- CellManager remains local and test-backed; AWOSA/initd does not launch or supervise its bound processes.
+- The exception-injection QEMU job in Bootable Image Pipeline #984 was pending at the last check and is not claimed as successful.
+
+### Next priorities
+
+1. Unify ProcessManager and ExecutionCore around one authoritative process/scheduler model and wire the x86_64 context-switch completion path; test two real contexts in QEMU.
+2. Make unimplemented syscalls fail closed; add per-process page tables and validated user-pointer access before Ring 3.
+3. Expose a versioned Cell syscall contract only after trusted dispatch context exists; integrate initd/AWOSA with CellIds without duplicating lifecycle state.
+4. Connect CPU quotas to timer ticks and memory accounting to allocator ownership.
+5. Harden netd socket/rule ID exhaustion and owner validation; implement actual NIC TX/RX.
+6. Implement real block-device read/write, filesystem persistence and power-loss recovery in storaged.
+7. Add APIC/IOAPIC EOI, timer-driven preemption and per-CPU state before SMP.
+8. Fix AYUI coordinate/grid arithmetic and reconcile legacy implementation labels with executable evidence.
