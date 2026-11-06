@@ -1185,9 +1185,10 @@ mod tests {
 
     #[test]
     fn cell_ids_are_monotonic_and_exhaust_without_reuse() {
-        let mut processes = ProcessManager::<2>::new();
+        let mut processes = ProcessManager::<3>::new();
         register_process(&mut processes, 1, process_budget());
         register_process(&mut processes, 2, process_budget());
+        register_process(&mut processes, 3, process_budget());
         let mut cells = CellManager::<2>::new();
         assert_eq!(
             cells.register(spec(1, IPC_CAPS, 1), &processes),
@@ -1339,6 +1340,17 @@ mod tests {
         start_cell(&mut cells, &mut processes, broker);
         cells.admit(receiver).unwrap();
         cells.admit(sender).unwrap();
+        assert_eq!(
+            cells.create_channel(
+                broker,
+                ProcessId(99),
+                receiver,
+                &[sender],
+                7,
+                &processes
+            ),
+            Err(CellError::CallerMismatch)
+        );
         let channel = cells
             .create_channel(broker, ProcessId(1), receiver, &[sender], 7, &processes)
             .unwrap();
@@ -1347,8 +1359,12 @@ mod tests {
         processes.mark_running(ProcessId(3)).unwrap();
         cells.confirm_running(sender, &processes).unwrap();
         cells
-            .send(channel, sender, 1, 10, [11, 12, 13, 14], &processes)
+            .send(channel, sender, ProcessId(3), 1, 10, [11, 12, 13, 14], &processes)
             .unwrap();
+        assert_eq!(
+            cells.send(channel, sender, ProcessId(2), 2, 10, [0; 4], &processes),
+            Err(CellError::CallerMismatch)
+        );
         assert_eq!(
             cells.send(channel, broker, ProcessId(1), 2, 10, [0; 4], &processes),
             Err(CellError::UnauthorizedSender)
@@ -1357,6 +1373,10 @@ mod tests {
         cells.begin_start(receiver, &mut processes).unwrap();
         processes.mark_running(ProcessId(2)).unwrap();
         cells.confirm_running(receiver, &processes).unwrap();
+        assert_eq!(
+            cells.receive(channel, receiver, ProcessId(3), &processes),
+            Err(CellError::CallerMismatch)
+        );
         let message = cells
             .receive(channel, receiver, ProcessId(2), &processes)
             .unwrap();
@@ -1402,14 +1422,14 @@ mod tests {
         cells.admit(receiver).unwrap();
         cells.admit(sender).unwrap();
         let channel = cells
-            .create_channel(broker, receiver, &[sender], 11)
+            .create_channel(broker, ProcessId(1), receiver, &[sender], 11, &processes)
             .unwrap();
         cells.begin_start(sender, &mut processes).unwrap();
         processes.mark_running(ProcessId(3)).unwrap();
         cells.confirm_running(sender, &processes).unwrap();
 
         cells
-            .send(channel, sender, 1, 1, [1, 0, 0, 0], &processes)
+            .send(channel, sender, ProcessId(3), 1, 1, [1, 0, 0, 0], &processes)
             .unwrap();
         assert_eq!(
             cells.send(
@@ -1461,13 +1481,13 @@ mod tests {
         cells.admit(receiver).unwrap();
         cells.admit(sender).unwrap();
         let channel = cells
-            .create_channel(broker, receiver, &[sender], 9)
+            .create_channel(broker, ProcessId(1), receiver, &[sender], 9, &processes)
             .unwrap();
         cells.begin_start(sender, &mut processes).unwrap();
         processes.mark_running(ProcessId(3)).unwrap();
         cells.confirm_running(sender, &processes).unwrap();
         cells
-            .send(channel, sender, 1, 1, [9, 0, 0, 0], &processes)
+            .send(channel, sender, ProcessId(3), 1, 1, [9, 0, 0, 0], &processes)
             .unwrap();
 
         processes.exit(ProcessId(3)).unwrap();
