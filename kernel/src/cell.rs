@@ -1520,12 +1520,18 @@ mod tests {
         // Recovery requires a fresh process for the provider and health
         // restoration from the root toward its dependents.
         cells.reap_failed(root, &mut processes).unwrap();
-        cells.rebind_process(root, ProcessId(4), &processes).unwrap();
+        cells
+            .rebind_process(root, ProcessId(4), &processes)
+            .unwrap();
         cells.begin_start(root, &mut processes).unwrap();
         processes.mark_running(ProcessId(4)).unwrap();
         cells.confirm_running(root, &processes).unwrap();
-        cells.set_health(middle, CellHealth::Healthy, &processes).unwrap();
-        cells.set_health(leaf, CellHealth::Healthy, &processes).unwrap();
+        cells
+            .set_health(middle, CellHealth::Healthy, &processes)
+            .unwrap();
+        cells
+            .set_health(leaf, CellHealth::Healthy, &processes)
+            .unwrap();
         assert_eq!(cells.cell(middle).unwrap().health(), CellHealth::Healthy);
         assert_eq!(cells.cell(leaf).unwrap().health(), CellHealth::Healthy);
     }
