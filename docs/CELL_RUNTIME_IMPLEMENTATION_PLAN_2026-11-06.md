@@ -25,9 +25,10 @@
 
 - Reject graceful provider shutdown while a dependent cell is Starting or Running.
 - Recheck dependencies at the final Running confirmation boundary, not only when scheduling starts.
-- When a provider fails unexpectedly, mark active dependents Degraded so supervision can react.
-- Permit a Degraded dependent to return to Healthy only after all dependencies are Running again.
-- Add regression tests for shutdown ordering, failure propagation and the begin-start/confirm-running race.
+- When a provider fails unexpectedly, mark active dependents Degraded transitively through the acyclic dependency graph.
+- Require dependencies to be both Running and Healthy before a dependent starts, confirms Running or returns to Healthy.
+- Bind health updates to a still-existing, non-exited process descriptor.
+- Add regression tests for shutdown ordering, transitive failure propagation/recovery, exited process health updates and the begin-start/confirm-running race.
 
 ## P1 — Regression and validation
 
@@ -55,7 +56,7 @@ The first local runtime implementation is now present in `kernel/src/cell.rs` an
 - [x] Admission against an existing Created ProcessManager process, budget and required-capability subset.
 - [x] ProcessManager-backed start confirmation, stop/exit, deferred reap, failure quarantine and fresh-process rebind.
 - [x] Local fixed-capacity IPC channels with Security broker caller binding, sender CellId allowlists, interface compatibility, caller ProcessId checks, message quota and teardown.
-- [x] Initial regression tests for identity exhaustion, admission failures, process lifecycle, dependency ordering, quota accounting, caller spoofing, IPC authorization and failure teardown.
+- [x] Regression tests for identity exhaustion, admission failures, process lifecycle, dependency ordering, transitive health degradation/recovery, exited-process health rejection, quota accounting, caller spoofing, IPC authorization and failure teardown.
 - [x] ABI and limitation documentation in `docs/CELL_RUNTIME.md`.
 
 ### Pending validation
