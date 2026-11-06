@@ -772,3 +772,19 @@ The earlier dedicated QEMU exception workflow invoked `cargo test ... qemu_excep
 6. Fix AYUI coordinate/grid arithmetic with boundary tests.
 7. Reconcile the legacy implementation matrix against executable evidence and the current product gap matrix.
 8. Implement per-process address spaces and user-only mappings before Ring-3 cell execution.
+
+
+### Workflow completion correction — 2026-11-06
+
+The later documentation-only PR updates caused a new Actions cycle on PR head `6ec7ba4cc24f5733da40d9dc4cae93faad7c7cc3`. The earlier VirtIO run #354 was cancelled during its package-install step by the newer PR synchronization; it was superseded by the following completed run:
+
+- **AWEOS CI Pipeline #364** — success; workspace compile, formatting, boot-image generation and artifact verification passed. The test log again reports **439 passed, 0 failed** and includes all four CellManager lifecycle regressions.
+- **AWEOS VirtIO Runtime #357** — success; formatting, `cargo test --workspace --all-targets` (439 passed / 0 failed), kernel build, ELF validation, QEMU boot-image generation, QEMU VirtIO PCI visibility and QEMU boot with the VirtIO block device all passed. The serial log contains `AWEOS: kernel is alive`. This still does **not** demonstrate VirtIO block read/write or durable filesystem I/O.
+- **AWEOS Bootable Image Pipeline #975** — success; Multiboot2 header, ISO/GPT image generation, QEMU ISO smoke passed. The dedicated exception-injection job ran exactly one test and passed.
+- **AWEOS Cloud Security Gate #949** — both cloud-security and release-contract jobs passed.
+- **AWEOS Multi-Architecture Images #278** — success (image-build evidence only).
+- **AOSIN Cross-Platform Installers #316** — all four Linux/Windows GUI/CLI jobs passed.
+- **clippy-report #108** and **CI Diagnostics #47** — success.
+- **AWEOS Quality Gate #1004** — still pending because prior run #1003 has an in-progress UEFI-loader job while its Rust workspace job was cancelled by the next PR synchronization. Earlier Quality Gate #1001 on the same source-code commit `2b16188` passed workspace check/tests/formatting/Clippy and UEFI loader. The current #1004 result is not claimed as complete.
+
+The latest source-code commit remains `2b16188c8472412de3c73a21246d9dfde02ffdf9`; PR head `6ec7ba4` contains documentation-only follow-ups after that source commit. No source code changed after the validated source commit.
