@@ -1558,10 +1558,14 @@ mod tests {
             )
             .unwrap();
         let mut receiver_spec = spec(2, IPC_CAPS, 1);
-        receiver_spec.add_interface(CellInterface::new(12, 1, 0)).unwrap();
+        receiver_spec
+            .add_interface(CellInterface::new(12, 1, 0))
+            .unwrap();
         let receiver = cells.register(receiver_spec, &processes).unwrap();
         let mut sender_spec = spec(3, IPC_CAPS, 1);
-        sender_spec.add_interface(CellInterface::new(12, 1, 0)).unwrap();
+        sender_spec
+            .add_interface(CellInterface::new(12, 1, 0))
+            .unwrap();
         let sender = cells.register(sender_spec, &processes).unwrap();
 
         start_cell(&mut cells, &mut processes, broker);
@@ -1622,5 +1626,4 @@ mod tests {
         cells.confirm_running(id, &processes).unwrap();
         assert_eq!(cells.cell(id).unwrap().state(), CellState::Running);
     }
-
 }
