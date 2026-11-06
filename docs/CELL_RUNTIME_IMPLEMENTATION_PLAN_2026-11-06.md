@@ -94,3 +94,16 @@ The final observed workflow evidence and the exact test-filter correction are re
 - CellManager is local-only; remote cells and authenticated network IPC are not implemented.
 - Per-process page tables, Ring-3 entry and memory isolation remain separate P0 kernel work.
 - Cell lifecycle confirmation relies on the architecture layer to report actual ProcessManager transitions; this module does not perform a context switch itself.
+
+## P0.2 — Derive local IPC caller identity from the kernel's current process
+
+**Status before this run:** open security gap. create_channel, send, and receive accepted a caller-supplied ProcessId. Equality checks prevented accidental mismatches, but a caller able to choose the value could claim the PID already bound to another cell.
+
+1. Add a kernel-internal ProcessManager::current_process_id() accessor that returns an identity only when the manager's tracked current process still exists and is in Running state.
+2. Make CellManager::create_channel, send, and receive derive authority from that accessor. Do not accept a caller PID in any IPC request/API argument.
+3. Remove caller_process from CellSendRequest and advance the local cell ABI minor version to 1.
+4. Add regression tests for a different current process, no current process, sender/receiver binding, and the existing channel authorization/quota/teardown paths.
+5. Document the single-core limitation: before SMP is enabled, replace the single ProcessManager::current authority source with per-CPU current-task identity and interrupt-safe synchronization.
+6. Keep syscall exposure deferred until the architecture syscall entry supplies and validates the same trusted current-task context. This change hardens the kernel API; it does not claim a completed userspace Cell syscall ABI.
+
+**Acceptance evidence:** workspace format/check/tests/Clippy plus the existing boot, exception-injection, and VirtIO QEMU jobs on the updated PR head. No physical hardware claim.
