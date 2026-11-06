@@ -218,7 +218,7 @@ pub struct CellDescriptor {
     quota: CellQuota,
     usage: CellUsage,
     recovery: CellRecoveryPolicy,
-    failures: u8,
+    failures: u16,
     dependencies: [Option<CellId>; MAX_CELL_DEPENDENCIES],
     dependency_count: usize,
     interfaces: [Option<CellInterface>; MAX_CELL_INTERFACES],
@@ -258,7 +258,7 @@ impl CellDescriptor {
         self.usage
     }
 
-    pub const fn failures(self) -> u8 {
+    pub const fn failures(self) -> u16 {
         self.failures
     }
 
@@ -328,6 +328,7 @@ pub enum CellError {
     UnauthorizedSender,
     InvalidReceiver,
     InvalidRequest,
+    CallerMismatch,
     Process(ProcessManagerError),
 }
 
@@ -699,7 +700,7 @@ impl<const N: usize, const C: usize, const Q: usize, const S: usize> CellManager
         }
         cell.failures = cell.failures.saturating_add(1);
         cell.health = CellHealth::Faulted;
-        cell.state = if cell.failures > cell.recovery.max_restarts {
+        cell.state = if cell.failures > u16::from(cell.recovery.max_restarts) {
             CellState::Quarantined
         } else {
             CellState::Failed
@@ -744,7 +745,7 @@ impl<const N: usize, const C: usize, const Q: usize, const S: usize> CellManager
                 CellError::InvalidTransition
             });
         }
-        if cell.failures > cell.recovery.max_restarts {
+        if cell.failures > u16::from(cell.recovery.max_restarts) {
             return Err(CellError::RestartLimitExceeded);
         }
         if processes.descriptor(cell.process).is_some() {
@@ -844,17 +845,28 @@ impl<const N: usize, const C: usize, const Q: usize, const S: usize> CellManager
     /// Receiver and senders must declare compatible, versioned interfaces and
     /// hold the IPC capability. Sender authorization is an explicit CellId
     /// list, not a truncated bit mask.
-    pub fn create_channel(
+    pub fn create_channel<const P: usize>(
         &mut self,
         owner: CellId,
+        caller_process: ProcessId,
         receiver: CellId,
         allowed_senders: &[CellId],
         interface_id: u32,
+        processes: &ProcessManager<P>,
     ) -> Result<CellChannelId, CellError> {
         if C == 0 {
             return Err(CellError::ChannelTableFull);
         }
         let owner_cell = self.cell(owner).ok_or(CellError::NotFound)?;
+        if owner_cell.process != caller_process {
+            return Err(CellError::CallerMismatch);
+        }
+        let caller = processes
+            .descriptor(caller_process)
+            .ok_or(CellError::ProcessNotFound)?;
+        if caller.state != ProcessState::Running {
+            return Err(CellError::ProcessStateMismatch);
+        }
         if owner_cell.state != CellState::Running
             || !owner_cell.has_capability(KernelCapability::Security)
             || !owner_cell.has_capability(KernelCapability::Ipc)
@@ -925,6 +937,7 @@ impl<const N: usize, const C: usize, const Q: usize, const S: usize> CellManager
         &mut self,
         channel_id: CellChannelId,
         sender: CellId,
+        caller_process: ProcessId,
         request_id: u64,
         opcode: u32,
         payload: [u64; 4],
@@ -948,6 +961,9 @@ impl<const N: usize, const C: usize, const Q: usize, const S: usize> CellManager
             .ok_or(CellError::InvalidReceiver)?;
         let mut sender_cell = self.cells[sender_index].ok_or(CellError::NotFound)?;
         let receiver_cell = self.cells[receiver_index].ok_or(CellError::InvalidReceiver)?;
+        if sender_cell.process != caller_process {
+            return Err(CellError::CallerMismatch);
+        }
         if sender_cell.state != CellState::Running
             || !sender_cell.has_capability(KernelCapability::Ipc)
         {
@@ -1001,6 +1017,7 @@ impl<const N: usize, const C: usize, const Q: usize, const S: usize> CellManager
         &mut self,
         channel_id: CellChannelId,
         receiver: CellId,
+        caller_process: ProcessId,
         processes: &ProcessManager<P>,
     ) -> Result<CellMessage, CellError> {
         let channel_index = self
@@ -1013,6 +1030,9 @@ impl<const N: usize, const C: usize, const Q: usize, const S: usize> CellManager
             return Err(CellError::InvalidReceiver);
         }
         let receiver_cell = self.cell(receiver).ok_or(CellError::NotFound)?;
+        if receiver_cell.process != caller_process {
+            return Err(CellError::CallerMismatch);
+        }
         if receiver_cell.state != CellState::Running
             || !receiver_cell.has_capability(KernelCapability::Ipc)
         {
@@ -1179,7 +1199,7 @@ mod tests {
             Ok(CellId(u64::MAX))
         );
         assert_eq!(
-            cells.register(spec(2, IPC_CAPS, 1), &processes),
+            cells.register(spec(3, IPC_CAPS, 1), &processes),
             Err(CellError::IdExhausted)
         );
     }
@@ -1320,7 +1340,7 @@ mod tests {
         cells.admit(receiver).unwrap();
         cells.admit(sender).unwrap();
         let channel = cells
-            .create_channel(broker, receiver, &[sender], 7)
+            .create_channel(broker, ProcessId(1), receiver, &[sender], 7, &processes)
             .unwrap();
 
         cells.begin_start(sender, &mut processes).unwrap();
@@ -1330,14 +1350,14 @@ mod tests {
             .send(channel, sender, 1, 10, [11, 12, 13, 14], &processes)
             .unwrap();
         assert_eq!(
-            cells.send(channel, broker, 2, 10, [0; 4], &processes),
+            cells.send(channel, broker, ProcessId(1), 2, 10, [0; 4], &processes),
             Err(CellError::UnauthorizedSender)
         );
 
         cells.begin_start(receiver, &mut processes).unwrap();
         processes.mark_running(ProcessId(2)).unwrap();
         cells.confirm_running(receiver, &processes).unwrap();
-        let message = cells.receive(channel, receiver, &processes).unwrap();
+        let message = cells.receive(channel, receiver, ProcessId(2), &processes).unwrap();
         assert_eq!(message.sender, sender);
         assert_eq!(message.receiver, receiver);
         assert_eq!(message.interface, CellInterface::new(7, 1, 2));
@@ -1390,7 +1410,7 @@ mod tests {
             .send(channel, sender, 1, 1, [1, 0, 0, 0], &processes)
             .unwrap();
         assert_eq!(
-            cells.send(channel, sender, 2, 1, [2, 0, 0, 0], &processes),
+            cells.send(channel, sender, ProcessId(3), 2, 1, [2, 0, 0, 0], &processes),
             Err(CellError::QuotaExceeded)
         );
         assert_eq!(cells.cell(sender).unwrap().usage().ipc_messages, 1);
@@ -1455,7 +1475,7 @@ mod tests {
         processes.mark_running(ProcessId(2)).unwrap();
         cells.confirm_running(receiver, &processes).unwrap();
         assert_eq!(
-            cells.receive(channel, receiver, &processes),
+            cells.receive(channel, receiver, ProcessId(2), &processes),
             Err(CellError::ChannelNotFound)
         );
     }
