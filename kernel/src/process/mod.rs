@@ -260,6 +260,10 @@ impl<const N: usize> ProcessManager<N> {
         Ok(())
     }
 
+    /// Record the process only after the architecture layer has completed the
+    /// switch and this process is the context currently executing on the CPU.
+    /// Kernel IPC authorization derives its caller identity from this field;
+    /// user-provided ProcessId values must never be used as authority.
     pub fn mark_running(&mut self, id: ProcessId) -> Result<(), ProcessManagerError> {
         let index = self
             .find_index(id)
@@ -357,6 +361,16 @@ impl<const N: usize> ProcessManager<N> {
 
     pub fn descriptor(&self, id: ProcessId) -> Option<ProcessDescriptor> {
         self.find_index(id).and_then(|i| self.processes[i])
+    }
+
+    /// Return the kernel-tracked current process only while its descriptor is
+    /// still Running. The identity is established by the trusted context
+    /// switch path, not supplied by a syscall argument.
+    pub(crate) fn current_process_id(&self) -> Option<ProcessId> {
+        let id = self.current?;
+        self.descriptor(id)
+            .filter(|descriptor| descriptor.state == ProcessState::Running)
+            .map(|descriptor| descriptor.id)
     }
 
     fn find_index(&self, id: ProcessId) -> Option<usize> {
@@ -521,6 +535,25 @@ mod tests {
             Err(ProcessManagerError::InvalidProcess)
         );
         assert_eq!(manager.len(), 0);
+    }
+
+    #[test]
+    fn current_process_identity_requires_a_tracked_running_context() {
+        let mut manager: ProcessManager<1> = ProcessManager::new();
+        manager.register(descriptor_with_id(1), context(1)).unwrap();
+        assert_eq!(manager.current_process_id(), None);
+
+        manager.make_runnable(ProcessId(1)).unwrap();
+        assert_eq!(manager.current_process_id(), None);
+
+        manager.mark_running(ProcessId(1)).unwrap();
+        assert_eq!(manager.current_process_id(), Some(ProcessId(1)));
+
+        manager.exit(ProcessId(1)).unwrap();
+        assert_eq!(manager.current_process_id(), None);
+
+        manager.confirm_switched_to_idle();
+        assert_eq!(manager.current_process_id(), None);
     }
 
     #[test]
