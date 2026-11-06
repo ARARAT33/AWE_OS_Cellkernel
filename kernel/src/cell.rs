@@ -13,7 +13,7 @@ use crate::process::{
 use crate::system_contract::{CapabilitySet, KernelCapability};
 
 pub const CELL_ABI_MAJOR: u16 = 1;
-pub const CELL_ABI_MINOR: u16 = 0;
+pub const CELL_ABI_MINOR: u16 = 1;
 pub const MAX_CELL_DEPENDENCIES: usize = 8;
 pub const MAX_CELL_INTERFACES: usize = 8;
 
@@ -298,7 +298,6 @@ pub struct CellMessage {
 pub struct CellSendRequest {
     pub channel: CellChannelId,
     pub sender: CellId,
-    pub caller_process: ProcessId,
     pub request_id: u64,
     pub opcode: u32,
     pub payload: [u64; 4],
@@ -308,7 +307,6 @@ impl CellSendRequest {
     pub const fn new(
         channel: CellChannelId,
         sender: CellId,
-        caller_process: ProcessId,
         request_id: u64,
         opcode: u32,
         payload: [u64; 4],
@@ -316,7 +314,6 @@ impl CellSendRequest {
         Self {
             channel,
             sender,
-            caller_process,
             request_id,
             opcode,
             payload,
@@ -931,7 +928,6 @@ impl<const N: usize, const C: usize, const Q: usize, const S: usize> CellManager
     pub fn create_channel<const P: usize>(
         &mut self,
         owner: CellId,
-        caller_process: ProcessId,
         receiver: CellId,
         allowed_senders: &[CellId],
         interface_id: u32,
@@ -940,15 +936,12 @@ impl<const N: usize, const C: usize, const Q: usize, const S: usize> CellManager
         if C == 0 {
             return Err(CellError::ChannelTableFull);
         }
+        let caller_process = processes
+            .current_process_id()
+            .ok_or(CellError::ProcessStateMismatch)?;
         let owner_cell = self.cell(owner).ok_or(CellError::NotFound)?;
         if owner_cell.process != caller_process {
             return Err(CellError::CallerMismatch);
-        }
-        let caller = processes
-            .descriptor(caller_process)
-            .ok_or(CellError::ProcessNotFound)?;
-        if caller.state != ProcessState::Running {
-            return Err(CellError::ProcessStateMismatch);
         }
         if owner_cell.state != CellState::Running
             || !owner_cell.has_capability(KernelCapability::Security)
@@ -1036,6 +1029,9 @@ impl<const N: usize, const C: usize, const Q: usize, const S: usize> CellManager
         if request.request_id == 0 || request.opcode == 0 {
             return Err(CellError::InvalidRequest);
         }
+        let caller_process = processes
+            .current_process_id()
+            .ok_or(CellError::ProcessStateMismatch)?;
         let channel_index = self
             .channels
             .iter()
@@ -1051,7 +1047,7 @@ impl<const N: usize, const C: usize, const Q: usize, const S: usize> CellManager
             .ok_or(CellError::InvalidReceiver)?;
         let mut sender_cell = self.cells[sender_index].ok_or(CellError::NotFound)?;
         let receiver_cell = self.cells[receiver_index].ok_or(CellError::InvalidReceiver)?;
-        if sender_cell.process != request.caller_process {
+        if sender_cell.process != caller_process {
             return Err(CellError::CallerMismatch);
         }
         if sender_cell.state != CellState::Running
@@ -1107,9 +1103,11 @@ impl<const N: usize, const C: usize, const Q: usize, const S: usize> CellManager
         &mut self,
         channel_id: CellChannelId,
         receiver: CellId,
-        caller_process: ProcessId,
         processes: &ProcessManager<P>,
     ) -> Result<CellMessage, CellError> {
+        let caller_process = processes
+            .current_process_id()
+            .ok_or(CellError::ProcessStateMismatch)?;
         let channel_index = self
             .channels
             .iter()
@@ -1644,12 +1642,15 @@ mod tests {
         start_cell(&mut cells, &mut processes, broker);
         cells.admit(receiver).unwrap();
         cells.admit(sender).unwrap();
+        processes.make_runnable(ProcessId(2)).unwrap();
+        processes.mark_running(ProcessId(2)).unwrap();
         assert_eq!(
-            cells.create_channel(broker, ProcessId(99), receiver, &[sender], 7, &processes),
+            cells.create_channel(broker, receiver, &[sender], 7, &processes),
             Err(CellError::CallerMismatch)
         );
+        processes.mark_running(ProcessId(1)).unwrap();
         let channel = cells
-            .create_channel(broker, ProcessId(1), receiver, &[sender], 7, &processes)
+            .create_channel(broker, receiver, &[sender], 7, &processes)
             .unwrap();
 
         cells.begin_start(sender, &mut processes).unwrap();
@@ -1657,20 +1658,22 @@ mod tests {
         cells.confirm_running(sender, &processes).unwrap();
         cells
             .send(
-                CellSendRequest::new(channel, sender, ProcessId(3), 1, 10, [11, 12, 13, 14]),
+                CellSendRequest::new(channel, sender, 1, 10, [11, 12, 13, 14]),
                 &processes,
             )
             .unwrap();
+        processes.mark_running(ProcessId(1)).unwrap();
         assert_eq!(
             cells.send(
-                CellSendRequest::new(channel, sender, ProcessId(2), 2, 10, [0; 4]),
+                CellSendRequest::new(channel, sender, 2, 10, [0; 4]),
                 &processes
             ),
             Err(CellError::CallerMismatch)
         );
+        processes.mark_running(ProcessId(3)).unwrap();
         assert_eq!(
             cells.send(
-                CellSendRequest::new(channel, broker, ProcessId(1), 2, 10, [0; 4]),
+                CellSendRequest::new(channel, broker, 2, 10, [0; 4]),
                 &processes
             ),
             Err(CellError::UnauthorizedSender)
@@ -1680,11 +1683,11 @@ mod tests {
         processes.mark_running(ProcessId(2)).unwrap();
         cells.confirm_running(receiver, &processes).unwrap();
         assert_eq!(
-            cells.receive(channel, receiver, ProcessId(3), &processes),
+            cells.receive(channel, receiver, &processes),
             Err(CellError::CallerMismatch)
         );
         let message = cells
-            .receive(channel, receiver, ProcessId(2), &processes)
+            .receive(channel, receiver, &processes)
             .unwrap();
         assert_eq!(message.sender, sender);
         assert_eq!(message.receiver, receiver);
@@ -1728,7 +1731,7 @@ mod tests {
         cells.admit(receiver).unwrap();
         cells.admit(sender).unwrap();
         let channel = cells
-            .create_channel(broker, ProcessId(1), receiver, &[sender], 11, &processes)
+            .create_channel(broker, receiver, &[sender], 11, &processes)
             .unwrap();
         cells.begin_start(sender, &mut processes).unwrap();
         processes.mark_running(ProcessId(3)).unwrap();
@@ -1736,13 +1739,13 @@ mod tests {
 
         cells
             .send(
-                CellSendRequest::new(channel, sender, ProcessId(3), 1, 1, [1, 0, 0, 0]),
+                CellSendRequest::new(channel, sender, 1, 1, [1, 0, 0, 0]),
                 &processes,
             )
             .unwrap();
         assert_eq!(
             cells.send(
-                CellSendRequest::new(channel, sender, ProcessId(3), 2, 1, [2, 0, 0, 0]),
+                CellSendRequest::new(channel, sender, 2, 1, [2, 0, 0, 0]),
                 &processes
             ),
             Err(CellError::QuotaExceeded)
@@ -1785,14 +1788,14 @@ mod tests {
         cells.admit(receiver).unwrap();
         cells.admit(sender).unwrap();
         let channel = cells
-            .create_channel(broker, ProcessId(1), receiver, &[sender], 9, &processes)
+            .create_channel(broker, receiver, &[sender], 9, &processes)
             .unwrap();
         cells.begin_start(sender, &mut processes).unwrap();
         processes.mark_running(ProcessId(3)).unwrap();
         cells.confirm_running(sender, &processes).unwrap();
         cells
             .send(
-                CellSendRequest::new(channel, sender, ProcessId(3), 1, 1, [9, 0, 0, 0]),
+                CellSendRequest::new(channel, sender, 1, 1, [9, 0, 0, 0]),
                 &processes,
             )
             .unwrap();
@@ -1812,7 +1815,7 @@ mod tests {
         processes.mark_running(ProcessId(2)).unwrap();
         cells.confirm_running(receiver, &processes).unwrap();
         assert_eq!(
-            cells.receive(channel, receiver, ProcessId(2), &processes),
+            cells.receive(channel, receiver, &processes),
             Err(CellError::ChannelNotFound)
         );
     }
@@ -1851,7 +1854,7 @@ mod tests {
         cells.admit(receiver).unwrap();
         cells.admit(sender).unwrap();
         let channel = cells
-            .create_channel(broker, ProcessId(1), receiver, &[sender], 12, &processes)
+            .create_channel(broker, receiver, &[sender], 12, &processes)
             .unwrap();
         cells.begin_start(sender, &mut processes).unwrap();
         processes.mark_running(ProcessId(3)).unwrap();
@@ -1859,13 +1862,13 @@ mod tests {
 
         cells
             .send(
-                CellSendRequest::new(channel, sender, ProcessId(3), 1, 1, [1, 0, 0, 0]),
+                CellSendRequest::new(channel, sender, 1, 1, [1, 0, 0, 0]),
                 &processes,
             )
             .unwrap();
         assert_eq!(
             cells.send(
-                CellSendRequest::new(channel, sender, ProcessId(3), 2, 1, [2, 0, 0, 0]),
+                CellSendRequest::new(channel, sender, 2, 1, [2, 0, 0, 0]),
                 &processes
             ),
             Err(CellError::ChannelFull)
@@ -1911,4 +1914,58 @@ mod tests {
         cells.confirm_running(id, &processes).unwrap();
         assert_eq!(cells.cell(id).unwrap().state(), CellState::Running);
     }
+    #[test]
+    fn cell_ipc_requires_a_tracked_current_process() {
+        let mut processes = ProcessManager::<3>::new();
+        register_process(&mut processes, 1, process_budget());
+        register_process(&mut processes, 2, process_budget());
+        register_process(&mut processes, 3, process_budget());
+        let mut cells = CellManager::<3, 2, 2, 2>::new();
+        let broker = cells
+            .register(
+                CellSpec::new(
+                    CellKind::Security,
+                    ProcessId(1),
+                    BROKER_CAPS,
+                    IPC_CAPS,
+                    quota(),
+                    CellRecoveryPolicy::new(1),
+                ),
+                &processes,
+            )
+            .unwrap();
+        let mut receiver_spec = spec(2, IPC_CAPS, 1);
+        receiver_spec.add_interface(CellInterface::new(13, 1, 0)).unwrap();
+        let receiver = cells.register(receiver_spec, &processes).unwrap();
+        let mut sender_spec = spec(3, IPC_CAPS, 1);
+        sender_spec.add_interface(CellInterface::new(13, 1, 0)).unwrap();
+        let sender = cells.register(sender_spec, &processes).unwrap();
+
+        start_cell(&mut cells, &mut processes, broker);
+        cells.admit(receiver).unwrap();
+        cells.admit(sender).unwrap();
+        let channel = cells
+            .create_channel(broker, receiver, &[sender], 13, &processes)
+            .unwrap();
+        cells.begin_start(sender, &mut processes).unwrap();
+        processes.mark_running(ProcessId(3)).unwrap();
+        cells.confirm_running(sender, &processes).unwrap();
+        cells.begin_start(receiver, &mut processes).unwrap();
+        processes.mark_running(ProcessId(2)).unwrap();
+        cells.confirm_running(receiver, &processes).unwrap();
+
+        processes.confirm_switched_to_idle();
+        assert_eq!(
+            cells.send(
+                CellSendRequest::new(channel, sender, 1, 1, [0; 4]),
+                &processes
+            ),
+            Err(CellError::ProcessStateMismatch)
+        );
+        assert_eq!(
+            cells.receive(channel, receiver, &processes),
+            Err(CellError::ProcessStateMismatch)
+        );
+    }
+
 }
