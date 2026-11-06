@@ -447,7 +447,8 @@ impl<const Q: usize, const S: usize> CellChannel<Q, S> {
             return;
         }
         let mut messages = [None; Q];
-        let mut message_count = 0;        for offset in 0..self.len {
+        let mut message_count = 0;
+        for offset in 0..self.len {
             let index = (self.head + offset) % Q;
             if let Some(message) = self.messages[index]
                 && message.sender != sender
@@ -903,7 +904,8 @@ impl<const N: usize, const C: usize, const Q: usize, const S: usize> CellManager
                 | CellState::Failed
                 | CellState::Quarantined
         ) {
-            return Err(CellError::InvalidTransition);        }
+            return Err(CellError::InvalidTransition);
+        }
         cell.usage.memory_bytes = cell
             .usage
             .memory_bytes
@@ -996,7 +998,8 @@ impl<const N: usize, const C: usize, const Q: usize, const S: usize> CellManager
             }
             senders[index] = Some(sender_id);
         }
-        let slot = self            .channels
+        let slot = self
+            .channels
             .iter()
             .position(Option::is_none)
             .ok_or(CellError::ChannelTableFull)?;
@@ -1502,7 +1505,8 @@ mod tests {
     fn quota_accounting_is_bounded_and_failure_is_atomic() {
         let mut processes = ProcessManager::<1>::new();
         register_process(&mut processes, 1, process_budget());
-        let mut cells = CellManager::<1>::new();        let id = cells.register(spec(1, IPC_CAPS, 1), &processes).unwrap();
+        let mut cells = CellManager::<1>::new();
+        let id = cells.register(spec(1, IPC_CAPS, 1), &processes).unwrap();
         start_cell(&mut cells, &mut processes, id);
 
         cells.charge_cpu(id, 10).unwrap();
