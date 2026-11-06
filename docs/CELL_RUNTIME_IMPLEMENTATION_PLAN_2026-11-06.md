@@ -38,3 +38,25 @@
 ## Definition of done for this branch
 
 A cell may be declared `Running` only when its bound process is actually marked `Running`; cell IPC must reject unauthorized or non-running peers; all fixed-capacity/identity/quota failures must fail closed; tests and CI results must be recorded honestly. The broader OS remains in development.
+
+## Implementation checkpoint (2026-11-06)
+
+The first local runtime implementation is now present in `kernel/src/cell.rs` and exported by `kernel/src/lib.rs`:
+
+- [x] Versioned cell ABI, monotonic CellId/channel IDs, cell kinds/states/health, bounded dependencies/interfaces, recovery policy and resource usage.
+- [x] Admission against an existing Created ProcessManager process, budget and required-capability subset.
+- [x] ProcessManager-backed start confirmation, stop/exit, deferred reap, failure quarantine and fresh-process rebind.
+- [x] Local fixed-capacity IPC channels with Security broker caller binding, sender CellId allowlists, interface compatibility, caller ProcessId checks, message quota and teardown.
+- [x] Initial regression tests for identity exhaustion, admission failures, process lifecycle, dependency ordering, quota accounting, caller spoofing, IPC authorization and failure teardown.
+- [x] ABI and limitation documentation in `docs/CELL_RUNTIME.md`.
+
+### Pending validation
+
+The branch PR has been opened as draft PR #58. GitHub Actions are running. No Rust test, Clippy, boot or QEMU result is considered passed until the corresponding workflow/job completes and its logs are inspected.
+
+### Known integration limits
+
+- CPU and memory accounting APIs are explicit hooks; timer and allocator charging are not yet wired.
+- CellManager is local-only; remote cells and authenticated network IPC are not implemented.
+- Per-process page tables, Ring-3 entry and memory isolation remain separate P0 kernel work.
+- Cell lifecycle confirmation relies on the architecture layer to report actual ProcessManager transitions; this module does not perform a context switch itself.
