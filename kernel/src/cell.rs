@@ -1686,9 +1686,7 @@ mod tests {
             cells.receive(channel, receiver, &processes),
             Err(CellError::CallerMismatch)
         );
-        let message = cells
-            .receive(channel, receiver, &processes)
-            .unwrap();
+        let message = cells.receive(channel, receiver, &processes).unwrap();
         assert_eq!(message.sender, sender);
         assert_eq!(message.receiver, receiver);
         assert_eq!(message.interface, CellInterface::new(7, 1, 2));
@@ -1935,10 +1933,14 @@ mod tests {
             )
             .unwrap();
         let mut receiver_spec = spec(2, IPC_CAPS, 1);
-        receiver_spec.add_interface(CellInterface::new(13, 1, 0)).unwrap();
+        receiver_spec
+            .add_interface(CellInterface::new(13, 1, 0))
+            .unwrap();
         let receiver = cells.register(receiver_spec, &processes).unwrap();
         let mut sender_spec = spec(3, IPC_CAPS, 1);
-        sender_spec.add_interface(CellInterface::new(13, 1, 0)).unwrap();
+        sender_spec
+            .add_interface(CellInterface::new(13, 1, 0))
+            .unwrap();
         let sender = cells.register(sender_spec, &processes).unwrap();
 
         start_cell(&mut cells, &mut processes, broker);
@@ -1967,5 +1969,4 @@ mod tests {
             Err(CellError::ProcessStateMismatch)
         );
     }
-
 }
