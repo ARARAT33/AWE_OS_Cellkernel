@@ -295,6 +295,36 @@ pub struct CellMessage {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CellSendRequest {
+    pub channel: CellChannelId,
+    pub sender: CellId,
+    pub caller_process: ProcessId,
+    pub request_id: u64,
+    pub opcode: u32,
+    pub payload: [u64; 4],
+}
+
+impl CellSendRequest {
+    pub const fn new(
+        channel: CellChannelId,
+        sender: CellId,
+        caller_process: ProcessId,
+        request_id: u64,
+        opcode: u32,
+        payload: [u64; 4],
+    ) -> Self {
+        Self {
+            channel,
+            sender,
+            caller_process,
+            request_id,
+            opcode,
+            payload,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CellError {
     Full,
     NotFound,
@@ -935,33 +965,28 @@ impl<const N: usize, const C: usize, const Q: usize, const S: usize> CellManager
 
     pub fn send<const P: usize>(
         &mut self,
-        channel_id: CellChannelId,
-        sender: CellId,
-        caller_process: ProcessId,
-        request_id: u64,
-        opcode: u32,
-        payload: [u64; 4],
+        request: CellSendRequest,
         processes: &ProcessManager<P>,
     ) -> Result<(), CellError> {
-        if request_id == 0 || opcode == 0 {
+        if request.request_id == 0 || request.opcode == 0 {
             return Err(CellError::InvalidRequest);
         }
         let channel_index = self
             .channels
             .iter()
-            .position(|channel| channel.map(|item| item.id) == Some(channel_id))
+            .position(|channel| channel.map(|item| item.id) == Some(request.channel))
             .ok_or(CellError::ChannelNotFound)?;
         let mut channel = self.channels[channel_index].ok_or(CellError::ChannelNotFound)?;
-        if !channel.allows_sender(sender) {
+        if !channel.allows_sender(request.sender) {
             return Err(CellError::UnauthorizedSender);
         }
-        let sender_index = self.find_index(sender).ok_or(CellError::NotFound)?;
+        let sender_index = self.find_index(request.sender).ok_or(CellError::NotFound)?;
         let receiver_index = self
             .find_index(channel.receiver)
             .ok_or(CellError::InvalidReceiver)?;
         let mut sender_cell = self.cells[sender_index].ok_or(CellError::NotFound)?;
         let receiver_cell = self.cells[receiver_index].ok_or(CellError::InvalidReceiver)?;
-        if sender_cell.process != caller_process {
+        if sender_cell.process != request.caller_process {
             return Err(CellError::CallerMismatch);
         }
         if sender_cell.state != CellState::Running
@@ -998,13 +1023,13 @@ impl<const N: usize, const C: usize, const Q: usize, const S: usize> CellManager
             return Err(CellError::QuotaExceeded);
         }
         let message = CellMessage {
-            channel: channel_id,
-            sender,
+            channel: request.channel,
+            sender: request.sender,
             receiver: channel.receiver,
             interface: channel.interface,
-            request_id,
-            opcode,
-            payload,
+            request_id: request.request_id,
+            opcode: request.opcode,
+            payload: request.payload,
         };
         channel.push(message)?;
         self.channels[channel_index] = Some(channel);
@@ -1189,7 +1214,7 @@ mod tests {
         register_process(&mut processes, 1, process_budget());
         register_process(&mut processes, 2, process_budget());
         register_process(&mut processes, 3, process_budget());
-        let mut cells = CellManager::<2>::new();
+        let mut cells = CellManager::<3>::new();
         assert_eq!(
             cells.register(spec(1, IPC_CAPS, 1), &processes),
             Ok(CellId(1))
@@ -1363,11 +1388,11 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            cells.send(channel, sender, ProcessId(2), 2, 10, [0; 4], &processes),
+            cells.send(CellSendRequest::new(channel, sender, ProcessId(2), 2, 10, [0; 4]), &processes),
             Err(CellError::CallerMismatch)
         );
         assert_eq!(
-            cells.send(channel, broker, ProcessId(1), 2, 10, [0; 4], &processes),
+            cells.send(CellSendRequest::new(channel, broker, ProcessId(1), 2, 10, [0; 4]), &processes),
             Err(CellError::UnauthorizedSender)
         );
 
@@ -1441,15 +1466,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            cells.send(
-                channel,
-                sender,
-                ProcessId(3),
-                2,
-                1,
-                [2, 0, 0, 0],
-                &processes
-            ),
+            cells.send(CellSendRequest::new(channel, sender, ProcessId(3), 2, 1, [2, 0, 0, 0]), &processes),
             Err(CellError::QuotaExceeded)
         );
         assert_eq!(cells.cell(sender).unwrap().usage().ipc_messages, 1);
