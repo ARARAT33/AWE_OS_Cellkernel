@@ -1357,7 +1357,9 @@ mod tests {
         cells.begin_start(receiver, &mut processes).unwrap();
         processes.mark_running(ProcessId(2)).unwrap();
         cells.confirm_running(receiver, &processes).unwrap();
-        let message = cells.receive(channel, receiver, ProcessId(2), &processes).unwrap();
+        let message = cells
+            .receive(channel, receiver, ProcessId(2), &processes)
+            .unwrap();
         assert_eq!(message.sender, sender);
         assert_eq!(message.receiver, receiver);
         assert_eq!(message.interface, CellInterface::new(7, 1, 2));
@@ -1410,7 +1412,15 @@ mod tests {
             .send(channel, sender, 1, 1, [1, 0, 0, 0], &processes)
             .unwrap();
         assert_eq!(
-            cells.send(channel, sender, ProcessId(3), 2, 1, [2, 0, 0, 0], &processes),
+            cells.send(
+                channel,
+                sender,
+                ProcessId(3),
+                2,
+                1,
+                [2, 0, 0, 0],
+                &processes
+            ),
             Err(CellError::QuotaExceeded)
         );
         assert_eq!(cells.cell(sender).unwrap().usage().ipc_messages, 1);
