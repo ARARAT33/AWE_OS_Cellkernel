@@ -49,8 +49,8 @@ Only a currently running cell with both `Security` and `Ipc` capabilities may cr
 
 A channel declares one receiver, a bounded explicit list of sender `CellId` values and a receiver interface ID. Every sender must have the same interface major version and a minor version at least as new as the receiver's declared minor version.
 
-- `send` checks the caller process identity, sender allowlist, sender/receiver cell states, IPC capabilities, process state, non-zero request/opcode, bounded queue capacity and sender IPC quota before committing the message.
-- `receive` checks the receiver cell and caller process identity and requires the receiver process to be `Running`.
+- `send` accepts a typed `CellSendRequest` and checks the caller process identity supplied by the trusted syscall/kernel dispatch path, sender allowlist, sender/receiver cell states, IPC capabilities, process state, non-zero request/opcode, bounded queue capacity and sender IPC quota before committing the message.
+- `receive` checks the receiver cell and caller process identity supplied by the trusted kernel path and requires the receiver process to be `Running`.
 - Messages contain only fixed-width metadata and four 64-bit payload words; they do not carry unchecked pointers.
 - Stopping/failing a receiver destroys its channels. Stopping/failing a sender removes that sender and compacts queued messages so stale messages cannot be delivered.
 
@@ -58,7 +58,7 @@ The endpoint table and per-channel queue are fixed-capacity. Full queues and quo
 
 ## Resource accounting
 
-`charge_cpu` and `charge_memory` provide checked accounting hooks and reject overflow/quota excess without modifying usage. They are not yet automatically connected to timer ticks or the physical/virtual memory allocator. IPC message usage is charged by successful `send` operations only.
+`charge_cpu` and `charge_memory` provide checked accounting hooks and reject overflow/quota excess without modifying usage. `release_memory` rejects underflow and keeps outstanding memory charged across stop/failure until the allocator confirms the bytes were freed. Restart and cell removal are rejected while memory usage remains non-zero. These hooks are not yet automatically connected to timer ticks or the physical/virtual memory allocator. IPC message usage is charged by successful `send` operations only.
 
 ## Security and isolation limits
 
