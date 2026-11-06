@@ -115,3 +115,16 @@ The final observed workflow evidence and the exact test-filter correction are re
 - [x] Added regression coverage for non-current callers and for IPC attempted with no tracked current process.
 - [x] Advanced the local cell ABI minor version to 1 and documented the API contract.
 - [ ] Keep syscall dispatch integration, per-CPU/SMP identity, object-capability handles, and runtime context-switch verification as separate follow-up gates.
+
+## P0.3 — Unify process authority with real x86_64 execution
+
+Repository audit confirms that the current `ProcessManager::mark_running` has no production call site. `ExecutionCore` owns a separate scheduler/current-process model, `process::dispatch_runtime` only prepares a switch frame, and `SyscallContext` mutates a borrowed descriptor without a validated current-task/address-space context. These are separate foundations, not one integrated process runtime.
+
+1. Choose one authoritative process/scheduler state model; do not maintain independent current-task state in `ProcessManager`, `ExecutionCore`, and `Dispatcher` without a defined synchronization contract.
+2. Connect the x86_64 context-switch completion path to the authoritative model. Publish the new current process only after the hardware switch completes; clear current only after the switch to idle completes.
+3. Bind CellManager lifecycle and IPC to that authoritative runtime and a trusted syscall dispatch context. Keep IPC fail-closed until this exists.
+4. Implement per-process address spaces and validated user mappings before enabling Ring 3 or dereferencing syscall user pointers.
+5. Add QEMU tests that execute at least two real process contexts, yield/block/exit/reap them, verify current-process identity across switches, and exercise cell IPC end-to-end.
+6. Add timer-driven preemption only after context save/restore, interrupt masking, and per-CPU state are proven.
+
+**Do not claim CellManager is boot-integrated or that user-space IPC is operational until these gates pass.**
