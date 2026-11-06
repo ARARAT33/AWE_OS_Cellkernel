@@ -719,3 +719,56 @@ Harden dependency ordering and failure propagation before adding more cell featu
 4. Implement per-process page tables and user-only mappings before any Ring-3 cell execution.
 5. Add CellManager runtime integration to AWOSA service supervision; only then design remote-cell transport over authenticated standard protocols.
 
+
+### Final validation and repository-audit addendum — 2026-11-06
+
+The source-code validation target for this session is commit `2b16188c8472412de3c73a21246d9dfde02ffdf9` (the subsequent log/plan commits do not change Rust source).
+
+#### Final observed workflow results on that source head
+
+- **AWEOS CI Pipeline #361** — success. Workspace compilation passed; `cargo test --workspace` reported **439 passed, 0 failed**; formatting passed; boot-image build and artifact checks passed.
+- **AWEOS Quality Gate #1001** — success. Workspace formatting, check, tests and Clippy passed; UEFI loader job passed.
+- **AWEOS Cloud Security Gate #946** — success. Cloud-security and release-contract jobs passed.
+- **AWEOS Bootable Image Pipeline #972** — success. ISO/GPT image generation and QEMU ISO smoke passed (`ISO Boot Successful!`). The dedicated exception-injection command was corrected to `product_core::qemu_exception_injection_selftest`; its log shows `running 1 test`, that test passed, and the result was 1 passed / 0 failed.
+- **AWEOS Multi-Architecture Images #275** — success. This is build/artifact evidence, not ARM64 or RISC-V runtime certification.
+- **AOSIN Cross-Platform Installers #313** — all four Linux/Windows GUI/CLI jobs passed.
+- **clippy-report #105** and **CI Diagnostics #44** — success.
+- **AWEOS VirtIO Runtime #354** — still in progress at the `Install QEMU and boot-image tools` step when this addendum was written. It had not reached formatting, storage tests or QEMU steps. It is **not counted as passed**.
+
+#### CI false-positive found and corrected
+
+The earlier dedicated QEMU exception workflow invoked `cargo test ... qemu_exception_injection_selftest -- --exact`, but the test lives inside the `product_core` module. The exact filter selected **zero tests** while returning success. The workflow was corrected to use the fully-qualified name. The latest dedicated run proves that exactly one test executed and passed. The full workspace test log also contains the QEMU smoke and exception-injection test names as passing tests.
+
+#### Formatting failures handled, not hidden
+
+- The first dependency-hardening update exposed missing line breaks at remote chunk boundaries; rustfmt failed and the exact diff was inspected.
+- The formatting bot corrected the long call layout.
+- A later source update exposed a missing final newline; the file was rewritten with the canonical trailing newline.
+- The latest CI Pipeline and Quality Gate both report formatting success.
+
+#### Broader architecture sweep
+
+- The workspace manifest contains 29 members. Kernel/boot contracts, process and scheduler code, cell runtime, service crates, tests and boot workflows were sampled against the readiness documents.
+- `services/initd` currently has a fixed-capacity `ServiceTable` and lifecycle transitions, but the inspected path does not yet launch/manage real `ProcessManager` processes or bind service IDs to CellIds. It is not yet the complete AWOSA supervisor.
+- `services/netd` has fixed interface/socket/firewall tables, but no end-to-end NIC TX/RX runtime was demonstrated. `create_socket` increments a `u32` ID without checked exhaustion handling and accepts an owner PID without validating it against the kernel process table; these are next hardening targets.
+- `services/storaged` has in-memory volume/mount/snapshot/file/cache metadata. The inspected implementation does not prove durable block-device reads/writes, power-loss recovery or a production filesystem.
+- `services/ayui` contains software UI state/compositor structures but is not demonstrated as a boot-integrated hardware desktop. `Rect::contains` adds signed coordinates and dimensions in `i32`; `snap_to_grid` casts `u32` grid sizes to `i32` and adds in `i32`. Extreme coordinates/grid sizes can overflow or wrap. Add checked/i64 arithmetic and boundary tests in a separate UI hardening change.
+- `PRODUCT_READINESS.md` and `PRODUCT_GAP_MATRIX.md` are more conservative than the legacy `docs/IMPLEMENTATION_MATRIX.md`, whose historical `Complete / Unit Passed / Integrated` labels overstate current end-to-end evidence. Treat the latter as a historical inventory until it is reconciled row-by-row; do not use its labels as release certification.
+
+#### Latest PR/repository state
+
+- All CellManager implementation changes remain on the existing draft PR #58 branch `feat/cell-runtime-core-2026-11-06`; no force-push, merge or branch deletion was performed.
+- Base `main` remained at `499ec2b4397c73ead52a0831c3ffc0e8379714b9` during this run. No implementation changes were committed to `main`.
+- Current CellManager scope is still local lifecycle and bounded IPC. It is **not** a memory-isolation boundary, not a remote-cell network, and not proof of independent address spaces.
+- No local Rust/QEMU tools and no physical hardware were available in this automation environment; validation above comes from GitHub Actions.
+
+#### Next priorities
+
+1. Finish/diagnose the still-running VirtIO Runtime job; do not report it green without completed storage/driver contract tests and QEMU steps.
+2. Add a trusted kernel dispatch context so CellManager derives caller identity from the current process instead of accepting a forgeable caller PID from future syscall-facing code.
+3. Integrate timer CPU accounting and allocator-owned memory accounting with CellId.
+4. Define the versioned cell syscall contract and integrate `initd`/AWOSA supervision without duplicating lifecycle state.
+5. Harden `netd` and `storaged` ID exhaustion and ownership/volume validation; implement actual NIC and block-device I/O before claiming those services operational.
+6. Fix AYUI coordinate/grid arithmetic with boundary tests.
+7. Reconcile the legacy implementation matrix against executable evidence and the current product gap matrix.
+8. Implement per-process address spaces and user-only mappings before Ring-3 cell execution.
