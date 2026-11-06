@@ -1537,4 +1537,90 @@ mod tests {
             Err(CellError::ChannelNotFound)
         );
     }
+    #[test]
+    fn channel_queue_full_does_not_consume_extra_ipc_quota() {
+        let mut processes = ProcessManager::<3>::new();
+        register_process(&mut processes, 1, process_budget());
+        register_process(&mut processes, 2, process_budget());
+        register_process(&mut processes, 3, process_budget());
+        let mut cells = CellManager::<3, 2, 1, 2>::new();
+        let broker = cells
+            .register(
+                CellSpec::new(
+                    CellKind::Security,
+                    ProcessId(1),
+                    BROKER_CAPS,
+                    IPC_CAPS,
+                    quota(),
+                    CellRecoveryPolicy::new(1),
+                ),
+                &processes,
+            )
+            .unwrap();
+        let mut receiver_spec = spec(2, IPC_CAPS, 1);
+        receiver_spec.add_interface(CellInterface::new(12, 1, 0)).unwrap();
+        let receiver = cells.register(receiver_spec, &processes).unwrap();
+        let mut sender_spec = spec(3, IPC_CAPS, 1);
+        sender_spec.add_interface(CellInterface::new(12, 1, 0)).unwrap();
+        let sender = cells.register(sender_spec, &processes).unwrap();
+
+        start_cell(&mut cells, &mut processes, broker);
+        cells.admit(receiver).unwrap();
+        cells.admit(sender).unwrap();
+        let channel = cells
+            .create_channel(broker, ProcessId(1), receiver, &[sender], 12, &processes)
+            .unwrap();
+        cells.begin_start(sender, &mut processes).unwrap();
+        processes.mark_running(ProcessId(3)).unwrap();
+        cells.confirm_running(sender, &processes).unwrap();
+
+        cells
+            .send(
+                CellSendRequest::new(channel, sender, ProcessId(3), 1, 1, [1, 0, 0, 0]),
+                &processes,
+            )
+            .unwrap();
+        assert_eq!(
+            cells.send(
+                CellSendRequest::new(channel, sender, ProcessId(3), 2, 1, [2, 0, 0, 0]),
+                &processes
+            ),
+            Err(CellError::ChannelFull)
+        );
+        assert_eq!(cells.cell(sender).unwrap().usage().ipc_messages, 1);
+    }
+
+    #[test]
+    fn failed_cell_restarts_only_with_a_fresh_reaped_process() {
+        let mut processes = ProcessManager::<2>::new();
+        register_process(&mut processes, 1, process_budget());
+        let mut cells = CellManager::<2>::new();
+        let id = cells.register(spec(1, IPC_CAPS, 1), &processes).unwrap();
+        start_cell(&mut cells, &mut processes, id);
+
+        processes.exit(ProcessId(1)).unwrap();
+        assert_eq!(
+            cells.record_failure(id, &mut processes),
+            Ok(CellState::Failed)
+        );
+        assert_eq!(
+            cells.rebind_process(id, ProcessId(2), &processes),
+            Err(CellError::ProcessStateMismatch)
+        );
+
+        processes.confirm_switched_to_idle();
+        cells.reap_failed(id, &mut processes).unwrap();
+        register_process(&mut processes, 2, process_budget());
+        cells.rebind_process(id, ProcessId(2), &processes).unwrap();
+        let restarted = cells.cell(id).unwrap();
+        assert_eq!(restarted.state(), CellState::Admitted);
+        assert_eq!(restarted.process(), ProcessId(2));
+        assert_eq!(restarted.failures(), 1);
+
+        cells.begin_start(id, &mut processes).unwrap();
+        processes.mark_running(ProcessId(2)).unwrap();
+        cells.confirm_running(id, &processes).unwrap();
+        assert_eq!(cells.cell(id).unwrap().state(), CellState::Running);
+    }
+
 }
