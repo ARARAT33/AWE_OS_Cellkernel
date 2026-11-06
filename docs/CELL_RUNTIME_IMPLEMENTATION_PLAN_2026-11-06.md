@@ -107,3 +107,11 @@ The final observed workflow evidence and the exact test-filter correction are re
 6. Keep syscall exposure deferred until the architecture syscall entry supplies and validates the same trusted current-task context. This change hardens the kernel API; it does not claim a completed userspace Cell syscall ABI.
 
 **Acceptance evidence:** workspace format/check/tests/Clippy plus the existing boot, exception-injection, and VirtIO QEMU jobs on the updated PR head. No physical hardware claim.
+
+## P0.2 implementation checkpoint — trusted local IPC caller identity
+
+- [x] Added a kernel-internal ProcessManager accessor that exposes only the tracked process whose descriptor remains Running.
+- [x] Removed caller_process from CellSendRequest and from create_channel/receive arguments; send/create/receive now derive caller identity from the ProcessManager.
+- [x] Added regression coverage for non-current callers and for IPC attempted with no tracked current process.
+- [x] Advanced the local cell ABI minor version to 1 and documented the API contract.
+- [ ] Keep syscall dispatch integration, per-CPU/SMP identity, object-capability handles, and runtime context-switch verification as separate follow-up gates.
