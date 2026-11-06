@@ -447,8 +447,7 @@ impl<const Q: usize, const S: usize> CellChannel<Q, S> {
             return;
         }
         let mut messages = [None; Q];
-        let mut message_count = 0;
-        for offset in 0..self.len {
+        let mut message_count = 0;        for offset in 0..self.len {
             let index = (self.head + offset) % Q;
             if let Some(message) = self.messages[index]
                 && message.sender != sender
@@ -619,18 +618,7 @@ impl<const N: usize, const C: usize, const Q: usize, const S: usize> CellManager
         if cell.state != CellState::Admitted {
             return Err(CellError::InvalidTransition);
         }
-        for dependency in cell.dependencies().iter().flatten() {
-            let dependency_cell = self.cell(*dependency).ok_or(CellError::InvalidDependency)?;
-            if dependency_cell.state != CellState::Running {
-                return Err(CellError::DependencyUnavailable);
-            }
-            let dependency_process = processes
-                .descriptor(dependency_cell.process)
-                .ok_or(CellError::ProcessNotFound)?;
-            if dependency_process.state == ProcessState::Exited {
-                return Err(CellError::DependencyUnavailable);
-            }
-        }
+        self.dependencies_available(&cell, processes)?;
         let process = processes
             .descriptor(cell.process)
             .ok_or(CellError::ProcessNotFound)?;
@@ -666,6 +654,9 @@ impl<const N: usize, const C: usize, const Q: usize, const S: usize> CellManager
         if process.state != ProcessState::Running {
             return Err(CellError::ProcessStateMismatch);
         }
+        // A dependency may have failed after begin_start but before the
+        // architecture layer confirmed this process transition.
+        self.dependencies_available(&cell, processes)?;
         cell.state = CellState::Running;
         cell.health = CellHealth::Healthy;
         self.cells[index] = Some(cell);
@@ -683,6 +674,11 @@ impl<const N: usize, const C: usize, const Q: usize, const S: usize> CellManager
         let mut cell = self.cells[index].ok_or(CellError::NotFound)?;
         if cell.state != CellState::Running {
             return Err(CellError::InvalidTransition);
+        }
+        // Graceful dependency shutdown is ordered: active dependents must be
+        // stopped before their provider can be stopped.
+        if self.has_active_dependents(id) {
+            return Err(CellError::DependencyInUse);
         }
         processes.exit(cell.process).map_err(CellError::Process)?;
         cell.state = CellState::Stopping;
@@ -746,6 +742,9 @@ impl<const N: usize, const C: usize, const Q: usize, const S: usize> CellManager
         };
         self.cells[index] = Some(cell);
         self.teardown_channels_for(id);
+        // An unexpected provider failure cannot be vetoed. Mark its active
+        // dependents degraded so the supervisor can stop/recover them.
+        self.degrade_dependents(id);
         Ok(cell.state)
     }
 
@@ -836,6 +835,14 @@ impl<const N: usize, const C: usize, const Q: usize, const S: usize> CellManager
         if cell.state != CellState::Running {
             return Err(CellError::InvalidTransition);
         }
+        if health == CellHealth::Healthy {
+            for dependency in cell.dependencies().iter().flatten() {
+                let dependency_cell = self.cell(*dependency).ok_or(CellError::InvalidDependency)?;
+                if dependency_cell.state != CellState::Running {
+                    return Err(CellError::DependencyUnavailable);
+                }
+            }
+        }
         cell.health = health;
         self.cells[index] = Some(cell);
         Ok(())
@@ -897,8 +904,7 @@ impl<const N: usize, const C: usize, const Q: usize, const S: usize> CellManager
                 | CellState::Failed
                 | CellState::Quarantined
         ) {
-            return Err(CellError::InvalidTransition);
-        }
+            return Err(CellError::InvalidTransition);        }
         cell.usage.memory_bytes = cell
             .usage
             .memory_bytes
@@ -1183,6 +1189,43 @@ impl<const N: usize, const C: usize, const Q: usize, const S: usize> CellManager
             .iter()
             .position(|cell| cell.map(|item| item.id) == Some(id))
     }
+
+    fn dependencies_available<const P: usize>(
+        &self,
+        cell: &CellDescriptor,
+        processes: &ProcessManager<P>,
+    ) -> Result<(), CellError> {
+        for dependency in cell.dependencies().iter().flatten() {
+            let dependency_cell = self.cell(*dependency).ok_or(CellError::InvalidDependency)?;
+            if dependency_cell.state != CellState::Running {
+                return Err(CellError::DependencyUnavailable);
+            }
+            let dependency_process = processes
+                .descriptor(dependency_cell.process)
+                .ok_or(CellError::ProcessNotFound)?;
+            if dependency_process.state == ProcessState::Exited {
+                return Err(CellError::DependencyUnavailable);
+            }
+        }
+        Ok(())
+    }
+
+    fn has_active_dependents(&self, id: CellId) -> bool {
+        self.cells.iter().flatten().any(|dependent| {
+            dependent.dependencies().contains(&Some(id))
+                && matches!(dependent.state, CellState::Starting | CellState::Running)
+        })
+    }
+
+    fn degrade_dependents(&mut self, id: CellId) {
+        for dependent in self.cells.iter_mut().flatten() {
+            if dependent.dependencies().contains(&Some(id))
+                && matches!(dependent.state, CellState::Starting | CellState::Running)
+            {
+                dependent.health = CellHealth::Degraded;
+            }
+        }
+    }
 }
 
 fn capabilities_contain(granted: CapabilitySet, required: CapabilitySet) -> bool {
@@ -1247,7 +1290,6 @@ mod tests {
             CellRecoveryPolicy::new(recovery),
         )
     }
-
     fn start_cell<const N: usize, const C: usize, const Q: usize, const S: usize>(
         cells: &mut CellManager<N, C, Q, S>,
         processes: &mut ProcessManager<N>,
@@ -1370,6 +1412,85 @@ mod tests {
         processes.mark_running(ProcessId(1)).unwrap();
         cells.confirm_running(dependency, &processes).unwrap();
         cells.begin_start(dependent, &mut processes).unwrap();
+    }
+
+    #[test]
+    fn graceful_dependency_stop_waits_for_active_dependents() {
+        let mut processes = ProcessManager::<2>::new();
+        register_process(&mut processes, 1, process_budget());
+        register_process(&mut processes, 2, process_budget());
+        let mut cells = CellManager::<2>::new();
+        let dependency = cells.register(spec(1, IPC_CAPS, 1), &processes).unwrap();
+        let mut dependent_spec = spec(2, IPC_CAPS, 1);
+        dependent_spec.add_dependency(dependency).unwrap();
+        let dependent = cells.register(dependent_spec, &processes).unwrap();
+
+        start_cell(&mut cells, &mut processes, dependency);
+        start_cell(&mut cells, &mut processes, dependent);
+        assert_eq!(
+            cells.begin_stop(dependency, &mut processes),
+            Err(CellError::DependencyInUse)
+        );
+        assert_eq!(cells.cell(dependency).unwrap().state(), CellState::Running);
+        assert_eq!(cells.cell(dependent).unwrap().state(), CellState::Running);
+
+        cells.begin_stop(dependent, &mut processes).unwrap();
+        processes.confirm_switched_to_idle();
+        cells.confirm_stopped(dependent, &mut processes).unwrap();
+        cells.begin_stop(dependency, &mut processes).unwrap();
+        processes.confirm_switched_to_idle();
+        cells.confirm_stopped(dependency, &mut processes).unwrap();
+    }
+
+    #[test]
+    fn dependency_failure_degrades_active_dependents() {
+        let mut processes = ProcessManager::<2>::new();
+        register_process(&mut processes, 1, process_budget());
+        register_process(&mut processes, 2, process_budget());
+        let mut cells = CellManager::<2>::new();
+        let dependency = cells.register(spec(1, IPC_CAPS, 1), &processes).unwrap();
+        let mut dependent_spec = spec(2, IPC_CAPS, 1);
+        dependent_spec.add_dependency(dependency).unwrap();
+        let dependent = cells.register(dependent_spec, &processes).unwrap();
+
+        start_cell(&mut cells, &mut processes, dependency);
+        start_cell(&mut cells, &mut processes, dependent);
+        assert_eq!(
+            cells.record_failure(dependency, &mut processes),
+            Ok(CellState::Failed)
+        );
+        assert_eq!(
+            cells.cell(dependent).unwrap().health(),
+            CellHealth::Degraded
+        );
+        assert_eq!(
+            cells.set_health(dependent, CellHealth::Healthy),
+            Err(CellError::DependencyUnavailable)
+        );
+    }
+
+    #[test]
+    fn confirm_running_rechecks_dependencies_after_start() {
+        let mut processes = ProcessManager::<2>::new();
+        register_process(&mut processes, 1, process_budget());
+        register_process(&mut processes, 2, process_budget());
+        let mut cells = CellManager::<2>::new();
+        let dependency = cells.register(spec(1, IPC_CAPS, 1), &processes).unwrap();
+        let mut dependent_spec = spec(2, IPC_CAPS, 1);
+        dependent_spec.add_dependency(dependency).unwrap();
+        let dependent = cells.register(dependent_spec, &processes).unwrap();
+
+        start_cell(&mut cells, &mut processes, dependency);
+        cells.admit(dependent).unwrap();
+        cells.begin_start(dependent, &mut processes).unwrap();
+        processes.mark_running(ProcessId(2)).unwrap();
+        cells.record_failure(dependency, &mut processes).unwrap();
+
+        assert_eq!(
+            cells.confirm_running(dependent, &processes),
+            Err(CellError::DependencyUnavailable)
+        );
+        assert_eq!(cells.cell(dependent).unwrap().state(), CellState::Starting);
     }
 
     #[test]
