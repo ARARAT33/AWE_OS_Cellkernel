@@ -82,7 +82,8 @@ The first local runtime implementation is now present in `kernel/src/cell.rs` an
 - [x] Cloud Security Gate and release-contract gate.
 - [x] QEMU ISO boot smoke and dedicated exception-injection self-test (exactly 1 test executed and passed).
 - [x] Multi-architecture image build and four AOSIN Linux/Windows GUI/CLI installer jobs.
-- [ ] VirtIO Runtime #354 was still at its QEMU/boot-tool installation step when the final log was written; no result is claimed.
+- [x] VirtIO Runtime #357: formatting, 439 workspace tests, kernel/ELF build, QEMU VirtIO PCI visibility and boot with an attached VirtIO block device passed. This does not prove block read/write or durable filesystem I/O.
+- [ ] Latest Quality Gate #1004 remains pending behind a UEFI-loader job in run #1003; the earlier Quality Gate #1001 passed on the same source-code commit.
 - [ ] Physical hardware validation remains unavailable.
 
 The final observed workflow evidence and the exact test-filter correction are recorded in `docs/AI-DEVELOPMENT-LOG.md`. Draft PR #58 remains open and unmerged.
