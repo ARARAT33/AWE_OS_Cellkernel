@@ -1377,7 +1377,10 @@ mod tests {
         cells.charge_cpu(id, 10).unwrap();
         cells.charge_memory(id, 1024).unwrap();
         cells.release_memory(id, 512).unwrap();
-        assert_eq!(cells.release_memory(id, 513), Err(CellError::AccountingUnderflow));
+        assert_eq!(
+            cells.release_memory(id, 513),
+            Err(CellError::AccountingUnderflow)
+        );
         assert_eq!(cells.charge_cpu(id, 11), Err(CellError::QuotaExceeded));
         assert_eq!(cells.charge_memory(id, 4096), Err(CellError::QuotaExceeded));
         let usage = cells.cell(id).unwrap().usage();
