@@ -19,6 +19,7 @@ pub mod arch;
 pub mod boot_guard;
 pub mod boot_phase;
 pub mod boot_state;
+/// Fixed-capacity local cell lifecycle/IPC runtime; not a memory-isolation boundary.
 pub mod cell;
 pub mod compat;
 pub mod continuum;
