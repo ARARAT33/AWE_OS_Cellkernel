@@ -1339,7 +1339,10 @@ mod tests {
         cells.confirm_stopped(id, &mut processes).unwrap();
         assert_eq!(cells.cell(id).unwrap().state(), CellState::Stopped);
         assert!(processes.descriptor(ProcessId(1)).is_none());
-        assert_eq!(cells.remove(id, &processes), Err(CellError::OutstandingResources));
+        assert_eq!(
+            cells.remove(id, &processes),
+            Err(CellError::OutstandingResources)
+        );
         cells.release_memory(id, 512).unwrap();
         cells.remove(id, &processes).unwrap();
         assert!(cells.is_empty());
