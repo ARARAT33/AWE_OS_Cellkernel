@@ -1388,11 +1388,17 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            cells.send(CellSendRequest::new(channel, sender, ProcessId(2), 2, 10, [0; 4]), &processes),
+            cells.send(
+                CellSendRequest::new(channel, sender, ProcessId(2), 2, 10, [0; 4]),
+                &processes
+            ),
             Err(CellError::CallerMismatch)
         );
         assert_eq!(
-            cells.send(CellSendRequest::new(channel, broker, ProcessId(1), 2, 10, [0; 4]), &processes),
+            cells.send(
+                CellSendRequest::new(channel, broker, ProcessId(1), 2, 10, [0; 4]),
+                &processes
+            ),
             Err(CellError::UnauthorizedSender)
         );
 
@@ -1466,7 +1472,10 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            cells.send(CellSendRequest::new(channel, sender, ProcessId(3), 2, 1, [2, 0, 0, 0]), &processes),
+            cells.send(
+                CellSendRequest::new(channel, sender, ProcessId(3), 2, 1, [2, 0, 0, 0]),
+                &processes
+            ),
             Err(CellError::QuotaExceeded)
         );
         assert_eq!(cells.cell(sender).unwrap().usage().ipc_messages, 1);
