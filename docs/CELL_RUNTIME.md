@@ -83,3 +83,11 @@ Remote cells, network discovery, authenticated peer IPC, replay protection, dist
 - Workspace formatting, tests, Clippy, boot/QEMU and VirtIO workflows.
 
 A green build is not proof of memory isolation, remote security, durable storage or physical-hardware support.
+
+## Runtime integration boundary
+
+`ProcessManager::current_process_id()` is a fail-closed authority source, not proof that CellKernel has a live process-switch path. The repository audit for this change found no production call site that invokes `ProcessManager::mark_running`; the method is currently exercised by unit tests and CellManager tests. The separate `ExecutionCore` maintains its own scheduler/current-process state and is not yet unified with `ProcessManager`.
+
+The x86_64 context-switch preparation code and the current `SyscallContext` are also not yet connected to this CellManager path. `SyscallContext` currently receives a mutable process descriptor rather than a validated current-task token/address-space context. Therefore this CellManager remains a kernel library/runtime contract with unit-test evidence, not a boot-integrated userspace cell IPC service. Until a real context-switch completion path updates one authoritative process model and the syscall entry supplies that trusted context, IPC calls without a tracked current process deliberately fail with `ProcessStateMismatch`.
+
+Before enabling SMP, replace the single-current-process identity with per-CPU current-task state and synchronization. Before exposing cell operations to Ring 3, add per-process address spaces, user-pointer validation, and a versioned syscall contract.
