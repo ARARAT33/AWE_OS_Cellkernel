@@ -843,7 +843,10 @@ impl<const N: usize, const C: usize, const Q: usize, const S: usize> CellManager
         let process = processes
             .descriptor(cell.process)
             .ok_or(CellError::ProcessNotFound)?;
-        if process.state == ProcessState::Exited {
+        if !matches!(
+            process.state,
+            ProcessState::Runnable | ProcessState::Running | ProcessState::Blocked
+        ) {
             return Err(CellError::ProcessStateMismatch);
         }
         if health == CellHealth::Healthy {
@@ -1212,7 +1215,10 @@ impl<const N: usize, const C: usize, const Q: usize, const S: usize> CellManager
             let dependency_process = processes
                 .descriptor(dependency_cell.process)
                 .ok_or(CellError::ProcessNotFound)?;
-            if dependency_process.state == ProcessState::Exited {
+            if !matches!(
+                dependency_process.state,
+                ProcessState::Runnable | ProcessState::Running | ProcessState::Blocked
+            ) {
                 return Err(CellError::DependencyUnavailable);
             }
         }
