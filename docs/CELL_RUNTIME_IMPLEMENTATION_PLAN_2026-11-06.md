@@ -36,6 +36,21 @@
 - Run rustfmt, kernel/workspace tests, Clippy, and boot/QEMU workflows through GitHub Actions. Fix only failures reproduced by the workflow logs.
 - Update `docs/AI-DEVELOPMENT-LOG.md` with actual commit, changed files and real workflow outcomes.
 
+## P2 — Integrate the cell runtime with the OS service architecture
+
+1. Define a versioned cell syscall contract whose caller identity is derived from the trusted current-process dispatch context; do not accept a user-supplied PID as authority.
+2. Integrate `initd`/AWOSA service supervision with CellIds through that syscall contract, avoiding a second independent service lifecycle state machine.
+3. Connect CPU tick accounting to the scheduler and memory ownership/accounting to the physical/virtual allocator.
+4. Add end-to-end supervisor tests for dependency failure, transitive degradation, fresh-process restart and ordered recovery.
+
+## P3 — Continue the cross-subsystem audit
+
+- Harden netd socket/rule ID exhaustion and validate socket owners against process identities.
+- Add real NIC TX/RX and authenticated remote IPC only after local socket/driver contracts are executable.
+- Harden storaged volume/snapshot ID exhaustion and validate every volume reference; then implement actual block I/O, persistence and power-loss recovery.
+- Fix AYUI signed-coordinate/grid overflow with i64/checked arithmetic and boundary tests before integrating a hardware desktop.
+- Reconcile the legacy implementation matrix against `PRODUCT_READINESS.md` and `PRODUCT_GAP_MATRIX.md`.
+
 ## Explicit non-goals / limitations of this milestone
 
 - No per-process page tables, Ring-3 isolation or proof of memory isolation is introduced here.
@@ -59,9 +74,18 @@ The first local runtime implementation is now present in `kernel/src/cell.rs` an
 - [x] Regression tests for identity exhaustion, admission failures, process lifecycle, dependency ordering, transitive health degradation/recovery, exited-process health rejection, quota accounting, caller spoofing, IPC authorization and failure teardown.
 - [x] ABI and limitation documentation in `docs/CELL_RUNTIME.md`.
 
-### Pending validation
+### Validation checkpoint — source commit `2b16188c8472412de3c73a21246d9dfde02ffdf9`
 
-The branch PR has been opened as draft PR #58. GitHub Actions are running. No Rust test, Clippy, boot or QEMU result is considered passed until the corresponding workflow/job completes and its logs are inspected.
+- [x] Workspace compile and `cargo test --workspace`: 439 passed, 0 failed.
+- [x] `cargo fmt --all -- --check`.
+- [x] Workspace Clippy and UEFI loader quality gate.
+- [x] Cloud Security Gate and release-contract gate.
+- [x] QEMU ISO boot smoke and dedicated exception-injection self-test (exactly 1 test executed and passed).
+- [x] Multi-architecture image build and four AOSIN Linux/Windows GUI/CLI installer jobs.
+- [ ] VirtIO Runtime #354 was still at its QEMU/boot-tool installation step when the final log was written; no result is claimed.
+- [ ] Physical hardware validation remains unavailable.
+
+The final observed workflow evidence and the exact test-filter correction are recorded in `docs/AI-DEVELOPMENT-LOG.md`. Draft PR #58 remains open and unmerged.
 
 ### Known integration limits
 
