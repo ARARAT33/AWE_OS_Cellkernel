@@ -913,30 +913,94 @@ impl<const N: usize, const C: usize, const Q: usize, const S: usize>
         Ok(id)
     }
 
-    pub fn send(
+    pub fn send<const P: usize>(
         &mut self,
         channel_id: CellChannelId,
         sender: CellId,
         request_id: u64,
         opcode: u32,
         payload: [u64; 4],
-        processes: &ProcessManager<impl_process_capacity::Capacity>,
+        processes: &ProcessManager<P>,
     ) -> Result<(), CellError> {
-        let _ = (channel_id, sender, request_id, opcode, payload, processes);
-        Err(CellError::InvalidTransition)
+        if request_id == 0 || opcode == 0 {
+            return Err(CellError::InvalidRequest);
+        }
+        let channel_index = self
+            .channels
+            .iter()
+            .position(|channel| channel.map(|item| item.id) == Some(channel_id))
+            .ok_or(CellError::ChannelNotFound)?;
+        let mut channel = self.channels[channel_index].ok_or(CellError::ChannelNotFound)?;
+        if !channel.allows_sender(sender) {
+            return Err(CellError::UnauthorizedSender);
+        }
+        let sender_index = self.find_index(sender).ok_or(CellError::NotFound)?;
+        let receiver_index = self
+            .find_index(channel.receiver)
+            .ok_or(CellError::InvalidReceiver)?;
+        let mut sender_cell = self.cells[sender_index].ok_or(CellError::NotFound)?;
+        let receiver_cell = self.cells[receiver_index].ok_or(CellError::InvalidReceiver)?;
+        if sender_cell.state != CellState::Running
+            || !sender_cell.has_capability(KernelCapability::Ipc)
+        {
+            return Err(CellError::UnauthorizedSender);
+        }
+        if !cell_can_host_endpoint(receiver_cell.state)
+            || !receiver_cell.has_capability(KernelCapability::Ipc)
+        {
+            return Err(CellError::InvalidReceiver);
+        }
+        let sender_process = processes
+            .descriptor(sender_cell.process)
+            .ok_or(CellError::ProcessNotFound)?;
+        if sender_process.state != ProcessState::Running {
+            return Err(CellError::ProcessStateMismatch);
+        }
+        let receiver_process = processes
+            .descriptor(receiver_cell.process)
+            .ok_or(CellError::ProcessNotFound)?;
+        if receiver_process.state == ProcessState::Exited {
+            return Err(CellError::InvalidReceiver);
+        }
+        if channel.is_full() {
+            return Err(CellError::ChannelFull);
+        }
+        let next_ipc_usage = sender_cell
+            .usage
+            .ipc_messages
+            .checked_add(1)
+            .ok_or(CellError::QuotaExceeded)?;
+        if next_ipc_usage > sender_cell.quota.ipc_messages {
+            return Err(CellError::QuotaExceeded);
+        }
+        let message = CellMessage {
+            channel: channel_id,
+            sender,
+            receiver: channel.receiver,
+            interface: channel.interface,
+            request_id,
+            opcode,
+            payload,
+        };
+        channel.push(message)?;
+        self.channels[channel_index] = Some(channel);
+        sender_cell.usage.ipc_messages = next_ipc_usage;
+        self.cells[sender_index] = Some(sender_cell);
+        Ok(())
     }
 
-    pub fn receive(
+    pub fn receive<const P: usize>(
         &mut self,
         channel_id: CellChannelId,
         receiver: CellId,
+        processes: &ProcessManager<P>,
     ) -> Result<CellMessage, CellError> {
         let channel_index = self
             .channels
             .iter()
             .position(|channel| channel.map(|item| item.id) == Some(channel_id))
             .ok_or(CellError::ChannelNotFound)?;
-        let channel = self.channels[channel_index].as_mut().ok_or(CellError::ChannelNotFound)?;
+        let channel = self.channels[channel_index].ok_or(CellError::ChannelNotFound)?;
         if channel.receiver != receiver {
             return Err(CellError::InvalidReceiver);
         }
@@ -946,7 +1010,16 @@ impl<const N: usize, const C: usize, const Q: usize, const S: usize>
         {
             return Err(CellError::InvalidReceiver);
         }
-        channel.pop()
+        let receiver_process = processes
+            .descriptor(receiver_cell.process)
+            .ok_or(CellError::ProcessNotFound)?;
+        if receiver_process.state != ProcessState::Running {
+            return Err(CellError::ProcessStateMismatch);
+        }
+        let mut channel = channel;
+        let message = channel.pop()?;
+        self.channels[channel_index] = Some(channel);
+        Ok(message)
     }
 
     /// Remove all channels owned by the stopped receiver and revoke a failed
@@ -1064,8 +1137,8 @@ mod tests {
         )
     }
 
-    fn start_cell<const N: usize>(
-        cells: &mut CellManager<N>,
+    fn start_cell<const N: usize, const C: usize, const Q: usize, const S: usize>(
+        cells: &mut CellManager<N, C, Q, S>,
         processes: &mut ProcessManager<N>,
         id: CellId,
     ) {
@@ -1222,7 +1295,7 @@ mod tests {
         sender_spec.add_interface(CellInterface::new(7, 1, 3)).unwrap();
         let sender = cells.register(sender_spec, &processes).unwrap();
 
-        cells.admit(broker).unwrap();
+        start_cell(&mut cells, &mut processes, broker);
         cells.admit(receiver).unwrap();
         cells.admit(sender).unwrap();
         let channel = cells
@@ -1249,7 +1322,7 @@ mod tests {
         cells.begin_start(receiver, &mut processes).unwrap();
         processes.mark_running(ProcessId(2)).unwrap();
         cells.confirm_running(receiver, &processes).unwrap();
-        let message = cells.receive(channel, receiver).unwrap();
+        let message = cells.receive(channel, receiver, &processes).unwrap();
         assert_eq!(message.sender, sender);
         assert_eq!(message.receiver, receiver);
         assert_eq!(message.interface, CellInterface::new(7, 1, 2));
@@ -1276,15 +1349,28 @@ mod tests {
                 &processes,
             )
             .unwrap();
-        let receiver = cells.register(spec(2, IPC_CAPS, 1), &processes).unwrap();
+        let mut receiver_spec = spec(2, IPC_CAPS, 1);
+        receiver_spec.add_interface(CellInterface::new(11, 1, 0)).unwrap();
+        let receiver = cells.register(receiver_spec, &processes).unwrap();
         let mut sender_spec = spec(3, IPC_CAPS, 1);
-        sender_spec.quota.ipc_messages;
+        sender_spec.quota = CellQuota::new(20, 4096, 1);
+        sender_spec.add_interface(CellInterface::new(11, 1, 0)).unwrap();
         let sender = cells.register(sender_spec, &processes).unwrap();
-        cells.admit(broker).unwrap();
+
+        start_cell(&mut cells, &mut processes, broker);
         cells.admit(receiver).unwrap();
         cells.admit(sender).unwrap();
-        let channel = cells.create_channel(broker, receiver, &[sender], 0);
-        assert_eq!(channel, Err(CellError::InvalidInterface));
+        let channel = cells.create_channel(broker, receiver, &[sender], 11).unwrap();
+        cells.begin_start(sender, &mut processes).unwrap();
+        processes.mark_running(ProcessId(3)).unwrap();
+        cells.confirm_running(sender, &processes).unwrap();
+
+        cells.send(channel, sender, 1, 1, [1, 0, 0, 0], &processes).unwrap();
+        assert_eq!(
+            cells.send(channel, sender, 2, 1, [2, 0, 0, 0], &processes),
+            Err(CellError::QuotaExceeded)
+        );
+        assert_eq!(cells.cell(sender).unwrap().usage().ipc_messages, 1);
     }
 
     #[test]
@@ -1307,22 +1393,21 @@ mod tests {
                 &processes,
             )
             .unwrap();
-        let receiver = cells.register(spec(2, IPC_CAPS, 1), &processes).unwrap();
+        let mut receiver_spec = spec(2, IPC_CAPS, 1);
+        receiver_spec.add_interface(CellInterface::new(9, 1, 0)).unwrap();
+        let receiver = cells.register(receiver_spec, &processes).unwrap();
         let mut sender_spec = spec(3, IPC_CAPS, 0);
         sender_spec.add_interface(CellInterface::new(9, 1, 0)).unwrap();
         let sender = cells.register(sender_spec, &processes).unwrap();
-        let mut receiver_spec = spec(2, IPC_CAPS, 1);
-        receiver_spec.add_interface(CellInterface::new(9, 1, 0)).unwrap();
-        // Replace the receiver's initial declaration with an independent
-        // manager in this test so the channel interface is explicit.
-        let _ = receiver_spec;
-        cells.admit(broker).unwrap();
+
+        start_cell(&mut cells, &mut processes, broker);
         cells.admit(receiver).unwrap();
         cells.admit(sender).unwrap();
-        let _ = cells.create_channel(broker, receiver, &[sender], 9);
+        let channel = cells.create_channel(broker, receiver, &[sender], 9).unwrap();
         cells.begin_start(sender, &mut processes).unwrap();
         processes.mark_running(ProcessId(3)).unwrap();
         cells.confirm_running(sender, &processes).unwrap();
+        cells.send(channel, sender, 1, 1, [9, 0, 0, 0], &processes).unwrap();
 
         processes.exit(ProcessId(3)).unwrap();
         assert_eq!(
@@ -1334,5 +1419,13 @@ mod tests {
             Err(CellError::RestartLimitExceeded)
         );
         assert_eq!(cells.cell(sender).unwrap().health(), CellHealth::Faulted);
+
+        cells.begin_start(receiver, &mut processes).unwrap();
+        processes.mark_running(ProcessId(2)).unwrap();
+        cells.confirm_running(receiver, &processes).unwrap();
+        assert_eq!(
+            cells.receive(channel, receiver, &processes),
+            Err(CellError::ChannelNotFound)
+        );
     }
 }
