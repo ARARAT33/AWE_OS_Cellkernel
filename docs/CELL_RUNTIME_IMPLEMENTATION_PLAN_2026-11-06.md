@@ -21,6 +21,14 @@
 5. Enforce local cell IPC with explicit sender allowlists, receiver identity, interface ABI compatibility, bounded queues and per-sender IPC quota accounting. Tear down endpoints/messages when a cell stops or fails.
 6. Quarantine cells after the configured restart/failure threshold. A restart must bind a new, independently registered process; do not resurrect a stale process context.
 
+## P0.1 — Dependency lifecycle integrity (hardening pass)
+
+- Reject graceful provider shutdown while a dependent cell is Starting or Running.
+- Recheck dependencies at the final Running confirmation boundary, not only when scheduling starts.
+- When a provider fails unexpectedly, mark active dependents Degraded so supervision can react.
+- Permit a Degraded dependent to return to Healthy only after all dependencies are Running again.
+- Add regression tests for shutdown ordering, failure propagation and the begin-start/confirm-running race.
+
 ## P1 — Regression and validation
 
 - Unit tests for identity exhaustion, registration rejection, quotas, capability admission, dependency ordering, lifecycle/process-state synchronization, process reaping, restart limits, channel authorization, ABI mismatch, queue backpressure and endpoint teardown.
