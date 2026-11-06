@@ -870,3 +870,40 @@ The latest source-code commit remains `2b16188c8472412de3c73a21246d9dfde02ffdf9`
 6. Implement real block-device read/write, filesystem persistence and power-loss recovery in storaged.
 7. Add APIC/IOAPIC EOI, timer-driven preemption and per-CPU state before SMP.
 8. Fix AYUI coordinate/grid arithmetic and reconcile legacy implementation labels with executable evidence.
+
+---
+
+## Session 2026-11-06 (final) — PR #58 merge to main and post-merge state
+
+### Repository audit performed first
+
+- Confirmed `main` at `499ec2b` (post-merge CI confirmation for PR #57, all 6 workflows green) and the open draft PR #58 on branch `feat/cell-runtime-core-2026-11-06`.
+- Re-read the branch development log: the CellManager dependency-lifecycle hardening and the Cell ABI 1.1 trusted-IPC caller-identity work were complete on source head `1b068f84`, with all validations recorded honestly.
+- Verified the current PR head `982da63` check set: all 16 checks completed **success** (CI Pipeline, Quality Gate, Cloud Security Gate, VirtIO Runtime incl. QEMU boot, Bootable Image Pipeline incl. exception-injection selftest, Multi-Architecture Images, 4 AOSIN installers, clippy-report, CI Diagnostics, rustfmt bot). `mergeable_state` was `clean`, 0 commits behind main.
+
+### Action
+
+- Marked PR #58 ready for review and merged it into `main` as merge commit `ec2975f6c12fb63fbcab8961b62091d785f73e72` (merge commit, no force-push, no branch deletion).
+- Merged content: bounded local CellManager runtime with dependency lifecycle hardening, local bounded IPC with kernel-derived caller identity (Cell ABI 1.1), `ProcessManager::current_process_id()` authority accessor, the QEMU exception-test fully-qualified-name fix, and evidence-status warnings on the legacy implementation matrix.
+- Updated this log on `main` (documentation-only change, which also triggers the post-merge validation run on main).
+
+### Honest validation state
+
+- The 16-check green set was observed on PR head `982da63` before the merge; the post-merge `main` workflow run at `ec2975f` was still running when this entry was written and is **not yet claimed green**. The next session must confirm all 6 main-branch workflows (CI Pipeline, Quality Gate, Cloud Security Gate, VirtIO Runtime, Bootable Image Pipeline, Multi-Architecture Images) completed successfully before treating main as validated.
+- Scope of the merged runtime is unchanged and remains honestly bounded: local lifecycle and bounded IPC only. No memory isolation, per-process address spaces, Ring-3 execution, remote-cell transport, block read/write or durable filesystem I/O is claimed.
+
+### Unresolved issues (carried forward)
+
+- ProcessManager and ExecutionCore/Dispatcher still maintain separate process/scheduler state; the real x86_64 context-switch completion path does not call `mark_running`.
+- Syscall dispatch remains a placeholder surface (fake IPC/Map/Read/Write, raw-pointer dereferences without a validated user address space).
+- No per-process page tables, APIC/IOAPIC runtime, timer-driven preemption, FPU/XSAVE ownership, quota charging integration, or initd/AWOSA-to-CellManager supervision binding.
+- netd/storaged ID-exhaustion and owner-validation hardening, AYUI coordinate/grid overflow fixes, and legacy implementation-matrix reconciliation remain open.
+- Stale open PRs #55, #53, #52, #50, #48 still need re-evaluation against the restructured main.
+
+### Next session priorities
+
+1. Confirm all 6 main-branch workflows are green on `ec2975f`+; record the run numbers in this log.
+2. Unify ProcessManager and ExecutionCore around one authoritative process/scheduler model and wire the x86_64 context-switch completion path (`mark_running`), tested with two real contexts in QEMU.
+3. Make unimplemented syscalls fail closed; add per-process page tables and validated user-pointer access before any Ring-3 enable.
+4. Integrate initd/AWOSA service supervision with CellIds without duplicating lifecycle state, then design the versioned cell syscall contract.
+5. Continue APIC/IOAPIC EOI, timer-driven preemption, quota charging, and the netd/storaged/AYUI hardening list.
