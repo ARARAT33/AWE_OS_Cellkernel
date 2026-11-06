@@ -1,6 +1,6 @@
 # CellKernel Local Cell Runtime — ABI 1.0
 
-**Status:** implemented on `feat/cell-runtime-core-2026-11-06`; CI validation pending.  
+**Status:** implemented on `feat/cell-runtime-core-2026-11-06`; latest full validation is recorded in `docs/AI-DEVELOPMENT-LOG.md`.  
 **Scope:** bounded, local, process-backed cell lifecycle and IPC. This document does not claim per-cell memory isolation or distributed execution.
 
 ## Runtime contract
@@ -34,14 +34,14 @@ Declared -> Admitted -> Starting -> Running -> Stopping -> Stopped
 ```
 
 - `register` requires an existing `ProcessManager` process in `Created` state, a sufficient process budget, and granted capabilities containing every required capability.
-- Dependencies must already be registered. They must be admitted before a dependent cell is admitted and must be `Running` before the dependent is started. This registration order prevents cycles in this initial contract.
+- Dependencies must already be registered. They must be admitted before a dependent cell is admitted and must be both `Running` and `Healthy` before a dependent starts or is confirmed Running. This registration order prevents cycles in this initial contract.
 - `begin_start` calls `ProcessManager::make_runnable` first. The cell remains `Admitted` if scheduler admission fails.
 - `confirm_running` publishes `Running` only after the bound process descriptor is `ProcessState::Running`.
 - `begin_stop` can cancel a `Starting` cell or stop a `Running` cell, but rejects a graceful provider shutdown with `DependencyInUse` while any dependent is `Starting` or `Running`. It exits the process and closes cell channels. `confirm_stopped` delegates reclamation to `ProcessManager::reap`; it therefore fails while the process is still current or queued.
-- `record_failure` exits the bound process, tears down channels, increments a non-wrapping failure counter and quarantines after the configured restart limit. An unexpected provider failure marks active dependent cells `Degraded`; their supervisors must stop or recover them.
+- `record_failure` exits the bound process, tears down channels, increments a non-wrapping failure counter and quarantines after the configured restart limit. An unexpected provider failure marks all active dependents `Degraded` transitively through the dependency DAG; their supervisors must stop or recover them.
 - `begin_stop` rejects a graceful provider shutdown with `DependencyInUse` while any dependent is `Starting` or `Running`. Stop dependents first, then their providers.
-- `confirm_running` revalidates dependencies after the process has actually entered `Running`, closing the race where a provider fails between `begin_start` and confirmation. A rejected confirmation leaves the cell in `Starting`; the supervisor must record failure or stop it.
-- A dependent can be marked `Healthy` again only after every declared dependency has returned to the `Running` cell state.
+- `confirm_running` revalidates dependency state and health after the process has actually entered `Running`, closing the race where a provider fails between `begin_start` and confirmation. A rejected confirmation leaves the cell in `Starting`; the supervisor can cancel it with `begin_stop` or record failure.
+- `set_health` verifies that the bound process has not exited. A dependent can return to `Healthy` only after every declared dependency is both `Running` and `Healthy`, in dependency order.
 - `rebind_process` accepts only a new `Created` process after the old process has been safely reaped. It never revives an old CPU context.
 
 The architecture/scheduler integration must call the confirmation methods only after the corresponding execution transition has actually completed.
@@ -75,7 +75,8 @@ Remote cells, network discovery, authenticated peer IPC, replay protection, dist
 
 - Identity exhaustion and non-reuse.
 - Process existence/state, capability and quota admission failures.
-- Dependency admission/start ordering.
+- Dependency admission/start ordering, graceful shutdown ordering, transitive failure degradation and ordered recovery.
+- Health updates reject an exited bound process.
 - Process-backed start/stop and deferred process reaping.
 - Restart with a fresh process and quarantine threshold.
 - IPC caller spoof rejection, sender allowlist, interface compatibility, queue backpressure, quota accounting and endpoint teardown.
