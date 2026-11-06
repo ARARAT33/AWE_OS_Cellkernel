@@ -1378,12 +1378,7 @@ mod tests {
         cells.confirm_running(sender, &processes).unwrap();
         cells
             .send(
-                channel,
-                sender,
-                ProcessId(3),
-                1,
-                10,
-                [11, 12, 13, 14],
+                CellSendRequest::new(channel, sender, ProcessId(3), 1, 10, [11, 12, 13, 14]),
                 &processes,
             )
             .unwrap();
@@ -1462,12 +1457,7 @@ mod tests {
 
         cells
             .send(
-                channel,
-                sender,
-                ProcessId(3),
-                1,
-                1,
-                [1, 0, 0, 0],
+                CellSendRequest::new(channel, sender, ProcessId(3), 1, 1, [1, 0, 0, 0]),
                 &processes,
             )
             .unwrap();
@@ -1523,12 +1513,7 @@ mod tests {
         cells.confirm_running(sender, &processes).unwrap();
         cells
             .send(
-                channel,
-                sender,
-                ProcessId(3),
-                1,
-                1,
-                [9, 0, 0, 0],
+                CellSendRequest::new(channel, sender, ProcessId(3), 1, 1, [9, 0, 0, 0]),
                 &processes,
             )
             .unwrap();
