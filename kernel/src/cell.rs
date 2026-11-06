@@ -1683,13 +1683,13 @@ mod tests {
             Err(CellError::UnauthorizedSender)
         );
 
-        cells.begin_start(receiver, &mut processes).unwrap();
-        processes.mark_running(ProcessId(2)).unwrap();
-        cells.confirm_running(receiver, &processes).unwrap();
         assert_eq!(
             cells.receive(channel, receiver, &processes),
             Err(CellError::CallerMismatch)
         );
+        cells.begin_start(receiver, &mut processes).unwrap();
+        processes.mark_running(ProcessId(2)).unwrap();
+        cells.confirm_running(receiver, &processes).unwrap();
         let message = cells.receive(channel, receiver, &processes).unwrap();
         assert_eq!(message.sender, sender);
         assert_eq!(message.receiver, receiver);
