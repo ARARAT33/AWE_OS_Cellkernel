@@ -1341,14 +1341,7 @@ mod tests {
         cells.admit(receiver).unwrap();
         cells.admit(sender).unwrap();
         assert_eq!(
-            cells.create_channel(
-                broker,
-                ProcessId(99),
-                receiver,
-                &[sender],
-                7,
-                &processes
-            ),
+            cells.create_channel(broker, ProcessId(99), receiver, &[sender], 7, &processes),
             Err(CellError::CallerMismatch)
         );
         let channel = cells
@@ -1359,7 +1352,15 @@ mod tests {
         processes.mark_running(ProcessId(3)).unwrap();
         cells.confirm_running(sender, &processes).unwrap();
         cells
-            .send(channel, sender, ProcessId(3), 1, 10, [11, 12, 13, 14], &processes)
+            .send(
+                channel,
+                sender,
+                ProcessId(3),
+                1,
+                10,
+                [11, 12, 13, 14],
+                &processes,
+            )
             .unwrap();
         assert_eq!(
             cells.send(channel, sender, ProcessId(2), 2, 10, [0; 4], &processes),
@@ -1429,7 +1430,15 @@ mod tests {
         cells.confirm_running(sender, &processes).unwrap();
 
         cells
-            .send(channel, sender, ProcessId(3), 1, 1, [1, 0, 0, 0], &processes)
+            .send(
+                channel,
+                sender,
+                ProcessId(3),
+                1,
+                1,
+                [1, 0, 0, 0],
+                &processes,
+            )
             .unwrap();
         assert_eq!(
             cells.send(
@@ -1487,7 +1496,15 @@ mod tests {
         processes.mark_running(ProcessId(3)).unwrap();
         cells.confirm_running(sender, &processes).unwrap();
         cells
-            .send(channel, sender, ProcessId(3), 1, 1, [9, 0, 0, 0], &processes)
+            .send(
+                channel,
+                sender,
+                ProcessId(3),
+                1,
+                1,
+                [9, 0, 0, 0],
+                &processes,
+            )
             .unwrap();
 
         processes.exit(ProcessId(3)).unwrap();
