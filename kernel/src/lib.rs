@@ -19,6 +19,7 @@ pub mod arch;
 pub mod boot_guard;
 pub mod boot_phase;
 pub mod boot_state;
+pub mod cell;
 pub mod compat;
 pub mod continuum;
 pub mod device;
