@@ -1610,10 +1610,11 @@ mod tests {
 
     #[test]
     fn channel_requires_security_broker_and_compatible_interfaces() {
-        let mut processes = ProcessManager::<3>::new();
+        let mut processes = ProcessManager::<4>::new();
         register_process(&mut processes, 1, process_budget());
         register_process(&mut processes, 2, process_budget());
         register_process(&mut processes, 3, process_budget());
+        register_process(&mut processes, 4, process_budget());
         let mut cells = CellManager::<3, 2, 2, 2>::new();
         let broker = cells
             .register(
@@ -1639,11 +1640,14 @@ mod tests {
             .unwrap();
         let sender = cells.register(sender_spec, &processes).unwrap();
 
-        start_cell(&mut cells, &mut processes, broker);
+        cells.admit(broker).unwrap();
+        cells.begin_start(broker, &mut processes).unwrap();
+        processes.mark_running(ProcessId(1)).unwrap();
+        cells.confirm_running(broker, &processes).unwrap();
         cells.admit(receiver).unwrap();
         cells.admit(sender).unwrap();
-        processes.make_runnable(ProcessId(2)).unwrap();
-        processes.mark_running(ProcessId(2)).unwrap();
+        processes.make_runnable(ProcessId(4)).unwrap();
+        processes.mark_running(ProcessId(4)).unwrap();
         assert_eq!(
             cells.create_channel(broker, receiver, &[sender], 7, &processes),
             Err(CellError::CallerMismatch)
