@@ -1390,10 +1390,12 @@ mod tests {
             height: 100,
         };
         // The right/bottom edges exceed i32::MAX; the hit test must still be
-        // correct and must not overflow.
+        // correct and must not overflow. i32::MAX lies inside the rect
+        // because its edges extend beyond the representable maximum.
         assert!(r.contains(i32::MAX - 1, i32::MAX - 1));
+        assert!(r.contains(i32::MAX, i32::MAX));
         assert!(!r.contains(0, 0));
-        assert!(!r.contains(i32::MAX, i32::MAX));
+        assert!(!r.contains(i32::MIN, i32::MIN));
 
         let mut snapped = Rect {
             x: i32::MIN + 1,
@@ -1404,9 +1406,10 @@ mod tests {
         snapped.snap_to_grid(16);
         // The y result exceeds i32::MAX before clamping and must saturate.
         assert_eq!(snapped.y, i32::MAX);
-        assert!(snapped.x >= i32::MIN && snapped.x <= i32::MAX);
+        // The x result stays representable: truncating division gives
+        // -134217727 * 16 = -2147483632, inside the i32 range.
+        assert_eq!(snapped.x, -2147483632);
     }
-
     #[test]
     fn fill_rect_extreme_bounds_do_not_panic() {
         let mut buf = [0u8; 16 * 16 * 4];
