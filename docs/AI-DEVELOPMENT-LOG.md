@@ -965,3 +965,90 @@ All seven main-push workflows completed successfully on 2026-11-07:
 3. Only then implement real Yield/Exit/IPC/Map/Unmap/Read/Write handlers through trusted process, capability and memory interfaces.
 4. Bind initd/AWOSA supervision to CellIds and real process lifecycle without duplicating state.
 5. Continue APIC/IOAPIC, timer-driven quota accounting, actual VirtIO block I/O, NIC TX/RX and netd/storaged ID/ownership hardening.
+
+---
+
+## Session 2026-11-07 (continued) — netd ID/ownership and AYUI coordinate-overflow hardening
+
+### Repository audit performed first
+
+- `main` was at `9ccddf26` (docs: record 2026-11-07 syscall hardening); the
+  2026-11-07 session had already made the general syscall dispatcher fail
+  closed with all seven main-push workflows green.
+- Carried-forward P2 priorities from `docs/AI-DEVELOPMENT-PLAN-2026-11-07.md`
+  included netd ID-exhaustion/ownership hardening and the AYUI coordinate/grid
+  overflow fixes. `storaged` hardening remains open.
+- Confirmed in code: `netd`'s `create_socket`/`add_firewall_rule` incremented
+  their u32 counters unchecked (wrapping back to previously issued IDs),
+  accepted owner PID 0 without validation, and had no ownership-checked socket
+  close path. AYUI's `Rect::contains`, `snap_to_grid`, `fill_rect`,
+  `draw_hline`/`draw_vline`/`draw_rect`, window-drag movement, titlebar
+  hit tests and `center_window` all performed unchecked i32 addition that
+  overflows for windows parked at extreme coordinates.
+
+### Work done (branch `feat/netd-ayui-hardening-2026-11-07`, PR #59)
+
+- `services/netd/src/lib.rs`:
+  - Socket and firewall-rule IDs are now allocated with `checked_add` plus a
+    nonzero sentinel; exhaustion fails closed with explicit errors instead of
+    wrapping back to previously issued IDs.
+  - `create_socket` rejects the reserved owner PID 0. netd is a standalone
+    no_std table manager without access to the kernel process table, so full
+    owner-liveness validation remains a future integration task and is not
+    claimed.
+  - New `close_socket(socket_id, owner_pid)` removes a socket only when the
+    caller matches the registered owner and frees the table slot.
+  - `add_firewall_rule` rejects inverted port ranges.
+  - Five new regression tests covering exhaustion (fail-closed, no wrap),
+    PID-0/inverted-range rejection without ID consumption, and close-socket
+    ownership enforcement.
+- `services/ayui/src/lib.rs`:
+  - `Rect::contains`/`snap_to_grid` use i64 intermediates with i32 clamping;
+    extreme coordinates saturate instead of overflowing.
+  - `Framebuffer::fill_rect`, `draw_hline`, `draw_vline`, `draw_rect` use
+    checked/i64 edge arithmetic; rects at `i32::MAX`/`i32::MIN` no longer
+    overflow.
+  - Window drag uses `saturating_add`; titlebar close/minimize hit tests in
+    `push_input` and the render path, and `center_window`, use i64
+    intermediates with clamping.
+  - Three new regression tests: extreme-coordinate hit test and grid snap
+    (including saturation to `i32::MAX`), off-screen `fill_rect` without
+    panic, and drag saturation at `i32::MAX`.
+- Commits: `2652d40` (both crates + tests), `1054e55` (rustfmt bot,
+  formatting only), this documentation commit.
+
+### Honest validation state
+
+- The first CI cycle on code head `2652d40` started (15 checks) but was
+  superseded when the rustfmt bot pushed formatting commit `1054e55`, whose
+  GITHUB_TOKEN push did not trigger workflows (0 check runs on that head).
+  This user-authored documentation commit triggers the full validation run on
+  the formatted tree.
+- No green result is claimed yet for this PR. The PR will not be merged until
+  the complete check set (CI pipeline, quality gate, clippy, cloud security,
+  boot-image QEMU smoke, exception-injection selftest, VirtIO QEMU runtime,
+  multi-arch images, AOSIN installers, diagnostics) completes successfully on
+  the final head; results will be recorded in the next log entry.
+- No local Rust/QEMU toolchain and no physical hardware were available; all
+  validation comes from GitHub Actions.
+
+### Unresolved issues
+
+- `storaged` volume/snapshot ID exhaustion and owner validation hardening
+  is still open (next P2 candidate).
+- netd owner PID validation is a syntactic (PID != 0) check only; binding it
+  to the live kernel process table requires the P1 unified execution-authority
+  work.
+- No NIC TX/RX, block I/O, per-process address spaces or Ring-3 execution is
+  claimed; the P1 execution-authority and address-space priorities remain
+  unchanged.
+
+### Next session priorities
+
+1. Confirm PR #59's full check set is green; merge after review and confirm
+   main CI.
+2. storaged ID/ownership hardening with regression tests.
+3. P1: unify ProcessManager/ExecutionCore behind one authoritative
+   current-task model and wire the real x86_64 context-switch completion.
+4. P1: per-process page tables and validated user-memory copy paths before
+   any Ring-3 enable.
