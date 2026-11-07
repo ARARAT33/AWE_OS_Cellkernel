@@ -47,3 +47,17 @@
 ## Validation policy
 
 Run the repository's real CI on `main`: workspace check/tests, rustfmt, Clippy, UEFI loader, boot-image/QEMU smoke, exception self-test, VirtIO QEMU boot, security and multi-architecture image jobs. Report exact outcomes. A compile or image build is not proof of hardware support, process isolation, network I/O or storage durability. No physical hardware validation is claimed.
+
+
+## Implementation checkpoint — 2026-11-07
+
+- [x] P0.1: added `ERR_NOT_IMPLEMENTED` and made all nine recognized general syscall IDs fail closed.
+- [x] P0.2: removed unchecked Read/Write pointer access and fake IPC, mapping, initrd and process-state side effects.
+- [x] P0.3: added regression coverage for hostile pointer/length inputs and verified that process state and all resource budgets remain unchanged.
+- [x] P0.4: documented the bootstrap/general syscall distinction and the Ring-3 integration gate.
+- [x] P0.5: committed directly to `main` at `576d35dc2415132caf9b85f189918f582062b8f9`.
+- [x] CI validation: all seven main-push workflows passed (CI #379, Quality #1019, Cloud Security #964, VirtIO #372, Bootable Image #990, Multi-Arch #293, AOSIN #331). Exact evidence and scope limits are recorded in `docs/AI-DEVELOPMENT-LOG.md`.
+- [ ] P1 remains open: unify ProcessManager/ExecutionCore and connect authoritative identity to completed x86_64 context switches.
+- [ ] P1 remains open: per-process address spaces and validated user-memory access before enabling general Ring-3 applications.
+
+This checkpoint does not claim a complete syscall runtime, process isolation, durable storage, network I/O, ARM64/RISC-V runtime support or physical-hardware validation.

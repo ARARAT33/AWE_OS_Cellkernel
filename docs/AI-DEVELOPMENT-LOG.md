@@ -907,3 +907,61 @@ The latest source-code commit remains `2b16188c8472412de3c73a21246d9dfde02ffdf9`
 3. Make unimplemented syscalls fail closed; add per-process page tables and validated user-pointer access before any Ring-3 enable.
 4. Integrate initd/AWOSA service supervision with CellIds without duplicating lifecycle state, then design the versioned cell syscall contract.
 5. Continue APIC/IOAPIC EOI, timer-driven preemption, quota charging, and the netd/storaged/AYUI hardening list.
+
+
+---
+
+## Session 2026-11-07 — fail-closed general syscall dispatcher
+
+### Repository audit and branch discipline
+
+- Inspected the repository tree (454 entries), the 29-member Rust workspace, boot/kernel/process/memory/syscall/service paths, the latest 12 commits, branch list, open PRs and recent Actions runs.
+- Started from `main` at `2f76706592bd19ff43f9a08e5ab788eb191afe0c`. Added the prioritized plan in commit `448bee8590ec7f8d3b9938943c1cfa4be0318cfd`, then committed implementation directly to `main` as `576d35dc2415132caf9b85f189918f582062b8f9`.
+- No feature branch or PR was created or used; no existing branch, PR or commit was deleted or rewritten. The remote `main` ref was advanced with a non-force, expected-SHA update.
+- The previous main head's seven latest workflow runs were all green. The latest source integration was PR #58's bounded local CellManager runtime and Cell ABI 1.1 trusted IPC identity. Open PRs #55, #53, #52, #50, #48, #36 and #34 were left untouched because they predate the current architecture.
+
+### Priority selected
+
+The syscall dispatcher still returned fake success for IPC and page mappings, mutated a borrowed process descriptor for Yield/Exit, returned a hard-coded initrd marker, and dereferenced caller-provided Read/Write pointers without a validated address-space contract. The general syscall entry is not wired to a trusted process-manager/address-space context. This was a security boundary defect, so general syscall functionality was disabled rather than pretending those operations worked.
+
+### Implementation
+
+- `kernel/src/syscall/abi.rs`
+  - Added stable `ERR_NOT_IMPLEMENTED = 6` for recognized ABI calls whose runtime contract is not available.
+  - Added test-friendly Debug/Eq derives to the syscall/result value types.
+- `kernel/src/syscall/dispatch.rs`
+  - Known syscall IDs now return `ERR_NOT_IMPLEMENTED`; unknown IDs return `ERR_INVALID_ARGUMENT`.
+  - Removed fake IPC and Map/Unmap success, direct process-state mutation, the fake initrd Read payload and all unchecked Read/Write pointer dereferences.
+  - Added a regression test that exercises all nine known syscall IDs with hostile pointer/length values and verifies zero return value, explicit not-implemented status, and unchanged process state/resource budgets.
+- `kernel/src/syscall/mod.rs`: re-exported the new ABI error code.
+- `docs/CELL_RUNTIME.md`: corrected the runtime status to main and documented the general syscall fail-closed boundary and Ring-3 restrictions.
+- `docs/AI-DEVELOPMENT-PLAN-2026-11-07.md`: records the audit, priorities and validation checkpoint.
+
+### Exact validation on source commit `576d35dc2415132caf9b85f189918f582062b8f9`
+
+All seven main-push workflows completed successfully on 2026-11-07:
+
+- **AWEOS CI Pipeline #379** — success. `cargo check --workspace --all-targets`, `cargo test --workspace` (435 passed / 0 failed across the emitted test suites), `cargo fmt --all --check`, boot-image build and artifact verification passed. The log explicitly shows `syscall::dispatch::tests::every_known_syscall_fails_closed_without_side_effects` passing.
+- **AWEOS Quality Gate #1019** — success. Workspace check, formatting, tests, product-core acceptance tests and workspace Clippy (`-D warnings`, with the workflow's documented allow-list) passed; UEFI loader check for `x86_64-unknown-uefi` passed. The quality log also shows 11 product-core tests passed in its dedicated acceptance step.
+- **AWEOS Cloud Security Gate #964** — both cloud-security and release-contract jobs passed.
+- **AWEOS Bootable Image Pipeline #990** — boot image/Multiboot2 validation and QEMU ISO smoke passed; the serial assertion observed `AWEOS: kernel is alive` and the job reported `ISO Boot Successful!`. The separate QEMU exception-injection self-test ran exactly one test and passed (1 passed / 0 failed).
+- **AWEOS VirtIO Runtime #372** — formatting and 435 workspace tests passed; kernel build and ELF validation passed; QEMU exposed `virtio-blk-pci` and booted the kernel with a VirtIO block device attached, observing `AWEOS: kernel is alive`. This does **not** prove block read/write, filesystem persistence or power-loss recovery.
+- **AWEOS Multi-Architecture Images #293** — image build and artifact verification passed; this is not ARM64/RISC-V runtime certification.
+- **AOSIN Cross-Platform Installers #331** — all four Linux/Windows GUI/CLI installer builds passed.
+- No physical hardware test was performed. The product-core workspace test step skipped its optional emulator path because QEMU/GRUB ISO tools were unavailable in that specific step; separate boot-image and VirtIO workflows did run QEMU successfully.
+
+### Remaining risks
+
+- `ProcessManager`, `ExecutionCore` and the architecture switch path still do not share one proven authoritative current-task model; no production `mark_running` call site was found.
+- The bootstrap hello syscall remains a separate early boot smoke-test handshake; it is not a general syscall ABI.
+- No per-process page tables, validated user-pointer copy path, general Ring-3 application runtime, syscall-level object capabilities, APIC/IOAPIC preemption, or SMP current-task identity.
+- CellManager remains a bounded local runtime contract, not yet boot/syscall integrated; remote cells and authenticated distributed IPC remain unimplemented.
+- VirtIO QEMU boot with an attached device is not evidence of actual block I/O or durable storage. Network TX/RX, broad hardware drivers and desktop integration remain unproven.
+
+### Next priorities
+
+1. Unify `ProcessManager` and `ExecutionCore` behind one authoritative process/scheduler state and publish current identity only after a real architecture switch completes.
+2. Implement per-process page-table roots and validated user-memory copy operations; keep Ring 3 general applications disabled until QEMU permission/isolation tests pass.
+3. Only then implement real Yield/Exit/IPC/Map/Unmap/Read/Write handlers through trusted process, capability and memory interfaces.
+4. Bind initd/AWOSA supervision to CellIds and real process lifecycle without duplicating state.
+5. Continue APIC/IOAPIC, timer-driven quota accounting, actual VirtIO block I/O, NIC TX/RX and netd/storaged ID/ownership hardening.
