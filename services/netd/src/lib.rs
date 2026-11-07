@@ -273,14 +273,12 @@ mod tests {
         let mut netd = NetworkDaemon::new();
         netd.rule_counter = u32::MAX - 1;
         assert_eq!(
-            netd
-                .add_firewall_rule(None, 1, 100, FirewallAction::Allow)
+            netd.add_firewall_rule(None, 1, 100, FirewallAction::Allow)
                 .unwrap(),
             u32::MAX - 1
         );
         assert!(
-            netd
-                .add_firewall_rule(None, 1, 100, FirewallAction::Allow)
+            netd.add_firewall_rule(None, 1, 100, FirewallAction::Allow)
                 .is_err()
         );
     }
@@ -290,15 +288,13 @@ mod tests {
         let mut netd = NetworkDaemon::new();
         assert!(netd.create_socket(SocketProtocol::Udp, 0).is_err());
         assert!(
-            netd
-                .add_firewall_rule(None, 100, 1, FirewallAction::Allow)
+            netd.add_firewall_rule(None, 100, 1, FirewallAction::Allow)
                 .is_err()
         );
         // Neither rejection consumed an ID.
         assert_eq!(netd.create_socket(SocketProtocol::Udp, 5).unwrap(), 1);
         assert_eq!(
-            netd
-                .add_firewall_rule(None, 1, 100, FirewallAction::Allow)
+            netd.add_firewall_rule(None, 1, 100, FirewallAction::Allow)
                 .unwrap(),
             1
         );
