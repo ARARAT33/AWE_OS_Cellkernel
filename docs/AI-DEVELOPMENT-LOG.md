@@ -1052,3 +1052,12 @@ All seven main-push workflows completed successfully on 2026-11-07:
    current-task model and wire the real x86_64 context-switch completion.
 4. P1: per-process page tables and validated user-memory copy paths before
    any Ring-3 enable.
+
+
+## 2026-11-07 20:37 — PR #59 final validation and merge to main
+
+- **Merged**: PR #59 (netd ID-exhaustion/ownership + AYUI coordinate-overflow hardening) into main as merge commit `1e00abc42b02e0765d46581587b21b8bee77c0d7` (merge method: merge, no force-push; branch `feat/netd-ayui-hardening-2026-11-07` preserved).
+- **CI on merged head `ac1815e`**: all 16 checks green — workspace compilation and tests (including all new netd/ayui regression tests), clippy, cloud-security, cloud-release-contract, UEFI loader, QEMU boot smoke, exception-injection selftest, virtio-block-contract-and-qemu, multi-arch images, all 4 AOSIN installers, diagnostics and rustfmt bot.
+- **In-session test bug fixed**: one AYUI rect test asserted `!contains(i32::MAX, i32::MAX)` although that point is inside the rect, and a clippy `comparison_with_min_or_max` assert was present; both corrected in `ac1815e`, after which clippy and all tests turned green.
+- **Known scope limits (honest)**: no NIC TX/RX runtime, no real block I/O, no Ring-3 userspace, no per-process address spaces; netd owner validation is syntactic (PID != 0) only. Nothing beyond the audited changes is claimed.
+- **Next session priorities**: (1) storaged volume/snapshot ID-exhaustion and ownership hardening with tests; (2) P1: unify ProcessManager/ExecutionCore behind one authoritative current-task model and wire the real x86_64 context-switch completion (`mark_running`); (3) P1: per-process page tables and validated user-memory copy paths before Ring-3; (4) initd/AWOSA CellId binding; (5) re-evaluate stale PRs #55/#53/#52/#50/#48.
