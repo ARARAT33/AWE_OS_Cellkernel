@@ -28,17 +28,24 @@ impl Rect {
     }
 
     pub fn contains(&self, px: i32, py: i32) -> bool {
-        px >= self.x
-            && px < self.x + (self.width as i32)
-            && py >= self.y
-            && py < self.y + (self.height as i32)
+        // i64 intermediates: x + width cannot overflow for extreme coordinates.
+        let right = (self.x as i64) + (self.width as i64);
+        let bottom = (self.y as i64) + (self.height as i64);
+        (px as i64) >= (self.x as i64)
+            && (px as i64) < right
+            && (py as i64) >= (self.y as i64)
+            && (py as i64) < bottom
     }
 
     pub fn snap_to_grid(&mut self, grid_size: u32) {
         if grid_size > 0 {
-            let gs = grid_size as i32;
-            self.x = ((self.x + gs / 2) / gs) * gs;
-            self.y = ((self.y + gs / 2) / gs) * gs;
+            // i64 intermediates with i32 clamping: extreme coordinates
+            // saturate instead of overflowing.
+            let gs = grid_size as i64;
+            let sx = (((self.x as i64) + gs / 2) / gs) * gs;
+            let sy = (((self.y as i64) + gs / 2) / gs) * gs;
+            self.x = sx.clamp(i32::MIN as i64, i32::MAX as i64) as i32;
+            self.y = sy.clamp(i32::MIN as i64, i32::MAX as i64) as i32;
         }
     }
 }
@@ -461,7 +468,7 @@ impl<'a> Framebuffer<'a> {
             return;
         }
         let start_x = x.max(0) as u32;
-        let end_x = ((x + length as i32).max(0) as u32).min(self.width);
+        let end_x = (((x as i64) + (length as i64)).max(0) as u64).min(self.width as u64) as u32;
         for px in start_x..end_x {
             self.draw_pixel(px as i32, y, color);
         }
@@ -472,7 +479,7 @@ impl<'a> Framebuffer<'a> {
             return;
         }
         let start_y = y.max(0) as u32;
-        let end_y = ((y + length as i32).max(0) as u32).min(self.height);
+        let end_y = (((y as i64) + (length as i64)).max(0) as u64).min(self.height as u64) as u32;
         for py in start_y..end_y {
             self.draw_pixel(x, py as i32, color);
         }
@@ -509,25 +516,38 @@ impl<'a> Framebuffer<'a> {
             return;
         }
         self.draw_hline(rect.x, rect.y, rect.width, color);
-        self.draw_hline(rect.x, rect.y + (rect.height as i32) - 1, rect.width, color);
+        self.draw_hline(
+            rect.x,
+            rect.y.saturating_add(rect.height as i32).saturating_sub(1),
+            rect.width,
+            color,
+        );
         self.draw_vline(rect.x, rect.y, rect.height, color);
-        self.draw_vline(rect.x + (rect.width as i32) - 1, rect.y, rect.height, color);
+        self.draw_vline(
+            rect.x.saturating_add(rect.width as i32).saturating_sub(1),
+            rect.y,
+            rect.height,
+            color,
+        );
     }
 
     pub fn fill_rect(&mut self, rect: Rect, color: Color) {
-        if rect.x + (rect.width as i32) <= 0
-            || rect.y + (rect.height as i32) <= 0
-            || rect.x >= (self.width as i32)
-            || rect.y >= (self.height as i32)
+        // i64 intermediates: x + width / y + height cannot overflow for
+        // extreme coordinates, and the intersection is clamped to the
+        // framebuffer bounds before the u32 conversions.
+        let right = (rect.x as i64) + (rect.width as i64);
+        let bottom = (rect.y as i64) + (rect.height as i64);
+        if right <= 0
+            || bottom <= 0
+            || (rect.x as i64) >= (self.width as i64)
+            || (rect.y as i64) >= (self.height as i64)
         {
             return;
         }
         let start_x = rect.x.max(0) as u32;
         let start_y = rect.y.max(0) as u32;
-        let end_x = (rect.x + rect.width as i32).max(0) as u32;
-        let end_x = end_x.min(self.width);
-        let end_y = (rect.y + rect.height as i32).max(0) as u32;
-        let end_y = end_y.min(self.height);
+        let end_x = (right.max(0) as u64).min(self.width as u64) as u32;
+        let end_y = (bottom.max(0) as u64).min(self.height as u64) as u32;
 
         for y in start_y..end_y {
             for x in start_x..end_x {
@@ -829,8 +849,11 @@ impl Compositor {
     ) -> Result<(), UiError> {
         for win in self.windows.iter_mut().flatten() {
             if win.id == id {
-                win.bounds.x = ((screen_width as i32) - (win.bounds.width as i32)) / 2;
-                win.bounds.y = ((screen_height as i32) - (win.bounds.height as i32)) / 2;
+                // i64 intermediates: screen/window sizes cannot overflow i32.
+                win.bounds.x = (((screen_width as i64) - (win.bounds.width as i64)) / 2)
+                    .clamp(i32::MIN as i64, i32::MAX as i64) as i32;
+                win.bounds.y = (((screen_height as i64) - (win.bounds.height as i64)) / 2)
+                    .clamp(i32::MIN as i64, i32::MAX as i64) as i32;
                 return Ok(());
             }
         }
@@ -970,8 +993,8 @@ impl Compositor {
                 if is_down && (dx != 0 || dy != 0) {
                     for win in self.windows.iter_mut().flatten() {
                         if win.focused && win.visible && !win.minimized {
-                            win.bounds.x += dx;
-                            win.bounds.y += dy;
+                            win.bounds.x = win.bounds.x.saturating_add(dx);
+                            win.bounds.y = win.bounds.y.saturating_add(dy);
                             break;
                         }
                     }
@@ -991,13 +1014,16 @@ impl Compositor {
                         if win.visible && win.bounds.contains(x, y) {
                             let wid = win.id;
                             win_to_focus = Some(wid);
-                            let close_x = win.bounds.x + (win.bounds.width as i32) - 20;
-                            let min_x = win.bounds.x + (win.bounds.width as i32) - 40;
-                            if y >= win.bounds.y && y <= win.bounds.y + 24 {
-                                if x >= close_x {
+                            // i64 intermediates: x + width cannot overflow
+                            // for windows parked at extreme coordinates.
+                            let close_x = (win.bounds.x as i64) + (win.bounds.width as i64) - 20;
+                            let min_x = (win.bounds.x as i64) + (win.bounds.width as i64) - 40;
+                            let top = win.bounds.y as i64;
+                            if (y as i64) >= top && (y as i64) <= top + 24 {
+                                if (x as i64) >= close_x {
                                     win_to_destroy = Some(wid);
                                     break;
-                                } else if x >= min_x {
+                                } else if (x as i64) >= min_x {
                                     win.minimized = !win.minimized;
                                     break;
                                 }
@@ -1088,7 +1114,7 @@ impl Compositor {
                 // Window Content Body
                 let content_rect = Rect {
                     x: win.bounds.x,
-                    y: win.bounds.y + 24,
+                    y: win.bounds.y.saturating_add(24),
                     width: win.bounds.width,
                     height: win.bounds.height.saturating_sub(24),
                 };
@@ -1099,8 +1125,10 @@ impl Compositor {
                     core::str::from_utf8(&win.title_bytes[..win.title_len]).unwrap_or("App");
                 fb.draw_text(win.bounds.x + 8, win.bounds.y + 6, title_str, Color::WHITE);
 
-                let close_x = win.bounds.x + (win.bounds.width as i32) - 18;
-                let min_x = win.bounds.x + (win.bounds.width as i32) - 36;
+                let close_x = ((win.bounds.x as i64) + (win.bounds.width as i64) - 18)
+                    .clamp(i32::MIN as i64, i32::MAX as i64) as i32;
+                let min_x = ((win.bounds.x as i64) + (win.bounds.width as i64) - 36)
+                    .clamp(i32::MIN as i64, i32::MAX as i64) as i32;
                 fb.draw_text(min_x, win.bounds.y + 6, "-", Color::WHITE);
                 fb.draw_text(close_x, win.bounds.y + 6, "X", Color::RED);
             }
@@ -1351,5 +1379,87 @@ mod tests {
             .unwrap();
         let _ = c.destroy_window(win_id);
         assert_eq!(c.window_count(), 0);
+    }
+
+    #[test]
+    fn rect_arithmetic_survives_extreme_coordinates() {
+        let r = Rect {
+            x: i32::MAX - 1,
+            y: i32::MAX - 1,
+            width: 100,
+            height: 100,
+        };
+        // The right/bottom edges exceed i32::MAX; the hit test must still be
+        // correct and must not overflow.
+        assert!(r.contains(i32::MAX - 1, i32::MAX - 1));
+        assert!(!r.contains(0, 0));
+        assert!(!r.contains(i32::MAX, i32::MAX));
+
+        let mut snapped = Rect {
+            x: i32::MIN + 1,
+            y: i32::MAX - 1,
+            width: 8,
+            height: 8,
+        };
+        snapped.snap_to_grid(16);
+        // The y result exceeds i32::MAX before clamping and must saturate.
+        assert_eq!(snapped.y, i32::MAX);
+        assert!(snapped.x >= i32::MIN && snapped.x <= i32::MAX);
+    }
+
+    #[test]
+    fn fill_rect_extreme_bounds_do_not_panic() {
+        let mut buf = [0u8; 16 * 16 * 4];
+        let mut fb = Framebuffer {
+            width: 16,
+            height: 16,
+            stride: 16,
+            buffer: &mut buf,
+            gpu_accel: false,
+        };
+        // Both rects previously overflowed i32 arithmetic in fill_rect.
+        fb.fill_rect(
+            Rect {
+                x: i32::MAX - 4,
+                y: i32::MAX - 4,
+                width: 16384,
+                height: 16384,
+            },
+            Color::WHITE,
+        );
+        fb.fill_rect(
+            Rect {
+                x: i32::MIN,
+                y: i32::MIN,
+                width: 100,
+                height: 100,
+            },
+            Color::WHITE,
+        );
+        // Entirely off-screen rects draw nothing.
+        assert_eq!(buf[0], 0);
+    }
+
+    #[test]
+    fn pointer_drag_saturates_instead_of_overflowing() {
+        let mut c = Compositor::new();
+        let id = c
+            .create_window(Rect {
+                x: i32::MAX - 10,
+                y: 0,
+                width: 100,
+                height: 100,
+            })
+            .unwrap();
+        let _ = c.focus(id);
+        c.push_input(InputEvent::Pointer {
+            x: 1_048_576,
+            y: 10,
+            buttons: 1,
+        })
+        .unwrap();
+        let win = c.windows.iter().flatten().find(|w| w.id == id).unwrap();
+        // The drag delta would overflow i32; it must saturate instead.
+        assert_eq!(win.bounds.x, i32::MAX);
     }
 }
