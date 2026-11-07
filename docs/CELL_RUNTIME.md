@@ -1,6 +1,6 @@
 # CellKernel Local Cell Runtime — ABI 1.1
 
-**Status:** implemented on `feat/cell-runtime-core-2026-11-06`; latest full validation is recorded in `docs/AI-DEVELOPMENT-LOG.md`.  
+**Status:** bounded local CellManager runtime is merged on `main`; latest full validation is recorded in `docs/AI-DEVELOPMENT-LOG.md`.  
 **Scope:** bounded, local, process-backed cell lifecycle and IPC. This document does not claim per-cell memory isolation or distributed execution.
 
 ## Runtime contract
@@ -91,3 +91,25 @@ A green build is not proof of memory isolation, remote security, durable storage
 The x86_64 context-switch preparation code and the current `SyscallContext` are also not yet connected to this CellManager path. `SyscallContext` currently receives a mutable process descriptor rather than a validated current-task token/address-space context. Therefore this CellManager remains a kernel library/runtime contract with unit-test evidence, not a boot-integrated userspace cell IPC service. Until a real context-switch completion path updates one authoritative process model and the syscall entry supplies that trusted context, IPC calls without a tracked current process deliberately fail with `ProcessStateMismatch`.
 
 Before enabling SMP, replace the single-current-process identity with per-CPU current-task state and synchronization. Before exposing cell operations to Ring 3, add per-process address spaces, user-pointer validation, and a versioned syscall contract.
+
+## General syscall dispatcher status (2026-11-07)
+
+The numeric syscall IDs above are currently reserved ABI identifiers, not a
+claim that the corresponding operations are available to userspace.
+`SyscallContext::dispatch` validates whether a number is known and returns
+`ERR_NOT_IMPLEMENTED` for every known general syscall. It does not change
+process state, charge quotas, return fabricated IPC/mapping results, or access
+caller-provided memory.
+
+This fail-closed behavior is intentional. The existing dispatcher does not
+yet receive an authoritative current-task token, a process-manager operation
+interface, capability-checked IPC endpoints, or a validated per-process
+address space. In particular, no Read/Write pointer is dereferenced and no
+Map/Unmap request is treated as successful. Unknown syscall numbers return
+`ERR_INVALID_ARGUMENT`.
+
+The x86_64 `BOOTSTRAP_HELLO_SYSCALL` remains a separate early boot smoke-test
+handshake; it is not the general syscall ABI and must not be treated as a
+production userspace service interface. General Ring-3 applications remain
+disabled until context-switch completion, current-task authority, user-memory
+validation and syscall-level capability checks are implemented and tested.

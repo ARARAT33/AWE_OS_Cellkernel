@@ -4,8 +4,8 @@ pub mod abi;
 pub mod dispatch;
 
 pub use abi::{
-    ERR_BUSY, ERR_INVALID_ARGUMENT, ERR_NO_MEMORY, ERR_NOT_FOUND, ERR_OK, ERR_PERMISSION, Syscall,
-    SyscallResult,
+    ERR_BUSY, ERR_INVALID_ARGUMENT, ERR_NO_MEMORY, ERR_NOT_FOUND, ERR_NOT_IMPLEMENTED, ERR_OK,
+    ERR_PERMISSION, Syscall, SyscallResult,
 };
 pub use dispatch::SyscallContext;
 
@@ -87,9 +87,6 @@ pub unsafe fn init_msr_syscall(syscall_handler_address: u64, kernel_cs: u16, use
         let sysret_base = sysret_selector_base(user_cs);
         let star = ((sysret_base as u64) << 48) | ((kernel_cs as u64) << 32);
         write_msr(IA32_STAR_MSR, star);
-
-        // LSTAR: trusted kernel syscall entry, not the user entry function.
-        write_msr(IA32_LSTAR_MSR, syscall_handler_address);
 
         // Mask IF while the single-CPU syscall entry is using its kernel stack.
         write_msr(IA32_FMASK_MSR, 0x200);

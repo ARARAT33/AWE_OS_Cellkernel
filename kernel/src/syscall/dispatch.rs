@@ -1,96 +1,53 @@
 #![no_std]
-use super::abi::{ERR_INVALID_ARGUMENT, ERR_OK, ERR_PERMISSION, Syscall, SyscallResult};
-use crate::process::{ProcessDescriptor, ProcessState};
+
+use super::abi::{ERR_INVALID_ARGUMENT, ERR_NOT_IMPLEMENTED, Syscall, SyscallResult};
+use crate::process::ProcessDescriptor;
+
+/// Kernel-side syscall context placeholder.
+///
+/// This type is retained as an internal integration seam, but it is not a
+/// trusted syscall context: it contains neither an authoritative current-task
+/// token nor a validated user address space. Consequently, dispatch accepts
+/// no general syscall yet and must fail closed for every known operation.
 pub struct SyscallContext<'a> {
     pub process: &'a mut ProcessDescriptor,
 }
+
 impl<'a> SyscallContext<'a> {
-    pub fn dispatch(&mut self, number: u64, args: [u64; 6]) -> SyscallResult {
-        let call = match number {
-            0 => Syscall::Yield,
-            1 => Syscall::Exit,
-            2 => Syscall::Spawn,
-            3 => Syscall::IpcSend,
-            4 => Syscall::IpcRecv,
-            5 => Syscall::Map,
-            6 => Syscall::Unmap,
-            7 => Syscall::Read,
-            8 => Syscall::Write,
+    /// Validate the syscall number, then reject known operations until their
+    /// process, capability, scheduling and user-memory contracts are real.
+    ///
+    /// In particular, arguments are never interpreted as kernel pointers.
+    pub fn dispatch(&mut self, number: u64, _args: [u64; 6]) -> SyscallResult {
+        match number {
+            value if value == Syscall::Yield as u64 => {}
+            value if value == Syscall::Exit as u64 => {}
+            value if value == Syscall::Spawn as u64 => {}
+            value if value == Syscall::IpcSend as u64 => {}
+            value if value == Syscall::IpcRecv as u64 => {}
+            value if value == Syscall::Map as u64 => {}
+            value if value == Syscall::Unmap as u64 => {}
+            value if value == Syscall::Read as u64 => {}
+            value if value == Syscall::Write as u64 => {}
             _ => return err(ERR_INVALID_ARGUMENT),
-        };
-        match call {
-            Syscall::Yield => {
-                self.process.state = ProcessState::Runnable;
-                ok(0)
-            }
-            Syscall::Exit => {
-                self.process.state = ProcessState::Exited;
-                ok(0)
-            }
-            Syscall::Spawn => err(ERR_PERMISSION),
-            Syscall::IpcSend | Syscall::IpcRecv => {
-                if !self.process.budget.consume_ipc(1) {
-                    return err(ERR_PERMISSION);
-                }
-                ok(args[0])
-            }
-            Syscall::Map => {
-                if !self.process.budget.permits_memory(args[0]) {
-                    return err(ERR_PERMISSION);
-                }
-                ok(args[0])
-            }
-            Syscall::Unmap => ok(args[0]),
-            Syscall::Read => {
-                if args[1] == 0 {
-                    return err(ERR_INVALID_ARGUMENT);
-                }
-                let ptr = args[0] as *mut u8;
-                let len = (args[1] as usize).min(4096);
-                if !ptr.is_null() && len > 0 {
-                    // Populate initrd/input payload into user buffer
-                    let initrd_data = b"INITRD_SHELL_IMAGE_OK";
-                    let copy_len = len.min(initrd_data.len());
-                    unsafe {
-                        for (i, &byte) in initrd_data.iter().take(copy_len).enumerate() {
-                            core::ptr::write_volatile(ptr.add(i), byte);
-                        }
-                    }
-                    return ok(copy_len as u64);
-                }
-                ok(args[1])
-            }
-            Syscall::Write => {
-                if args[1] == 0 {
-                    return err(ERR_INVALID_ARGUMENT);
-                }
-                let ptr = args[0] as *const u8;
-                let len = (args[1] as usize).min(4096);
-                if !ptr.is_null() {
-                    for i in 0..len {
-                        let byte = unsafe { core::ptr::read_volatile(ptr.add(i)) };
-                        #[cfg(target_arch = "x86_64")]
-                        crate::arch::x86_64::serial_write_byte(byte);
-                    }
-                }
-                ok(args[1])
-            }
         }
+
+        // Do not mutate the borrowed descriptor or consume quotas here.
+        // The real dispatcher must operate through the authoritative process
+        // manager and validated address-space/capability interfaces.
+        err(ERR_NOT_IMPLEMENTED)
     }
 }
-const fn ok(value: u64) -> SyscallResult {
-    SyscallResult {
-        value,
-        error: ERR_OK,
-    }
-}
+
 const fn err(error: u64) -> SyscallResult {
     SyscallResult { value: 0, error }
 }
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::process::{ProcessId, ResourceBudget};
+    use crate::process::{ProcessId, ProcessState, ResourceBudget};
+
     fn descriptor() -> ProcessDescriptor {
         ProcessDescriptor {
             id: ProcessId(1),
@@ -102,92 +59,57 @@ mod tests {
             },
         }
     }
+
     #[test]
     fn invalid_call_is_rejected() {
-        let mut p = descriptor();
-        let mut c = SyscallContext { process: &mut p };
-        assert_eq!(c.dispatch(99, [0; 6]).error, ERR_INVALID_ARGUMENT);
+        let mut process = descriptor();
+        let mut context = SyscallContext {
+            process: &mut process,
+        };
+
+        let result = context.dispatch(99, [0; 6]);
+
+        assert_eq!(result.value, 0);
+        assert_eq!(result.error, ERR_INVALID_ARGUMENT);
     }
+
     #[test]
-    fn exit_changes_state() {
-        let mut p = descriptor();
-        let mut c = SyscallContext { process: &mut p };
-        assert_eq!(c.dispatch(Syscall::Exit as u64, [0; 6]).error, ERR_OK);
-        assert_eq!(c.process.state, ProcessState::Exited);
-    }
-    #[test]
-    fn yield_changes_state() {
-        let mut p = descriptor();
-        let mut c = SyscallContext { process: &mut p };
-        assert_eq!(c.dispatch(Syscall::Yield as u64, [0; 6]).error, ERR_OK);
-        assert_eq!(c.process.state, ProcessState::Runnable);
-    }
-    #[test]
-    fn ipc_consumes_budget_and_fails_closed() {
-        let mut p = descriptor();
-        let mut c = SyscallContext { process: &mut p };
-        assert_eq!(
-            c.dispatch(Syscall::IpcSend as u64, [7, 0, 0, 0, 0, 0])
-                .error,
-            ERR_OK
-        );
-        assert_eq!(
-            c.dispatch(Syscall::IpcSend as u64, [8, 0, 0, 0, 0, 0])
-                .error,
-            ERR_OK
-        );
-        assert_eq!(
-            c.dispatch(Syscall::IpcSend as u64, [9, 0, 0, 0, 0, 0])
-                .error,
-            ERR_PERMISSION
-        );
-    }
-    #[test]
-    fn map_respects_memory_budget() {
-        let mut p = descriptor();
-        let mut c = SyscallContext { process: &mut p };
-        assert_eq!(
-            c.dispatch(Syscall::Map as u64, [4096, 0, 0, 0, 0, 0]).error,
-            ERR_OK
-        );
-        assert_eq!(
-            c.dispatch(Syscall::Map as u64, [4097, 0, 0, 0, 0, 0]).error,
-            ERR_PERMISSION
-        );
-    }
-    #[test]
-    fn io_rejects_zero_length() {
-        let mut p = descriptor();
-        let mut c = SyscallContext { process: &mut p };
-        assert_eq!(
-            c.dispatch(Syscall::Read as u64, [0, 0, 0, 0, 0, 0]).error,
-            ERR_INVALID_ARGUMENT
-        );
-        assert_eq!(
-            c.dispatch(Syscall::Write as u64, [0, 8, 0, 0, 0, 0]).error,
-            ERR_OK
-        );
-    }
-    #[test]
-    fn spawn_is_privileged() {
-        let mut p = descriptor();
-        let mut c = SyscallContext { process: &mut p };
-        assert_eq!(
-            c.dispatch(Syscall::Spawn as u64, [0; 6]).error,
-            ERR_PERMISSION
-        );
-    }
-    #[test]
-    fn read_populates_initrd_buffer() {
-        let mut p = descriptor();
-        let mut c = SyscallContext { process: &mut p };
-        let mut buf = [0u8; 32];
-        let res = c.dispatch(
-            Syscall::Read as u64,
-            [buf.as_mut_ptr() as u64, buf.len() as u64, 0, 0, 0, 0],
-        );
-        assert_eq!(res.error, ERR_OK);
-        assert!(res.value > 0);
-        assert!(&buf[..res.value as usize] == b"INITRD_SHELL_IMAGE_OK");
+    fn every_known_syscall_fails_closed_without_side_effects() {
+        let mut process = descriptor();
+        let before = process;
+        let mut context = SyscallContext {
+            process: &mut process,
+        };
+        let calls = [
+            Syscall::Yield,
+            Syscall::Exit,
+            Syscall::Spawn,
+            Syscall::IpcSend,
+            Syscall::IpcRecv,
+            Syscall::Map,
+            Syscall::Unmap,
+            Syscall::Read,
+            Syscall::Write,
+        ];
+
+        for call in calls {
+            // These values would have been dangerous if interpreted as
+            // unchecked pointers or lengths by the old Read/Write handlers.
+            let args = match call {
+                Syscall::Read | Syscall::Write => [1, u64::MAX, 0, 0, 0, 0],
+                _ => [u64::MAX; 6],
+            };
+            let result = context.dispatch(call as u64, args);
+
+            assert_eq!(result.value, 0, "{call:?} must not report fake success");
+            assert_eq!(
+                result.error, ERR_NOT_IMPLEMENTED,
+                "{call:?} must remain unavailable until safely integrated"
+            );
+            assert_eq!(
+                *context.process, before,
+                "{call:?} must not mutate process state or resource budgets"
+            );
+        }
     }
 }
