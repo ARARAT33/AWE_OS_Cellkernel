@@ -133,22 +133,54 @@ impl NetworkDaemon {
         Err("No free interface slots")
     }
 
+    /// Creates a socket owned by `owner_pid`. PID 0 is the reserved
+    /// kernel/idle identity and is rejected. Socket IDs never wrap: when
+    /// the u32 ID space is exhausted, creation fails closed instead of
+    /// reissuing a previously used ID.
     pub fn create_socket(
         &mut self,
         protocol: SocketProtocol,
         owner_pid: u32,
     ) -> Result<u32, &'static str> {
+        if owner_pid == 0 {
+            return Err("Invalid owner process");
+        }
         let sid = self.socket_counter;
+        let next = sid
+            .checked_add(1)
+            .filter(|n| *n != 0)
+            .ok_or("Socket ID space exhausted")?;
         for slot in self.sockets.iter_mut() {
             if slot.is_none() {
                 *slot = Some(NetworkSocket::new(sid, protocol, owner_pid));
-                self.socket_counter += 1;
+                self.socket_counter = next;
                 return Ok(sid);
             }
         }
         Err("Socket table full")
     }
 
+    /// Closes a socket. The socket is removed only when `owner_pid`
+    /// matches the registered owner, so a caller cannot close another
+    /// process's socket. The freed table slot becomes reusable.
+    pub fn close_socket(&mut self, socket_id: u32, owner_pid: u32) -> Result<(), &'static str> {
+        for slot in self.sockets.iter_mut() {
+            if let Some(sock) = slot
+                && sock.socket_id == socket_id
+            {
+                if sock.owner_pid != owner_pid {
+                    return Err("Socket not owned by caller");
+                }
+                *slot = None;
+                return Ok(());
+            }
+        }
+        Err("Unknown socket")
+    }
+
+    /// Adds a firewall rule. Inverted port ranges are rejected, and rule
+    /// IDs never wrap: when the u32 ID space is exhausted, rule creation
+    /// fails closed instead of reissuing a previously used ID.
     pub fn add_firewall_rule(
         &mut self,
         protocol: Option<SocketProtocol>,
@@ -156,7 +188,14 @@ impl NetworkDaemon {
         port_end: u16,
         action: FirewallAction,
     ) -> Result<u32, &'static str> {
+        if port_start > port_end {
+            return Err("Invalid port range");
+        }
         let rid = self.rule_counter;
+        let next = rid
+            .checked_add(1)
+            .filter(|n| *n != 0)
+            .ok_or("Firewall rule ID space exhausted")?;
         for slot in self.firewall_rules.iter_mut() {
             if slot.is_none() {
                 *slot = Some(FirewallRule {
@@ -166,7 +205,7 @@ impl NetworkDaemon {
                     port_range_end: port_end,
                     action,
                 });
-                self.rule_counter += 1;
+                self.rule_counter = next;
                 return Ok(rid);
             }
         }
@@ -215,5 +254,65 @@ mod tests {
             netd.evaluate_packet(SocketProtocol::Udp, 80),
             FirewallAction::Allow
         );
+    }
+
+    #[test]
+    fn socket_ids_fail_closed_at_exhaustion() {
+        let mut netd = NetworkDaemon::new();
+        netd.socket_counter = u32::MAX - 1;
+        // u32::MAX - 1 is issued; the next allocation would wrap, so it fails.
+        assert_eq!(
+            netd.create_socket(SocketProtocol::Tcp, 7).unwrap(),
+            u32::MAX - 1
+        );
+        assert!(netd.create_socket(SocketProtocol::Tcp, 7).is_err());
+    }
+
+    #[test]
+    fn firewall_rule_ids_fail_closed_at_exhaustion() {
+        let mut netd = NetworkDaemon::new();
+        netd.rule_counter = u32::MAX - 1;
+        assert_eq!(
+            netd.add_firewall_rule(None, 1, 100, FirewallAction::Allow)
+                .unwrap(),
+            u32::MAX - 1
+        );
+        assert!(
+            netd.add_firewall_rule(None, 1, 100, FirewallAction::Allow)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn zero_owner_pid_and_inverted_port_ranges_are_rejected() {
+        let mut netd = NetworkDaemon::new();
+        assert!(netd.create_socket(SocketProtocol::Udp, 0).is_err());
+        assert!(
+            netd.add_firewall_rule(None, 100, 1, FirewallAction::Allow)
+                .is_err()
+        );
+        // Neither rejection consumed an ID.
+        assert_eq!(netd.create_socket(SocketProtocol::Udp, 5).unwrap(), 1);
+        assert_eq!(
+            netd.add_firewall_rule(None, 1, 100, FirewallAction::Allow)
+                .unwrap(),
+            1
+        );
+    }
+
+    #[test]
+    fn close_socket_enforces_ownership_and_frees_the_slot() {
+        let mut netd = NetworkDaemon::new();
+        let sid = netd.create_socket(SocketProtocol::Udp, 42).unwrap();
+        // A different process cannot close the socket.
+        assert!(netd.close_socket(sid, 41).is_err());
+        // Unknown IDs fail.
+        assert!(netd.close_socket(sid + 100, 42).is_err());
+        // The owner can close it, and the slot becomes reusable with a new ID.
+        netd.close_socket(sid, 42).unwrap();
+        let sid2 = netd.create_socket(SocketProtocol::Udp, 43).unwrap();
+        assert_ne!(sid, sid2);
+        // The reissued socket belongs to the new owner only.
+        assert!(netd.close_socket(sid2, 42).is_err());
     }
 }
