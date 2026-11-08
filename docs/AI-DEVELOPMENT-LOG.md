@@ -1120,3 +1120,21 @@ All seven main-push workflows completed successfully on 2026-11-07:
   2. The graceful dependency-stop test tried to acknowledge an idle switch for a provider that was Runnable/non-current. That process is removed from the run queue on exit and can be reaped without a current-to-idle acknowledgement; the unnecessary acknowledgement was removed.
 - The workspace test step and dependent Cloud Security/VirtIO test steps failed because those two kernel tests failed. Clippy, UEFI loader, ISO boot, exception-injection, multi-architecture image build and installer jobs passed on that first PR head. VirtIO QEMU runtime was not considered validated because its test gate failed before the QEMU step.
 - Corrections are committed separately on the same PR branch. A new full CI run is required; no passing result is claimed until it completes on the corrected head.
+
+
+### Final CI validation after corrections — 2026-11-08
+
+**Validated PR-head commit:** `f7fd9702a30fe89d9dfdb544c94fd561fee62174`  
+**Workflow run window:** 2026-11-08 15:36–15:37 UTC  
+**Result:** 15/15 commit check-runs completed successfully.
+
+- AWEOS CI Pipeline: passed. `cargo check --workspace` and `cargo test --workspace` completed successfully; the `aweos-kernel` library test suite reported **323 passed, 0 failed**.
+- AWEOS Quality Gate: passed; Workspace Clippy and UEFI loader jobs passed.
+- AWEOS Cloud Security Gate and cloud release-contract gate: passed.
+- AWEOS Bootable Image Pipeline: ISO QEMU smoke reported **ISO Boot Successful**; the dedicated exception-injection self-test executed exactly one test and passed.
+- AWEOS VirtIO Runtime: QEMU exposed `virtio-blk-pci` and the kernel emitted `AWEOS: kernel is alive` with the device attached. This proves boot with the VirtIO block device present, not block read/write, flush or durable filesystem persistence.
+- AWEOS Multi-Architecture Images: build workflow passed. This is image-build evidence, not ARM64/RISC-V runtime proof.
+- AOSIN Cross-Platform Installers: all four Linux/Windows GUI/CLI build jobs passed.
+- Rustfmt-fix and Clippy diagnostics jobs passed.
+
+The initial PR-head run `748d86f` had two failing tests; both expectations were corrected and the complete workflow matrix was rerun successfully on `f7fd9702a30fe89d9dfdb544c94fd561fee62174`. The PR remains draft/unmerged pending review. The next required engineering step is still a real x86_64 target-stack switch-completion trampoline; the passing unit/QEMU boot checks do not establish a working multi-process context-switch runtime.
