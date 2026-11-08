@@ -161,7 +161,9 @@ pub struct ProcessManager<const N: usize> {
     count: usize,
     next_slot: usize,
     scheduler: Scheduler<N>,
-    // Tracks the process known to be executing after mark_running is called.
+    // A dequeued target remains pending until the architecture completion
+    // path acknowledges that exact frame, or explicitly cancels the switch.
+    pending_dispatch: Option<DispatchTarget>,
     // Exited contexts cannot be reclaimed until execution has switched away.
     current: Option<ProcessId>,
 }
@@ -176,6 +178,9 @@ pub enum ProcessManagerError {
     NotExited,
     CurrentlyRunning,
     StillQueued,
+    DispatchPending,
+    NoPendingDispatch,
+    DispatchMismatch,
     Scheduler(SchedulerError),
 }
 
@@ -193,6 +198,7 @@ impl<const N: usize> ProcessManager<N> {
             count: 0,
             next_slot: 0,
             scheduler: Scheduler::new(),
+            pending_dispatch: None,
             current: None,
         }
     }
@@ -260,11 +266,51 @@ impl<const N: usize> ProcessManager<N> {
         Ok(())
     }
 
-    /// Record the process only after the architecture layer has completed the
-    /// switch and this process is the context currently executing on the CPU.
-    /// Kernel IPC authorization derives its caller identity from this field;
-    /// user-provided ProcessId values must never be used as authority.
-    pub fn mark_running(&mut self, id: ProcessId) -> Result<(), ProcessManagerError> {
+    /// Acknowledge the exact scheduler target after the architecture switch has
+    /// completed and execution is on that target's stack.
+    ///
+    /// The token must come from the immediately preceding `next_dispatch`.
+    /// This prevents arbitrary runnable ProcessIds or stale frames from being
+    /// published as the current task. It is still the architecture layer's
+    /// responsibility to call this only from a true switch-completion path.
+    pub fn confirm_dispatch(&mut self, target: DispatchTarget) -> Result<(), ProcessManagerError> {
+        let pending = self
+            .pending_dispatch
+            .ok_or(ProcessManagerError::NoPendingDispatch)?;
+        if pending != target {
+            return Err(ProcessManagerError::DispatchMismatch);
+        }
+
+        self.commit_running(target.process)?;
+        self.pending_dispatch = None;
+        Ok(())
+    }
+
+    /// Cancel a prepared switch when the architecture backend declines it.
+    /// The selected runnable process is returned to the queue before the
+    /// pending token is cleared.
+    pub fn cancel_dispatch(&mut self, target: DispatchTarget) -> Result<(), ProcessManagerError> {
+        let pending = self
+            .pending_dispatch
+            .ok_or(ProcessManagerError::NoPendingDispatch)?;
+        if pending != target {
+            return Err(ProcessManagerError::DispatchMismatch);
+        }
+        let index = self
+            .find_index(target.process)
+            .ok_or(ProcessManagerError::InvalidProcess)?;
+        let descriptor = self.processes[index].ok_or(ProcessManagerError::InvalidProcess)?;
+        if descriptor.state != ProcessState::Runnable {
+            return Err(ProcessManagerError::InvalidState);
+        }
+        self.scheduler
+            .enqueue(&descriptor)
+            .map_err(ProcessManagerError::Scheduler)?;
+        self.pending_dispatch = None;
+        Ok(())
+    }
+
+    fn commit_running(&mut self, id: ProcessId) -> Result<(), ProcessManagerError> {
         let index = self
             .find_index(id)
             .ok_or(ProcessManagerError::InvalidProcess)?;
@@ -288,8 +334,6 @@ impl<const N: usize> ProcessManager<N> {
                 previous_candidate
                     .transition(ProcessState::Runnable)
                     .map_err(|_| ProcessManagerError::InvalidProcess)?;
-                // The previous process is not current any more; enqueue it
-                // before committing either descriptor change.
                 self.scheduler
                     .enqueue(&previous_candidate)
                     .map_err(ProcessManagerError::Scheduler)?;
@@ -297,7 +341,6 @@ impl<const N: usize> ProcessManager<N> {
             }
         }
 
-        // Removing an absent target is harmless (dispatch may already dequeue it).
         self.scheduler.remove(id);
         if let Some((previous_index, previous_candidate)) = previous_update {
             self.processes[previous_index] = Some(previous_candidate);
@@ -308,6 +351,12 @@ impl<const N: usize> ProcessManager<N> {
     }
 
     pub fn exit(&mut self, id: ProcessId) -> Result<(), ProcessManagerError> {
+        if self
+            .pending_dispatch
+            .is_some_and(|target| target.process == id)
+        {
+            return Err(ProcessManagerError::DispatchPending);
+        }
         let index = self
             .find_index(id)
             .ok_or(ProcessManagerError::InvalidProcess)?;
@@ -325,6 +374,12 @@ impl<const N: usize> ProcessManager<N> {
     /// Reclaim an exited process only after it is no longer current or queued.
     /// This releases both the descriptor and its CPU context as one operation.
     pub fn reap(&mut self, id: ProcessId) -> Result<(), ProcessManagerError> {
+        if self
+            .pending_dispatch
+            .is_some_and(|target| target.process == id)
+        {
+            return Err(ProcessManagerError::DispatchPending);
+        }
         let index = self
             .find_index(id)
             .ok_or(ProcessManagerError::InvalidProcess)?;
@@ -347,16 +402,41 @@ impl<const N: usize> ProcessManager<N> {
         Ok(())
     }
 
-    /// Confirm that the architecture layer has completed a switch to the idle
-    /// context. Call only after the old process is no longer executing.
-    pub fn confirm_switched_to_idle(&mut self) {
+    /// Confirm a switch to idle for the exact current process, and only after
+    /// that process has exited. A stale or premature acknowledgement cannot
+    /// clear another task's current-process identity.
+    pub fn confirm_switched_to_idle(
+        &mut self,
+        expected_current: ProcessId,
+    ) -> Result<(), ProcessManagerError> {
+        if self.pending_dispatch.is_some() {
+            return Err(ProcessManagerError::DispatchPending);
+        }
+        if self.current != Some(expected_current) {
+            return Err(ProcessManagerError::InvalidProcess);
+        }
+        let descriptor = self
+            .descriptor(expected_current)
+            .ok_or(ProcessManagerError::InvalidProcess)?;
+        if descriptor.state != ProcessState::Exited {
+            return Err(ProcessManagerError::InvalidState);
+        }
         self.current = None;
+        Ok(())
     }
 
+    /// Dequeue and retain one exact dispatch target. A second dequeue is
+    /// rejected until the pending switch is acknowledged or cancelled.
     pub fn next_dispatch(&mut self) -> Result<DispatchTarget, ProcessManagerError> {
-        self.scheduler
+        if self.pending_dispatch.is_some() {
+            return Err(ProcessManagerError::DispatchPending);
+        }
+        let target = self
+            .scheduler
             .prepare_next(&self.contexts)
-            .map_err(ProcessManagerError::Scheduler)
+            .map_err(ProcessManagerError::Scheduler)?;
+        self.pending_dispatch = Some(target);
+        Ok(target)
     }
 
     pub fn descriptor(&self, id: ProcessId) -> Option<ProcessDescriptor> {
@@ -403,6 +483,12 @@ mod tests {
 
     fn context(id: u64) -> ProcessContext {
         ProcessContext::new(ProcessId(id), CpuContext::kernel_entry(0x1000, 0x2000, 0))
+    }
+
+    fn dispatch_and_confirm<const N: usize>(manager: &mut ProcessManager<N>, expected: ProcessId) {
+        let target = manager.next_dispatch().unwrap();
+        assert_eq!(target.process, expected);
+        manager.confirm_dispatch(target).unwrap();
     }
 
     #[test]
@@ -538,45 +624,121 @@ mod tests {
     }
 
     #[test]
-    fn current_process_identity_requires_a_tracked_running_context() {
+    fn current_process_identity_requires_acknowledged_dispatch_and_exit() {
         let mut manager: ProcessManager<1> = ProcessManager::new();
         manager.register(descriptor_with_id(1), context(1)).unwrap();
         assert_eq!(manager.current_process_id(), None);
 
         manager.make_runnable(ProcessId(1)).unwrap();
         assert_eq!(manager.current_process_id(), None);
+        assert_eq!(
+            manager.confirm_switched_to_idle(ProcessId(1)),
+            Err(ProcessManagerError::InvalidProcess)
+        );
 
-        manager.mark_running(ProcessId(1)).unwrap();
+        dispatch_and_confirm(&mut manager, ProcessId(1));
+        assert_eq!(manager.current_process_id(), Some(ProcessId(1)));
+        assert_eq!(
+            manager.confirm_switched_to_idle(ProcessId(1)),
+            Err(ProcessManagerError::InvalidState)
+        );
         assert_eq!(manager.current_process_id(), Some(ProcessId(1)));
 
         manager.exit(ProcessId(1)).unwrap();
         assert_eq!(manager.current_process_id(), None);
-
-        manager.confirm_switched_to_idle();
+        manager.confirm_switched_to_idle(ProcessId(1)).unwrap();
         assert_eq!(manager.current_process_id(), None);
     }
 
     #[test]
-    fn marking_running_removes_process_from_run_queue() {
+    fn acknowledged_dispatch_updates_running_state_and_round_robin_queue() {
         let mut manager: ProcessManager<3> = ProcessManager::new();
         manager.register(descriptor_with_id(1), context(1)).unwrap();
         manager.register(descriptor_with_id(2), context(2)).unwrap();
         manager.make_runnable(ProcessId(1)).unwrap();
         manager.make_runnable(ProcessId(2)).unwrap();
 
-        manager.mark_running(ProcessId(1)).unwrap();
-
+        dispatch_and_confirm(&mut manager, ProcessId(1));
         assert_eq!(
             manager.descriptor(ProcessId(1)).map(|p| p.state),
             Some(ProcessState::Running)
         );
-        assert_eq!(manager.next_dispatch().unwrap().process, ProcessId(2));
-        manager.mark_running(ProcessId(2)).unwrap();
+
+        dispatch_and_confirm(&mut manager, ProcessId(2));
         assert_eq!(
             manager.descriptor(ProcessId(1)).map(|p| p.state),
             Some(ProcessState::Runnable)
         );
-        assert_eq!(manager.next_dispatch().unwrap().process, ProcessId(1));
+        let target = manager.next_dispatch().unwrap();
+        assert_eq!(target.process, ProcessId(1));
+        manager.cancel_dispatch(target).unwrap();
+    }
+
+    #[test]
+    fn dispatch_acknowledgement_is_exact_single_use_and_cancellable() {
+        let mut manager: ProcessManager<2> = ProcessManager::new();
+        manager.register(descriptor_with_id(1), context(1)).unwrap();
+        manager.register(descriptor_with_id(2), context(2)).unwrap();
+        manager.make_runnable(ProcessId(1)).unwrap();
+        manager.make_runnable(ProcessId(2)).unwrap();
+
+        let target = manager.next_dispatch().unwrap();
+        assert_eq!(target.process, ProcessId(1));
+        assert_eq!(
+            manager.next_dispatch(),
+            Err(ProcessManagerError::DispatchPending)
+        );
+
+        let mismatched = DispatchTarget {
+            process: ProcessId(2),
+            frame: target.frame,
+        };
+        assert_eq!(
+            manager.confirm_dispatch(mismatched),
+            Err(ProcessManagerError::DispatchMismatch)
+        );
+        assert_eq!(manager.current_process_id(), None);
+
+        manager.cancel_dispatch(target).unwrap();
+
+        // Cancellation puts the target at the queue tail, preserving FIFO
+        // fairness for processes that were already runnable.
+        let other = manager.next_dispatch().unwrap();
+        assert_eq!(other.process, ProcessId(2));
+        manager.confirm_dispatch(other).unwrap();
+
+        let retried = manager.next_dispatch().unwrap();
+        assert_eq!(retried.process, ProcessId(1));
+        manager.confirm_dispatch(retried).unwrap();
+        assert_eq!(
+            manager.confirm_dispatch(retried),
+            Err(ProcessManagerError::NoPendingDispatch)
+        );
+        assert_eq!(manager.current_process_id(), Some(ProcessId(1)));
+    }
+
+    #[test]
+    fn exit_cannot_reclaim_or_cancel_a_pending_dispatch_implicitly() {
+        let mut manager: ProcessManager<1> = ProcessManager::new();
+        manager.register(descriptor_with_id(1), context(1)).unwrap();
+        manager.make_runnable(ProcessId(1)).unwrap();
+        let target = manager.next_dispatch().unwrap();
+
+        assert_eq!(
+            manager.exit(ProcessId(1)),
+            Err(ProcessManagerError::DispatchPending)
+        );
+        assert_eq!(
+            manager.reap(ProcessId(1)),
+            Err(ProcessManagerError::DispatchPending)
+        );
+
+        manager.cancel_dispatch(target).unwrap();
+        manager.exit(ProcessId(1)).unwrap();
+        assert_eq!(
+            manager.confirm_switched_to_idle(ProcessId(1)),
+            Err(ProcessManagerError::InvalidProcess)
+        );
     }
 
     #[test]
@@ -589,26 +751,25 @@ mod tests {
             Err(ProcessManagerError::NotExited)
         );
         manager.make_runnable(ProcessId(1)).unwrap();
-        assert_eq!(manager.next_dispatch().unwrap().process, ProcessId(1));
-        manager.mark_running(ProcessId(1)).unwrap();
+        dispatch_and_confirm(&mut manager, ProcessId(1));
         manager.exit(ProcessId(1)).unwrap();
 
-        // The exiting task must not have its context reclaimed while it is current.
         assert_eq!(
             manager.reap(ProcessId(1)),
             Err(ProcessManagerError::CurrentlyRunning)
         );
         assert_eq!(manager.len(), 1);
 
-        manager.confirm_switched_to_idle();
+        manager.confirm_switched_to_idle(ProcessId(1)).unwrap();
         assert_eq!(manager.reap(ProcessId(1)), Ok(()));
         assert_eq!(manager.len(), 0);
         assert_eq!(manager.descriptor(ProcessId(1)), None);
 
-        // Reusing the fixed-capacity slot must not retain the old context.
         assert_eq!(manager.register(descriptor_with_id(2), context(2)), Ok(0));
         manager.make_runnable(ProcessId(2)).unwrap();
-        assert_eq!(manager.next_dispatch().unwrap().process, ProcessId(2));
+        let target = manager.next_dispatch().unwrap();
+        assert_eq!(target.process, ProcessId(2));
+        manager.cancel_dispatch(target).unwrap();
     }
 
     #[test]
