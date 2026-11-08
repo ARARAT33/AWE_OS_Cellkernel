@@ -1326,6 +1326,28 @@ mod tests {
         processes.register(descriptor, context).unwrap();
     }
 
+    fn switch_to_process<const N: usize>(
+        processes: &mut ProcessManager<N>,
+        expected: ProcessId,
+    ) {
+        for _ in 0..=N {
+            let target = processes.next_dispatch().unwrap();
+            let selected = target.process;
+            processes.confirm_dispatch(target).unwrap();
+            if selected == expected {
+                return;
+            }
+        }
+        panic!("process was not selected by the scheduler");
+    }
+
+    fn confirm_idle<const N: usize>(
+        processes: &mut ProcessManager<N>,
+        expected: ProcessId,
+    ) {
+        processes.confirm_switched_to_idle(expected).unwrap();
+    }
+
     fn spec(process: u64, caps: CapabilitySet, recovery: u8) -> CellSpec {
         CellSpec::new(
             CellKind::Service,
@@ -1344,7 +1366,7 @@ mod tests {
         cells.admit(id).unwrap();
         cells.begin_start(id, processes).unwrap();
         let process = cells.cell(id).unwrap().process();
-        processes.mark_running(process).unwrap();
+        switch_to_process(processes, process);
         cells.confirm_running(id, processes).unwrap();
     }
 
@@ -1413,7 +1435,7 @@ mod tests {
             Err(CellError::ProcessStateMismatch)
         );
 
-        processes.mark_running(ProcessId(1)).unwrap();
+        switch_to_process(&mut processes, ProcessId(1));
         cells.confirm_running(id, &processes).unwrap();
         assert_eq!(cells.cell(id).unwrap().state(), CellState::Running);
         cells.charge_memory(id, 512).unwrap();
@@ -1423,7 +1445,7 @@ mod tests {
             cells.confirm_stopped(id, &mut processes),
             Err(CellError::Process(ProcessManagerError::CurrentlyRunning))
         );
-        processes.confirm_switched_to_idle();
+        confirm_idle(&mut processes, ProcessId(1));
         cells.confirm_stopped(id, &mut processes).unwrap();
         assert_eq!(cells.cell(id).unwrap().state(), CellState::Stopped);
         assert!(processes.descriptor(ProcessId(1)).is_none());
@@ -1455,7 +1477,7 @@ mod tests {
         );
 
         cells.begin_start(dependency, &mut processes).unwrap();
-        processes.mark_running(ProcessId(1)).unwrap();
+        switch_to_process(&mut processes, ProcessId(1));
         cells.confirm_running(dependency, &processes).unwrap();
         cells.begin_start(dependent, &mut processes).unwrap();
     }
@@ -1481,10 +1503,10 @@ mod tests {
         assert_eq!(cells.cell(dependent).unwrap().state(), CellState::Running);
 
         cells.begin_stop(dependent, &mut processes).unwrap();
-        processes.confirm_switched_to_idle();
+        confirm_idle(&mut processes, ProcessId(2));
         cells.confirm_stopped(dependent, &mut processes).unwrap();
         cells.begin_stop(dependency, &mut processes).unwrap();
-        processes.confirm_switched_to_idle();
+        confirm_idle(&mut processes, ProcessId(1));
         cells.confirm_stopped(dependency, &mut processes).unwrap();
     }
 
@@ -1528,7 +1550,7 @@ mod tests {
             .rebind_process(root, ProcessId(4), &processes)
             .unwrap();
         cells.begin_start(root, &mut processes).unwrap();
-        processes.mark_running(ProcessId(4)).unwrap();
+        switch_to_process(&mut processes, ProcessId(4));
         cells.confirm_running(root, &processes).unwrap();
         cells
             .set_health(middle, CellHealth::Healthy, &processes)
@@ -1569,7 +1591,7 @@ mod tests {
         start_cell(&mut cells, &mut processes, dependency);
         cells.admit(dependent).unwrap();
         cells.begin_start(dependent, &mut processes).unwrap();
-        processes.mark_running(ProcessId(2)).unwrap();
+        switch_to_process(&mut processes, ProcessId(2));
         cells.record_failure(dependency, &mut processes).unwrap();
 
         assert_eq!(
@@ -1581,7 +1603,7 @@ mod tests {
         // A supervisor can cancel a process that reached CPU Running but
         // whose cell never passed dependency confirmation.
         cells.begin_stop(dependent, &mut processes).unwrap();
-        processes.confirm_switched_to_idle();
+        confirm_idle(&mut processes, ProcessId(2));
         cells.confirm_stopped(dependent, &mut processes).unwrap();
         assert_eq!(cells.cell(dependent).unwrap().state(), CellState::Stopped);
     }
@@ -1642,23 +1664,23 @@ mod tests {
 
         cells.admit(broker).unwrap();
         cells.begin_start(broker, &mut processes).unwrap();
-        processes.mark_running(ProcessId(1)).unwrap();
+        switch_to_process(&mut processes, ProcessId(1));
         cells.confirm_running(broker, &processes).unwrap();
         cells.admit(receiver).unwrap();
         cells.admit(sender).unwrap();
         processes.make_runnable(ProcessId(4)).unwrap();
-        processes.mark_running(ProcessId(4)).unwrap();
+        switch_to_process(&mut processes, ProcessId(4));
         assert_eq!(
             cells.create_channel(broker, receiver, &[sender], 7, &processes),
             Err(CellError::CallerMismatch)
         );
-        processes.mark_running(ProcessId(1)).unwrap();
+        switch_to_process(&mut processes, ProcessId(1));
         let channel = cells
             .create_channel(broker, receiver, &[sender], 7, &processes)
             .unwrap();
 
         cells.begin_start(sender, &mut processes).unwrap();
-        processes.mark_running(ProcessId(3)).unwrap();
+        switch_to_process(&mut processes, ProcessId(3));
         cells.confirm_running(sender, &processes).unwrap();
         cells
             .send(
@@ -1666,7 +1688,7 @@ mod tests {
                 &processes,
             )
             .unwrap();
-        processes.mark_running(ProcessId(1)).unwrap();
+        switch_to_process(&mut processes, ProcessId(1));
         assert_eq!(
             cells.send(
                 CellSendRequest::new(channel, sender, 2, 10, [0; 4]),
@@ -1674,7 +1696,7 @@ mod tests {
             ),
             Err(CellError::CallerMismatch)
         );
-        processes.mark_running(ProcessId(3)).unwrap();
+        switch_to_process(&mut processes, ProcessId(3));
         assert_eq!(
             cells.send(
                 CellSendRequest::new(channel, broker, 2, 10, [0; 4]),
@@ -1688,7 +1710,7 @@ mod tests {
             Err(CellError::CallerMismatch)
         );
         cells.begin_start(receiver, &mut processes).unwrap();
-        processes.mark_running(ProcessId(2)).unwrap();
+        switch_to_process(&mut processes, ProcessId(2));
         cells.confirm_running(receiver, &processes).unwrap();
         let message = cells.receive(channel, receiver, &processes).unwrap();
         assert_eq!(message.sender, sender);
@@ -1736,7 +1758,7 @@ mod tests {
             .create_channel(broker, receiver, &[sender], 11, &processes)
             .unwrap();
         cells.begin_start(sender, &mut processes).unwrap();
-        processes.mark_running(ProcessId(3)).unwrap();
+        switch_to_process(&mut processes, ProcessId(3));
         cells.confirm_running(sender, &processes).unwrap();
 
         cells
@@ -1793,7 +1815,7 @@ mod tests {
             .create_channel(broker, receiver, &[sender], 9, &processes)
             .unwrap();
         cells.begin_start(sender, &mut processes).unwrap();
-        processes.mark_running(ProcessId(3)).unwrap();
+        switch_to_process(&mut processes, ProcessId(3));
         cells.confirm_running(sender, &processes).unwrap();
         cells
             .send(
@@ -1814,7 +1836,7 @@ mod tests {
         assert_eq!(cells.cell(sender).unwrap().health(), CellHealth::Faulted);
 
         cells.begin_start(receiver, &mut processes).unwrap();
-        processes.mark_running(ProcessId(2)).unwrap();
+        switch_to_process(&mut processes, ProcessId(2));
         cells.confirm_running(receiver, &processes).unwrap();
         assert_eq!(
             cells.receive(channel, receiver, &processes),
@@ -1859,7 +1881,7 @@ mod tests {
             .create_channel(broker, receiver, &[sender], 12, &processes)
             .unwrap();
         cells.begin_start(sender, &mut processes).unwrap();
-        processes.mark_running(ProcessId(3)).unwrap();
+        switch_to_process(&mut processes, ProcessId(3));
         cells.confirm_running(sender, &processes).unwrap();
 
         cells
@@ -1897,7 +1919,7 @@ mod tests {
             Err(CellError::ProcessStateMismatch)
         );
 
-        processes.confirm_switched_to_idle();
+        confirm_idle(&mut processes, ProcessId(1));
         cells.reap_failed(id, &mut processes).unwrap();
         assert_eq!(
             cells.rebind_process(id, ProcessId(2), &processes),
@@ -1912,7 +1934,7 @@ mod tests {
         assert_eq!(restarted.failures(), 1);
 
         cells.begin_start(id, &mut processes).unwrap();
-        processes.mark_running(ProcessId(2)).unwrap();
+        switch_to_process(&mut processes, ProcessId(2));
         cells.confirm_running(id, &processes).unwrap();
         assert_eq!(cells.cell(id).unwrap().state(), CellState::Running);
     }
@@ -1954,13 +1976,14 @@ mod tests {
             .create_channel(broker, receiver, &[sender], 13, &processes)
             .unwrap();
         cells.begin_start(sender, &mut processes).unwrap();
-        processes.mark_running(ProcessId(3)).unwrap();
+        switch_to_process(&mut processes, ProcessId(3));
         cells.confirm_running(sender, &processes).unwrap();
         cells.begin_start(receiver, &mut processes).unwrap();
-        processes.mark_running(ProcessId(2)).unwrap();
+        switch_to_process(&mut processes, ProcessId(2));
         cells.confirm_running(receiver, &processes).unwrap();
 
-        processes.confirm_switched_to_idle();
+        processes.exit(ProcessId(2)).unwrap();
+        confirm_idle(&mut processes, ProcessId(2));
         assert_eq!(
             cells.send(
                 CellSendRequest::new(channel, sender, 1, 1, [0; 4]),

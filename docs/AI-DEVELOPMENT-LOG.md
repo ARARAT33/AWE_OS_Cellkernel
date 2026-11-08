@@ -1061,3 +1061,53 @@ All seven main-push workflows completed successfully on 2026-11-07:
 - **In-session test bug fixed**: one AYUI rect test asserted `!contains(i32::MAX, i32::MAX)` although that point is inside the rect, and a clippy `comparison_with_min_or_max` assert was present; both corrected in `ac1815e`, after which clippy and all tests turned green.
 - **Known scope limits (honest)**: no NIC TX/RX runtime, no real block I/O, no Ring-3 userspace, no per-process address spaces; netd owner validation is syntactic (PID != 0) only. Nothing beyond the audited changes is claimed.
 - **Next session priorities**: (1) storaged volume/snapshot ID-exhaustion and ownership hardening with tests; (2) P1: unify ProcessManager/ExecutionCore behind one authoritative current-task model and wire the real x86_64 context-switch completion (`mark_running`); (3) P1: per-process page tables and validated user-memory copy paths before Ring-3; (4) initd/AWOSA CellId binding; (5) re-evaluate stale PRs #55/#53/#52/#50/#48.
+
+
+---
+
+## Session 2026-11-08 — ProcessManager dispatch acknowledgement hardening
+
+### Repository audit
+
+- Started from `main` at `1710e4e9c78ab6869afc64dd66d2ab2e60f92d6f`; PR #60 (`fix(storaged): harden metadata IDs and owner consistency`) is separate and remains open/draft.
+- PR #60 head `73e325259890529d331c010f3470bacb3f5368b9` had 16/16 GitHub check-runs successful on 2026-11-08. Workspace CI, Quality Gate/Clippy/UEFI, Cloud Security, VirtIO/QEMU, ISO boot, exception-injection, multi-architecture image build and all four installer jobs passed. These are PR #60 results, not validation of this new branch.
+- Focused code audit found three ProcessManager state-boundary gaps: `next_dispatch` dequeued a target without retaining a pending token; `mark_running(ProcessId)` accepted any runnable ID rather than the exact selected frame; and `confirm_switched_to_idle()` cleared current identity without checking which process had exited.
+- The x86_64 assembly switch routine saves/restores a frame and jumps to its saved RIP. Its current caller path still does not invoke a Rust completion acknowledgement on the target stack.
+
+### Changes on branch `fix/process-dispatch-ack-2026-11-08`
+
+- `kernel/src/process/mod.rs`
+  - Added a single pending `DispatchTarget` slot. A second dequeue fails with `DispatchPending` until the target is confirmed or cancelled.
+  - Replaced arbitrary-ID `mark_running` with `confirm_dispatch(target)`, which accepts only the exact target/frame returned by the preceding `next_dispatch` and consumes the acknowledgement once.
+  - Added `cancel_dispatch(target)` so a rejected architecture switch returns the runnable target to the queue before clearing the pending token.
+  - Prevented exit/reap from silently invalidating a pending target.
+  - Made idle acknowledgement require the expected current ProcessId and an Exited descriptor; stale, wrong-process and premature acknowledgements fail closed.
+  - Added regression tests for exact-target matching, single-use acknowledgement, pending-dequeue rejection, cancellation, pending exit/reap rejection and idle-state validation.
+- `kernel/src/cell.rs`
+  - Updated lifecycle/IPC tests to drive ProcessManager through its actual bounded round-robin dequeue/acknowledgement path instead of directly setting arbitrary process IDs to Running.
+  - Updated idle transitions to identify the exact exited process; the idle-identity test now exits the current process before acknowledging idle.
+- `docs/CELL_RUNTIME.md`
+  - Documented the pending dispatch token and exact idle acknowledgement, including the remaining architecture integration boundary.
+
+### Validation
+
+- Source changes and regression tests are committed on this branch.
+- No local Rust/QEMU result is claimed in this run.
+- GitHub Actions validation is pending for this branch. Do not merge until the full applicable CI/QEMU/security matrix passes on the final PR head.
+- PR #60's green checks are recorded above only as a separate prerequisite/result; they do not validate this branch.
+
+### Remaining limitations
+
+- `ProcessManager::confirm_dispatch` is not yet called by a production x86_64 switch-completion trampoline. The new token contract is not proof of hardware execution.
+- `ExecutionCore` and its scheduler remain a separate state model; no authoritative unified process runtime is claimed.
+- No per-process page-table roots, validated user-memory copy path, general Ring-3 execution, APIC/IOAPIC preemption or timer-driven scheduler integration is introduced here.
+- The single-current-process model remains single-core only. SMP requires per-CPU current-task identity and synchronization.
+- No block-device I/O, durable filesystem, NIC TX/RX, authenticated remote IPC or physical-hardware validation is claimed.
+
+### Next priorities
+
+1. Wire an architecture-owned x86_64 switch-completion trampoline that acknowledges the exact pending target on the target stack; prove two real contexts in QEMU before using current-task identity for security decisions.
+2. Unify `ProcessManager` and `ExecutionCore` without maintaining duplicate process/scheduler state.
+3. Implement per-process page-table roots and checked user-memory copy operations before enabling Ring 3.
+4. Bind CellManager and service supervision to the authoritative process lifecycle.
+5. Continue real VirtIO block read/write, flush, persistence and recovery work; then NIC TX/RX and authenticated remote IPC.
