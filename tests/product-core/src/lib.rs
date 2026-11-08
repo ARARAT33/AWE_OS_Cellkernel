@@ -309,7 +309,7 @@ mod product_core {
         // 3. Storaged
         let mut storaged = StorageDaemon::new();
         let vol = storaged
-            .register_volume(VolumeType::Ramdisk, 1024, 0, false)
+            .register_volume(100, VolumeType::Ramdisk, 1024, 0, false)
             .unwrap();
         assert_eq!(vol, 1);
 
@@ -766,10 +766,10 @@ mod product_core {
         // 1. Storage & Self-Healing AWEFS Engine Integration
         let mut storaged = StorageDaemon::new();
         let vol_id = storaged
-            .register_volume(VolumeType::AweFsVolume, 4096, 0, false)
+            .register_volume(100, VolumeType::AweFsVolume, 4096, 0, false)
             .unwrap();
         let _mount_id = storaged
-            .mount_volume(vol_id, 0x4157_4546_5300_0000)
+            .mount_volume(100, vol_id, 0x4157_4546_5300_0000)
             .unwrap();
 
         let mut awefs = AweFs::<16, 8>::new();
@@ -779,7 +779,7 @@ mod product_core {
         awefs.write_file_data(app_file.id, payload).unwrap();
 
         let file_id = storaged
-            .store_package_file(vol_id, 0x1122_3344_5566_7788, payload.len() as u32)
+            .store_package_file(100, vol_id, 0x1122_3344_5566_7788, payload.len() as u32)
             .unwrap();
         assert_eq!(file_id, 1);
 
@@ -818,7 +818,7 @@ mod product_core {
 
         // Package deletion & Cleanup
         awefs.delete_file(1, b"editor.awos").unwrap();
-        storaged.delete_package_file(file_id).unwrap();
+        storaged.delete_package_file(100, file_id).unwrap();
         assert!(awefs.vfs.lookup(1, b"editor.awos").is_err());
     }
 
