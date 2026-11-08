@@ -273,10 +273,7 @@ impl<const N: usize> ProcessManager<N> {
     /// This prevents arbitrary runnable ProcessIds or stale frames from being
     /// published as the current task. It is still the architecture layer's
     /// responsibility to call this only from a true switch-completion path.
-    pub fn confirm_dispatch(
-        &mut self,
-        target: DispatchTarget,
-    ) -> Result<(), ProcessManagerError> {
+    pub fn confirm_dispatch(&mut self, target: DispatchTarget) -> Result<(), ProcessManagerError> {
         let pending = self
             .pending_dispatch
             .ok_or(ProcessManagerError::NoPendingDispatch)?;
@@ -292,10 +289,7 @@ impl<const N: usize> ProcessManager<N> {
     /// Cancel a prepared switch when the architecture backend declines it.
     /// The selected runnable process is returned to the queue before the
     /// pending token is cleared.
-    pub fn cancel_dispatch(
-        &mut self,
-        target: DispatchTarget,
-    ) -> Result<(), ProcessManagerError> {
+    pub fn cancel_dispatch(&mut self, target: DispatchTarget) -> Result<(), ProcessManagerError> {
         let pending = self
             .pending_dispatch
             .ok_or(ProcessManagerError::NoPendingDispatch)?;
@@ -491,10 +485,7 @@ mod tests {
         ProcessContext::new(ProcessId(id), CpuContext::kernel_entry(0x1000, 0x2000, 0))
     }
 
-    fn dispatch_and_confirm<const N: usize>(
-        manager: &mut ProcessManager<N>,
-        expected: ProcessId,
-    ) {
+    fn dispatch_and_confirm<const N: usize>(manager: &mut ProcessManager<N>, expected: ProcessId) {
         let target = manager.next_dispatch().unwrap();
         assert_eq!(target.process, expected);
         manager.confirm_dispatch(target).unwrap();

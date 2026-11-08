@@ -1326,10 +1326,7 @@ mod tests {
         processes.register(descriptor, context).unwrap();
     }
 
-    fn switch_to_process<const N: usize>(
-        processes: &mut ProcessManager<N>,
-        expected: ProcessId,
-    ) {
+    fn switch_to_process<const N: usize>(processes: &mut ProcessManager<N>, expected: ProcessId) {
         for _ in 0..=N {
             let target = processes.next_dispatch().unwrap();
             let selected = target.process;
@@ -1341,10 +1338,7 @@ mod tests {
         panic!("process was not selected by the scheduler");
     }
 
-    fn confirm_idle<const N: usize>(
-        processes: &mut ProcessManager<N>,
-        expected: ProcessId,
-    ) {
+    fn confirm_idle<const N: usize>(processes: &mut ProcessManager<N>, expected: ProcessId) {
         processes.confirm_switched_to_idle(expected).unwrap();
     }
 
