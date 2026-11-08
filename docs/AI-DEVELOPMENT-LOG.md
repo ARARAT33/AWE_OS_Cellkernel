@@ -1111,3 +1111,12 @@ All seven main-push workflows completed successfully on 2026-11-07:
 3. Implement per-process page-table roots and checked user-memory copy operations before enabling Ring 3.
 4. Bind CellManager and service supervision to the authoritative process lifecycle.
 5. Continue real VirtIO block read/write, flush, persistence and recovery work; then NIC TX/RX and authenticated remote IPC.
+
+
+### CI feedback and correction — 2026-11-08
+
+- First PR-head run on `748d86f81e0b3e0f9723e2659e9475f4d5bb10ee` compiled the workspace but the kernel test target reported **321 passed, 2 failed**. The failures were test-expectation/transition-model issues, not compiler errors:
+  1. The cancellation test incorrectly expected a cancelled target to jump ahead of an already queued process. The scheduler is FIFO, so cancellation correctly re-enqueues the target at the tail; the test now verifies the intervening runnable process is dispatched first.
+  2. The graceful dependency-stop test tried to acknowledge an idle switch for a provider that was Runnable/non-current. That process is removed from the run queue on exit and can be reaped without a current-to-idle acknowledgement; the unnecessary acknowledgement was removed.
+- The workspace test step and dependent Cloud Security/VirtIO test steps failed because those two kernel tests failed. Clippy, UEFI loader, ISO boot, exception-injection, multi-architecture image build and installer jobs passed on that first PR head. VirtIO QEMU runtime was not considered validated because its test gate failed before the QEMU step.
+- Corrections are committed separately on the same PR branch. A new full CI run is required; no passing result is claimed until it completes on the corrected head.

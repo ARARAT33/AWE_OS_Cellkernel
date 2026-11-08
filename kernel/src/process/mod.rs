@@ -700,8 +700,15 @@ mod tests {
         assert_eq!(manager.current_process_id(), None);
 
         manager.cancel_dispatch(target).unwrap();
+
+        // Cancellation puts the target at the queue tail, preserving FIFO
+        // fairness for processes that were already runnable.
+        let other = manager.next_dispatch().unwrap();
+        assert_eq!(other.process, ProcessId(2));
+        manager.confirm_dispatch(other).unwrap();
+
         let retried = manager.next_dispatch().unwrap();
-        assert_eq!(retried, target);
+        assert_eq!(retried.process, ProcessId(1));
         manager.confirm_dispatch(retried).unwrap();
         assert_eq!(
             manager.confirm_dispatch(retried),

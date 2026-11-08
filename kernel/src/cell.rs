@@ -1500,7 +1500,8 @@ mod tests {
         confirm_idle(&mut processes, ProcessId(2));
         cells.confirm_stopped(dependent, &mut processes).unwrap();
         cells.begin_stop(dependency, &mut processes).unwrap();
-        confirm_idle(&mut processes, ProcessId(1));
+        // The provider is runnable, not current, after the dependent switches
+        // to idle; exiting it does not require an idle-context acknowledgement.
         cells.confirm_stopped(dependency, &mut processes).unwrap();
     }
 
