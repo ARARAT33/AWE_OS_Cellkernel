@@ -411,9 +411,11 @@ mod tests {
             .store_package_file(OWNER, volume_id, 0x112233, 4096)
             .unwrap();
         assert_eq!(file_id, 1);
-        assert!(storaged
-            .request_snapshot_recovery(OWNER, volume_id)
-            .unwrap());
+        assert!(
+            storaged
+                .request_snapshot_recovery(OWNER, volume_id)
+                .unwrap()
+        );
         assert_eq!(storaged.recovery_requests, 1);
 
         storaged.delete_package_file(OWNER, file_id).unwrap();
@@ -426,44 +428,54 @@ mod tests {
         let volume_id = create_volume(&mut storaged);
         let data = [0x5A; BLOCK_SIZE];
 
-        assert!(storaged
-            .mount_volume(OTHER_OWNER, volume_id, 0xAA)
-            .is_err());
-        assert!(storaged
-            .create_snapshot(OTHER_OWNER, volume_id, 2000)
-            .is_err());
-        assert!(storaged
-            .cache_write(OTHER_OWNER, volume_id, 0, &data)
-            .is_err());
+        assert!(storaged.mount_volume(OTHER_OWNER, volume_id, 0xAA).is_err());
+        assert!(
+            storaged
+                .create_snapshot(OTHER_OWNER, volume_id, 2000)
+                .is_err()
+        );
+        assert!(
+            storaged
+                .cache_write(OTHER_OWNER, volume_id, 0, &data)
+                .is_err()
+        );
         assert!(storaged.cache_read(OTHER_OWNER, volume_id, 0).is_none());
-        assert!(storaged
-            .store_package_file(OTHER_OWNER, volume_id, 0xBB, 12)
-            .is_err());
-        assert!(storaged
-            .request_snapshot_recovery(OTHER_OWNER, volume_id)
-            .is_err());
+        assert!(
+            storaged
+                .store_package_file(OTHER_OWNER, volume_id, 0xBB, 12)
+                .is_err()
+        );
+        assert!(
+            storaged
+                .request_snapshot_recovery(OTHER_OWNER, volume_id)
+                .is_err()
+        );
 
         let file_id = storaged
             .store_package_file(OWNER, volume_id, 0xCC, 12)
             .unwrap();
-        assert!(storaged
-            .delete_package_file(OTHER_OWNER, file_id)
-            .is_err());
+        assert!(storaged.delete_package_file(OTHER_OWNER, file_id).is_err());
         assert!(storaged.delete_package_file(OWNER, file_id).is_ok());
     }
 
     #[test]
     fn zero_owner_empty_volume_and_overflowing_lba_range_are_rejected() {
         let mut storaged = StorageDaemon::new();
-        assert!(storaged
-            .register_volume(0, VolumeType::Ramdisk, 1, 0, false)
-            .is_err());
-        assert!(storaged
-            .register_volume(OWNER, VolumeType::Ramdisk, 0, 0, false)
-            .is_err());
-        assert!(storaged
-            .register_volume(OWNER, VolumeType::Ramdisk, 2, u64::MAX, false)
-            .is_err());
+        assert!(
+            storaged
+                .register_volume(0, VolumeType::Ramdisk, 1, 0, false)
+                .is_err()
+        );
+        assert!(
+            storaged
+                .register_volume(OWNER, VolumeType::Ramdisk, 0, 0, false)
+                .is_err()
+        );
+        assert!(
+            storaged
+                .register_volume(OWNER, VolumeType::Ramdisk, 2, u64::MAX, false)
+                .is_err()
+        );
         assert_eq!(storaged.volume_counter, 1);
         assert!(storaged.volumes.iter().all(Option::is_none));
     }
@@ -491,9 +503,7 @@ mod tests {
             .unwrap();
         let data = [0x22; BLOCK_SIZE];
 
-        assert!(storaged
-            .cache_write(OWNER, volume_id, 2, &data)
-            .is_err());
+        assert!(storaged.cache_write(OWNER, volume_id, 2, &data).is_err());
         assert!(storaged.cache_read(OWNER, volume_id, 2).is_none());
     }
 
@@ -513,10 +523,7 @@ mod tests {
         let mut mounts = StorageDaemon::new();
         let volume_id = create_volume(&mut mounts);
         mounts.mount_counter = u32::MAX;
-        assert_eq!(
-            mounts.mount_volume(OWNER, volume_id, 1),
-            Ok(u32::MAX)
-        );
+        assert_eq!(mounts.mount_volume(OWNER, volume_id, 1), Ok(u32::MAX));
         assert_eq!(
             mounts.mount_volume(OWNER, volume_id, 2),
             Err("Mount ID space exhausted")
@@ -525,10 +532,7 @@ mod tests {
         let mut snapshots = StorageDaemon::new();
         let volume_id = create_volume(&mut snapshots);
         snapshots.snapshot_counter = u32::MAX;
-        assert_eq!(
-            snapshots.create_snapshot(OWNER, volume_id, 1),
-            Ok(u32::MAX)
-        );
+        assert_eq!(snapshots.create_snapshot(OWNER, volume_id, 1), Ok(u32::MAX));
         assert_eq!(
             snapshots.create_snapshot(OWNER, volume_id, 2),
             Err("Snapshot ID space exhausted")
