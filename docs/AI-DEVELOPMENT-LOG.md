@@ -1061,3 +1061,60 @@ All seven main-push workflows completed successfully on 2026-11-07:
 - **In-session test bug fixed**: one AYUI rect test asserted `!contains(i32::MAX, i32::MAX)` although that point is inside the rect, and a clippy `comparison_with_min_or_max` assert was present; both corrected in `ac1815e`, after which clippy and all tests turned green.
 - **Known scope limits (honest)**: no NIC TX/RX runtime, no real block I/O, no Ring-3 userspace, no per-process address spaces; netd owner validation is syntactic (PID != 0) only. Nothing beyond the audited changes is claimed.
 - **Next session priorities**: (1) storaged volume/snapshot ID-exhaustion and ownership hardening with tests; (2) P1: unify ProcessManager/ExecutionCore behind one authoritative current-task model and wire the real x86_64 context-switch completion (`mark_running`); (3) P1: per-process page tables and validated user-memory copy paths before Ring-3; (4) initd/AWOSA CellId binding; (5) re-evaluate stale PRs #55/#53/#52/#50/#48.
+
+
+---
+
+## Session 2026-11-08 — storaged ID-exhaustion and ownership-consistency hardening
+
+### Repository audit
+
+- Started from the current main documentation head 1710e4e9c78ab6869afc64dd66d2ab2e60f92d6f; the previous implementation milestone was PR #59, whose final PR head ac1815ed7aedcc8bc683e8852cb97d9e6b40d9f0 had 16/16 checks green according to the preceding session record.
+- Re-read README.md, Cargo.toml, PROJECT_STATUS.md, PRODUCT_READINESS.md, the previous development log, the 2026-11-05 architecture audit and the 2026-11-06 Cell Runtime plan.
+- Confirmed that the workspace has 29 members. The repository remains an in-development OS; the readiness document still has Boot, Kernel, Hardware/I/O, Userspace and Recovery gates open.
+- Inspected services/storaged/src/lib.rs and all repository call sites. The previous storage service was a fixed-capacity metadata/cache manager, not a block-I/O or durable filesystem implementation.
+
+### Defects selected
+
+- Volume, mount, snapshot and package-file counters used unchecked u32 += 1, which could overflow and eventually reuse identifiers.
+- Snapshot creation did not verify that the volume existed.
+- Package-file metadata and cache entries were not bound to a volume owner; child operations did not check ownership.
+- Cache access did not validate that an LBA was inside the selected volume.
+- The previous trigger_self_healing_repair name overstated what the code did: it only incremented an event counter when snapshot metadata existed; it did not restore data.
+
+### Changes on branch feat/storaged-id-ownership-2026-11-08
+
+- services/storaged/src/lib.rs
+  - Added a shared monotonic ID allocator. It may issue u32::MAX once, then permanently switches the counter to zero as an exhausted sentinel; IDs never wrap to zero or get reused.
+  - All four ID tables now find a free slot before consuming an ID, so table-full failures do not burn identifiers.
+  - Volume registration rejects owner ID zero, zero-sized volumes and overflowing LBA ranges.
+  - Volumes, mounts, snapshots, cached blocks and package-file metadata carry an owner process ID.
+  - Mount, snapshot, cache and package operations enforce owner equality and require an existing volume.
+  - Cache access checks volume-relative LBA bounds.
+  - Renamed the misleading recovery hook to request_snapshot_recovery; it records a recovery request only and explicitly does not claim to repair blocks.
+  - Added regression tests for all four ID-space exhaustion paths, permanent exhaustion, table-full behavior, invalid volume ranges, missing volumes, owner mismatch and cache LBA bounds.
+- tests/product-core/src/lib.rs
+  - Updated the storage integration test calls to supply the owning process ID.
+
+### Security and functionality boundary
+
+The supplied owner process ID is currently an in-service ownership-consistency key. awe-storaged does not yet authenticate that ID or prove that it is live. A future trusted service IPC/supervisor boundary must derive the identity from kernel-owned current-task context before untrusted callers can reach these methods. This change does not claim an authorization boundary against arbitrary code in the same address space.
+
+The storage crate still does not implement device reads/writes, durable package contents, a VFS mount, copy-on-write snapshots, journal replay or power-loss recovery. The recovery method is now explicitly a request/metadata check only.
+
+### Validation
+
+- Source changes and regression tests are committed on the feature branch.
+- Local Rust/QEMU execution is unavailable in this run; no local test result is claimed.
+- GitHub Actions validation is pending until the pull request is opened. Do not merge unless the complete applicable check set passes on the final PR head.
+
+### Remaining risks and next priorities
+
+1. Unify ProcessManager, ExecutionCore and the x86_64 context-switch completion path around one authoritative current-task model; prove two real contexts in QEMU before enabling general Ring 3.
+2. Add per-process page-table roots and validated user-memory copy operations; keep the general syscall ABI fail-closed until those boundaries exist.
+3. Bind service supervision and CellIds to real process lifecycle without duplicating state.
+4. Implement actual VirtIO block read/write and persistent filesystem recovery tests.
+5. Derive storage owner identity from trusted kernel/supervisor context; add live-process validation before treating owner checks as a security boundary.
+6. Implement NIC TX/RX and authenticated remote IPC only after local transport and identity contracts are executable.
+
+No completion percentage is assigned. The change hardens bounded metadata behavior; it does not make storage or the OS product-ready.
