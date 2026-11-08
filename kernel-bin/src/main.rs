@@ -11,13 +11,15 @@ use aweos_kernel::entry::{KernelBootStatus, kernel_entry};
 #[cfg(target_arch = "x86_64")]
 #[cfg(not(test))]
 use aweos_kernel::memory::activate_bootstrap_identity_map;
+#[cfg(not(test))]
+use aweos_kernel::memory::x86_64::{BOOTSTRAP_LEAF_FLAGS, BOOTSTRAP_TABLE_FLAGS};
 
 #[cfg(not(test))]
 const MULTIBOOT1_BOOTLOADER_MAGIC: u32 = 0x2BAD_B002;
 #[cfg(not(test))]
 const MULTIBOOT2_BOOTLOADER_MAGIC: u32 = 0x36D7_6289;
 #[cfg(not(test))]
-const MAX_MEMORY_REGIONS: usize = 128;
+const MAX_MEMORY_REGIONS: usize = awe_boot_protocol::MAX_MEMORY_REGIONS as usize;
 #[cfg(not(test))]
 const FALLBACK_MEMORY_BASE: u64 = 0x0100_0000;
 #[cfg(not(test))]
@@ -26,6 +28,21 @@ const FALLBACK_MEMORY_LENGTH: u64 = 0x0200_0000;
 const MULTIBOOT2_MIN_SIZE: usize = 16;
 #[cfg(not(test))]
 const MULTIBOOT2_MAX_SIZE: usize = 1024 * 1024;
+
+fn multiboot1_mmap_entry_valid(size: usize, remaining: usize) -> bool {
+    size >= 20
+        && size
+            .checked_add(4)
+            .is_some_and(|entry_len| entry_len <= remaining)
+}
+
+fn normalize_multiboot_memory_kind(kind: u32) -> u32 {
+    match kind {
+        1 => awe_boot_protocol::MEMORY_REGION_USABLE,
+        3 => awe_boot_protocol::MEMORY_REGION_RECLAIMABLE,
+        _ => awe_boot_protocol::MEMORY_REGION_RESERVED,
+    }
+}
 
 #[cfg(not(test))]
 static mut MEMORY_REGIONS: [MemoryRegion; MAX_MEMORY_REGIONS] = [MemoryRegion {
@@ -112,15 +129,15 @@ _start:
     mov dword ptr [boot_magic_saved], eax
     mov dword ptr [boot_info_saved], ebx
 
-    # Build a minimal identity map for the first 1 GiB using 2 MiB pages with User accessibility.
+    # Build a supervisor-only identity map for the first 1 GiB using 2 MiB pages.
     # PML4[0] -> PDPT[0] -> PD[0..511].
     mov eax, offset BOOT_PDPT
-    or eax, 7
+    or eax, {table_flags}
     mov dword ptr [BOOT_PML4], eax
     mov dword ptr [BOOT_PML4 + 4], 0
 
     mov eax, offset BOOT_PD
-    or eax, 7
+    or eax, {table_flags}
     mov dword ptr [BOOT_PDPT], eax
     mov dword ptr [BOOT_PDPT + 4], 0
 
@@ -128,7 +145,7 @@ _start:
 1:
     mov eax, ecx
     shl eax, 21
-    or eax, 0x87
+    or eax, {leaf_flags}
     mov dword ptr [BOOT_PD + ecx * 8], eax
     mov dword ptr [BOOT_PD + ecx * 8 + 4], 0
     inc ecx
@@ -199,39 +216,87 @@ gdt64_descriptor:
 
 .size _start, .-_start
 .att_syntax prefix
-"#
+"#,
+    table_flags = const BOOTSTRAP_TABLE_FLAGS,
+    leaf_flags = const BOOTSTRAP_LEAF_FLAGS,
 );
 
 #[cfg(test)]
 fn main() {}
+
+#[cfg(test)]
+mod bootstrap_paging_tests {
+    use super::{multiboot1_mmap_entry_valid, normalize_multiboot_memory_kind};
+    use aweos_kernel::memory::{
+        PageFlags,
+        x86_64::{BOOTSTRAP_LEAF_FLAGS, BOOTSTRAP_TABLE_FLAGS},
+    };
+
+    fn assert_supervisor_only(table_flags: u64, leaf_flags: u64) {
+        assert!(table_flags & PageFlags::PRESENT.0 != 0);
+        assert!(table_flags & PageFlags::WRITABLE.0 != 0);
+        assert_eq!(table_flags & PageFlags::USER.0, 0);
+        assert!(leaf_flags & PageFlags::HUGE.0 != 0);
+        assert_eq!(leaf_flags & PageFlags::USER.0, 0);
+    }
+
+    #[test]
+    fn bootstrap_page_table_flags_never_grant_user_access() {
+        assert_supervisor_only(BOOTSTRAP_TABLE_FLAGS, BOOTSTRAP_LEAF_FLAGS);
+    }
+
+    #[test]
+    fn multiboot1_memory_map_entry_size_is_bounded_by_remaining_bytes() {
+        assert!(multiboot1_mmap_entry_valid(20, 24));
+        assert!(multiboot1_mmap_entry_valid(24, 28));
+        assert!(!multiboot1_mmap_entry_valid(19, 23));
+        assert!(!multiboot1_mmap_entry_valid(20, 23));
+        assert!(!multiboot1_mmap_entry_valid(usize::MAX, usize::MAX));
+    }
+
+    #[test]
+    fn multiboot_memory_types_are_normalized_fail_closed() {
+        assert_eq!(
+            normalize_multiboot_memory_kind(1),
+            awe_boot_protocol::MEMORY_REGION_USABLE
+        );
+        assert_eq!(
+            normalize_multiboot_memory_kind(3),
+            awe_boot_protocol::MEMORY_REGION_RECLAIMABLE
+        );
+        assert_eq!(
+            normalize_multiboot_memory_kind(2),
+            awe_boot_protocol::MEMORY_REGION_RESERVED
+        );
+        assert_eq!(
+            normalize_multiboot_memory_kind(4),
+            awe_boot_protocol::MEMORY_REGION_RESERVED
+        );
+        assert_eq!(
+            normalize_multiboot_memory_kind(5),
+            awe_boot_protocol::MEMORY_REGION_RESERVED
+        );
+        assert_eq!(
+            normalize_multiboot_memory_kind(u32::MAX),
+            awe_boot_protocol::MEMORY_REGION_RESERVED
+        );
+    }
+}
 
 #[cfg(not(test))]
 #[unsafe(no_mangle)]
 pub extern "C" fn rust_main(boot_magic: u32, boot_info_addr: u64) -> ! {
     serial_init();
     serial_write(b"============================================================\r\n");
-    serial_write(b"  AWEOS Bootloader (AWELoader v1.0 - 100% Ready)\r\n");
+    serial_write(b"  AWEOS Bootloader (AWELoader v1.0)\r\n");
     serial_write(b"============================================================\r\n");
-    serial_write(b"AWELoader: Parsing ELF64 Kernel image... Done.\r\n");
-    serial_write(b"AWELoader: Memory map constructed (Total RAM detected: 2048 MB).\r\n");
-    serial_write(b"AWELoader: Passing execution control to CellKernel...\r\n\r\n");
+    serial_write(b"AWELoader: Handing boot information to CellKernel...\r\n\r\n");
 
-    serial_write(b"============================================================\r\n");
-    serial_write(b"  AWEOS CellKernel x86_64 (Kernel Infrastructure 100%)\r\n");
-    serial_write(b"============================================================\r\n");
-    serial_write(b"CellKernel: x86_64 Paging (PML4) initialized.\r\n");
-    serial_write(b"CellKernel: Physical & Virtual Memory Allocator active.\r\n");
-    serial_write(b"CellKernel: Kernel Heap (Slab Allocator) ready.\r\n");
-    serial_write(b"CellKernel: GDT, IDT (0-255 exception vectors) & APIC initialized.\r\n");
-    serial_write(b"CellKernel: SYSCALL/SYSRET MSRs registered.\r\n");
-    serial_write(b"CellKernel: Microkernel Cell IPC Subsystem initialized.\r\n");
-    serial_write(b"CellKernel: Virtual File System (AWEFS RAMDisk) mounted.\r\n");
-    serial_write(b"CellKernel: Preemptive Scheduler running (APIC Timer).\r\n");
-    serial_write(b"CellKernel: System Core Status = 100% COMPLETE.\r\n");
-    serial_write(
-        b"CellKernel: Overall OS Readiness = 50% (Core Finished, Pending GUI/Ecosystem).\r\n",
-    );
-    serial_write(b"CellKernel: Spawning Userspace Cell -> AWETerminal (Ring 3)...\r\n\r\n");
+    // The banner below used to claim paging, allocators, APIC, IPC, VFS and
+    // a running scheduler before they existed. Subsystems report their own
+    // real status as they are initialized in kernel_entry; this early path
+    // only does serial setup and boot-info validation.
+    serial_write(b"  AWEOS CellKernel x86_64 (early boot)\r\n");
 
     serial_write(b"AWEOS CellKernel\r\n");
 
@@ -278,6 +343,10 @@ pub extern "C" fn rust_main(boot_magic: u32, boot_info_addr: u64) -> ! {
         }
         KernelBootStatus::NoUsableMemory => {
             serial_write(b"AWEOS: no usable memory reported\r\n");
+            halt_forever();
+        }
+        KernelBootStatus::InvalidMemoryMap => {
+            serial_write(b"AWEOS: invalid or unsafe physical memory map\r\n");
             halt_forever();
         }
     }
@@ -335,24 +404,56 @@ fn parse_multiboot1(addr: usize) -> BootInfo {
         return BootInfo::empty(Architecture::X86_64);
     }
 
+    if addr.checked_add(52).is_none() {
+        return BootInfo::empty(Architecture::X86_64);
+    }
     let flags = unsafe { core::ptr::read_unaligned(addr as *const u32) };
     let regions_ptr = core::ptr::addr_of_mut!(MEMORY_REGIONS) as *mut MemoryRegion;
     let mut region_count = 0u32;
 
     if (flags & (1 << 6)) != 0 {
-        let mmap_length = unsafe { core::ptr::read_unaligned((addr + 44) as *const u32) } as usize;
-        let mmap_addr = unsafe { core::ptr::read_unaligned((addr + 48) as *const u32) } as usize;
+        let Some(mmap_length_ptr) = addr.checked_add(44) else {
+            return BootInfo::empty(Architecture::X86_64);
+        };
+        let Some(mmap_addr_ptr) = addr.checked_add(48) else {
+            return BootInfo::empty(Architecture::X86_64);
+        };
+        let mmap_length =
+            unsafe { core::ptr::read_unaligned(mmap_length_ptr as *const u32) } as usize;
+        let mmap_addr = unsafe { core::ptr::read_unaligned(mmap_addr_ptr as *const u32) } as usize;
+        if mmap_length == 0 || mmap_addr == 0 || mmap_addr.checked_add(mmap_length).is_none() {
+            return BootInfo::empty(Architecture::X86_64);
+        }
 
         let mut offset = 0usize;
-        while offset < mmap_length && (region_count as usize) < MAX_MEMORY_REGIONS {
-            let entry_ptr = mmap_addr + offset;
-            let size = unsafe { core::ptr::read_unaligned(entry_ptr as *const u32) } as usize;
-            if size == 0 {
-                break;
+        while offset < mmap_length {
+            if region_count as usize >= MAX_MEMORY_REGIONS {
+                return BootInfo::empty(Architecture::X86_64);
             }
-            let base = unsafe { core::ptr::read_unaligned((entry_ptr + 4) as *const u64) };
-            let length = unsafe { core::ptr::read_unaligned((entry_ptr + 12) as *const u64) };
-            let kind = unsafe { core::ptr::read_unaligned((entry_ptr + 20) as *const u32) };
+            let remaining = mmap_length - offset;
+            if remaining < 4 {
+                return BootInfo::empty(Architecture::X86_64);
+            }
+            let Some(entry_ptr) = mmap_addr.checked_add(offset) else {
+                return BootInfo::empty(Architecture::X86_64);
+            };
+            let size = unsafe { core::ptr::read_unaligned(entry_ptr as *const u32) } as usize;
+            if !multiboot1_mmap_entry_valid(size, remaining) {
+                return BootInfo::empty(Architecture::X86_64);
+            }
+            let Some(base_ptr) = entry_ptr.checked_add(4) else {
+                return BootInfo::empty(Architecture::X86_64);
+            };
+            let Some(length_ptr) = entry_ptr.checked_add(12) else {
+                return BootInfo::empty(Architecture::X86_64);
+            };
+            let Some(kind_ptr) = entry_ptr.checked_add(20) else {
+                return BootInfo::empty(Architecture::X86_64);
+            };
+            let base = unsafe { core::ptr::read_unaligned(base_ptr as *const u64) };
+            let length = unsafe { core::ptr::read_unaligned(length_ptr as *const u64) };
+            let raw_kind = unsafe { core::ptr::read_unaligned(kind_ptr as *const u32) };
+            let kind = normalize_multiboot_memory_kind(raw_kind);
 
             unsafe {
                 core::ptr::write(
@@ -372,7 +473,10 @@ fn parse_multiboot1(addr: usize) -> BootInfo {
 
     if region_count == 0 {
         let mem_upper = if (flags & (1 << 0)) != 0 {
-            (unsafe { core::ptr::read_unaligned((addr + 8) as *const u32) }) as u64
+            let Some(mem_upper_ptr) = addr.checked_add(8) else {
+                return BootInfo::empty(Architecture::X86_64);
+            };
+            unsafe { core::ptr::read_unaligned(mem_upper_ptr as *const u32) as u64 }
         } else {
             0
         };
@@ -422,7 +526,9 @@ fn parse_multiboot2(addr: usize) -> BootInfo {
     }
 
     let total_size = unsafe { core::ptr::read_unaligned(addr as *const u32) } as usize;
-    if !(MULTIBOOT2_MIN_SIZE..=MULTIBOOT2_MAX_SIZE).contains(&total_size) {
+    if !(MULTIBOOT2_MIN_SIZE..=MULTIBOOT2_MAX_SIZE).contains(&total_size)
+        || addr.checked_add(total_size).is_none()
+    {
         return BootInfo::empty(Architecture::X86_64);
     }
 
@@ -463,32 +569,34 @@ fn parse_multiboot2(addr: usize) -> BootInfo {
                 let entry_size =
                     unsafe { core::ptr::read_unaligned((addr + offset + 8) as *const u32) }
                         as usize;
-                if entry_size >= 24 {
-                    let mut entry = offset + 16;
-                    while entry_size <= size.saturating_sub(16)
-                        && entry + entry_size <= offset + size
-                        && (region_count as usize) < MAX_MEMORY_REGIONS
-                    {
-                        let base =
-                            unsafe { core::ptr::read_unaligned((addr + entry) as *const u64) };
-                        let length =
-                            unsafe { core::ptr::read_unaligned((addr + entry + 8) as *const u64) };
-                        let kind =
-                            unsafe { core::ptr::read_unaligned((addr + entry + 16) as *const u32) };
-                        unsafe {
-                            core::ptr::write(
-                                regions_ptr.add(region_count as usize),
-                                MemoryRegion {
-                                    base,
-                                    length,
-                                    kind,
-                                    reserved: 0,
-                                },
-                            );
-                        }
-                        region_count += 1;
-                        entry += entry_size;
+                if entry_size < 24 || !(size - 16).is_multiple_of(entry_size) {
+                    return BootInfo::empty(Architecture::X86_64);
+                }
+                let mut entry = offset + 16;
+                let entry_end = offset + size;
+                while entry < entry_end {
+                    if region_count as usize >= MAX_MEMORY_REGIONS {
+                        return BootInfo::empty(Architecture::X86_64);
                     }
+                    let base = unsafe { core::ptr::read_unaligned((addr + entry) as *const u64) };
+                    let length =
+                        unsafe { core::ptr::read_unaligned((addr + entry + 8) as *const u64) };
+                    let raw_kind =
+                        unsafe { core::ptr::read_unaligned((addr + entry + 16) as *const u32) };
+                    let kind = normalize_multiboot_memory_kind(raw_kind);
+                    unsafe {
+                        core::ptr::write(
+                            regions_ptr.add(region_count as usize),
+                            MemoryRegion {
+                                base,
+                                length,
+                                kind,
+                                reserved: 0,
+                            },
+                        );
+                    }
+                    region_count += 1;
+                    entry += entry_size;
                 }
             }
             8 if size >= 32 => {

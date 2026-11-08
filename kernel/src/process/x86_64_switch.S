@@ -17,7 +17,7 @@ awe_x86_64_switch:
     mov [rdi + 32], r14
     mov [rdi + 40], r15
     mov [rdi + 48], rsp
-    lea rax, [.Lresume]
+    lea rax, [rip + .Lresume]
     mov [rdi + 56], rax
     mov rbx, [rsi + 0]
     mov rbp, [rsi + 8]

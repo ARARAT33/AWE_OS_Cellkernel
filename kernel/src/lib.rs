@@ -19,6 +19,9 @@ pub mod arch;
 pub mod boot_guard;
 pub mod boot_phase;
 pub mod boot_state;
+/// Fixed-capacity local cell lifecycle/IPC runtime with dependency-health propagation.
+/// It is not a memory-isolation boundary; user address spaces remain a separate gate.
+pub mod cell;
 pub mod compat;
 pub mod continuum;
 pub mod device;

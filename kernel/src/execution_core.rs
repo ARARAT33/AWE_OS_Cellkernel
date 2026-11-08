@@ -7,8 +7,12 @@ use crate::scheduler::{DispatchAction, Scheduler};
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum CoreError {
     ProcessTableFull,
+    ProcessIdExhausted,
+    RunQueueFull,
     InvalidTransition,
     BudgetExceeded,
+    NotExited,
+    StillScheduled,
 }
 
 /// Trace record for execution core event diagnostics.
@@ -51,8 +55,13 @@ impl<const N: usize> ExecutionCore<N> {
         let mut slot = 0;
         while slot < N {
             if self.processes[slot].is_none() {
+                // Zero is the exhausted sentinel. Unlike saturating_add,
+                // this prevents repeatedly issuing u64::MAX after exhaustion.
+                if self.next_id == 0 {
+                    return Err(CoreError::ProcessIdExhausted);
+                }
                 let id = ProcessId(self.next_id);
-                self.next_id = self.next_id.saturating_add(1);
+                self.next_id = self.next_id.checked_add(1).unwrap_or(0);
                 let mut descriptor = ProcessDescriptor {
                     id,
                     state: ProcessState::Created,
@@ -75,45 +84,63 @@ impl<const N: usize> ExecutionCore<N> {
     }
 
     pub fn block_process(&mut self, id: ProcessId) -> Result<(), CoreError> {
-        let process = self.find_mut(id).ok_or(CoreError::InvalidTransition)?;
-        if process.state != ProcessState::Running && process.state != ProcessState::Runnable {
+        let index = self.find_index(id).ok_or(CoreError::InvalidTransition)?;
+        let mut candidate = self.processes[index].ok_or(CoreError::InvalidTransition)?;
+        if candidate.state != ProcessState::Running && candidate.state != ProcessState::Runnable {
             return Err(CoreError::InvalidTransition);
         }
-        if process.state == ProcessState::Runnable {
-            let _ = process.transition(ProcessState::Running);
+        if candidate.state == ProcessState::Runnable {
+            candidate
+                .transition(ProcessState::Running)
+                .map_err(|_| CoreError::InvalidTransition)?;
         }
-        process
+        candidate
             .transition(ProcessState::Blocked)
             .map_err(|_| CoreError::InvalidTransition)?;
+
+        // Blocking must release both a queued slot and the current slot.
+        self.scheduler.remove(id);
+        self.processes[index] = Some(candidate);
         self.record_trace(id, 2, 0);
         Ok(())
     }
 
     pub fn unblock_process(&mut self, id: ProcessId) -> Result<(), CoreError> {
-        let process = self.find_mut(id).ok_or(CoreError::InvalidTransition)?;
-        if process.state != ProcessState::Blocked {
+        let index = self.find_index(id).ok_or(CoreError::InvalidTransition)?;
+        let mut candidate = self.processes[index].ok_or(CoreError::InvalidTransition)?;
+        if candidate.state != ProcessState::Blocked {
             return Err(CoreError::InvalidTransition);
         }
-        process
+        candidate
             .transition(ProcessState::Runnable)
             .map_err(|_| CoreError::InvalidTransition)?;
-        let _ = self.scheduler.enqueue(id);
+
+        // Do not publish Runnable state unless queue admission succeeds.
+        if !self.scheduler.enqueue(id) {
+            return Err(CoreError::RunQueueFull);
+        }
+        self.processes[index] = Some(candidate);
         self.record_trace(id, 3, 0);
         Ok(())
     }
 
     pub fn yield_process(&mut self, id: ProcessId) -> Result<(), CoreError> {
-        let process = self.find_mut(id).ok_or(CoreError::InvalidTransition)?;
-        if process.state == ProcessState::Running {
-            process
-                .transition(ProcessState::Runnable)
-                .map_err(|_| CoreError::InvalidTransition)?;
-            let _ = self.scheduler.enqueue(id);
-            self.record_trace(id, 4, 0);
-            Ok(())
-        } else {
-            Err(CoreError::InvalidTransition)
+        let index = self.find_index(id).ok_or(CoreError::InvalidTransition)?;
+        let mut candidate = self.processes[index].ok_or(CoreError::InvalidTransition)?;
+        if candidate.state != ProcessState::Running {
+            return Err(CoreError::InvalidTransition);
         }
+        candidate
+            .transition(ProcessState::Runnable)
+            .map_err(|_| CoreError::InvalidTransition)?;
+
+        // Keep the old Running state if the queue cannot accept this process.
+        if !self.scheduler.enqueue(id) {
+            return Err(CoreError::RunQueueFull);
+        }
+        self.processes[index] = Some(candidate);
+        self.record_trace(id, 4, 0);
+        Ok(())
     }
 
     pub fn schedule(&mut self) -> DispatchAction {
@@ -165,20 +192,44 @@ impl<const N: usize> ExecutionCore<N> {
     }
 
     pub fn exit(&mut self, id: ProcessId) -> Result<(), CoreError> {
-        let process = self.find_mut(id).ok_or(CoreError::InvalidTransition)?;
-        if process.state != ProcessState::Running
-            && process.state != ProcessState::Runnable
-            && process.state != ProcessState::Blocked
+        let index = self.find_index(id).ok_or(CoreError::InvalidTransition)?;
+        let mut candidate = self.processes[index].ok_or(CoreError::InvalidTransition)?;
+        if candidate.state != ProcessState::Running
+            && candidate.state != ProcessState::Runnable
+            && candidate.state != ProcessState::Blocked
         {
             return Err(CoreError::InvalidTransition);
         }
-        if process.state == ProcessState::Runnable {
-            let _ = process.transition(ProcessState::Running);
+        if candidate.state == ProcessState::Runnable {
+            candidate
+                .transition(ProcessState::Running)
+                .map_err(|_| CoreError::InvalidTransition)?;
         }
-        process
+        candidate
             .transition(ProcessState::Exited)
             .map_err(|_| CoreError::InvalidTransition)?;
+
+        // An exited process must not remain runnable or remain the current task.
+        self.scheduler.remove(id);
+        self.processes[index] = Some(candidate);
         self.record_trace(id, 6, 0);
+        Ok(())
+    }
+
+    /// Release the fixed-capacity process slot after exit and scheduler removal.
+    /// IDs are deliberately not reused when the slot is reclaimed.
+    pub fn reap(&mut self, id: ProcessId) -> Result<(), CoreError> {
+        let index = self.find_index(id).ok_or(CoreError::InvalidTransition)?;
+        let descriptor = self.processes[index].ok_or(CoreError::InvalidTransition)?;
+
+        if descriptor.state != ProcessState::Exited {
+            return Err(CoreError::NotExited);
+        }
+        if self.scheduler.contains(id) {
+            return Err(CoreError::StillScheduled);
+        }
+
+        self.processes[index] = None;
         Ok(())
     }
 
@@ -236,6 +287,17 @@ impl<const N: usize> ExecutionCore<N> {
         }
         None
     }
+
+    fn find_index(&self, id: ProcessId) -> Option<usize> {
+        let mut i = 0;
+        while i < N {
+            if self.processes[i].as_ref().map(|p| p.id) == Some(id) {
+                return Some(i);
+            }
+            i += 1;
+        }
+        None
+    }
 }
 
 #[cfg(test)]
@@ -262,6 +324,27 @@ mod tests {
     }
 
     #[test]
+    fn process_id_exhaustion_does_not_reissue_max_id() {
+        let mut core: ExecutionCore<3> = ExecutionCore::new();
+        core.next_id = u64::MAX - 1;
+
+        let penultimate = core.create_process(budget()).unwrap();
+        let final_id = core.create_process(budget()).unwrap();
+
+        assert_eq!(penultimate, ProcessId(u64::MAX - 1));
+        assert_eq!(final_id, ProcessId(u64::MAX));
+        assert_eq!(
+            core.create_process(budget()),
+            Err(CoreError::ProcessIdExhausted)
+        );
+        assert_eq!(
+            core.create_process(budget()),
+            Err(CoreError::ProcessIdExhausted)
+        );
+        assert_eq!(core.processes.iter().flatten().count(), 2);
+    }
+
+    #[test]
     fn capacity_and_budget_fail_closed() {
         let mut core: ExecutionCore<1> = ExecutionCore::new();
         let id = core.create_process(budget()).unwrap();
@@ -274,9 +357,83 @@ mod tests {
     }
 
     #[test]
+    fn reap_rejects_live_process_and_recovers_capacity_after_exit() {
+        let mut core: ExecutionCore<1> = ExecutionCore::new();
+        let first = core.create_process(budget()).unwrap();
+
+        assert_eq!(core.reap(first), Err(CoreError::NotExited));
+        assert_eq!(core.schedule(), DispatchAction::SwitchTo(first));
+        core.exit(first).unwrap();
+        assert_eq!(core.reap(first), Ok(()));
+
+        // The registry slot is reusable, but the old process ID is not.
+        let second = core.create_process(budget()).unwrap();
+        assert_eq!(second, ProcessId(2));
+        assert_eq!(core.schedule(), DispatchAction::SwitchTo(second));
+    }
+
+    #[test]
     fn invalid_exit_is_rejected() {
         let mut core: ExecutionCore<1> = ExecutionCore::new();
         assert_eq!(core.exit(ProcessId(99)), Err(CoreError::InvalidTransition));
+    }
+
+    #[test]
+    fn block_and_exit_remove_processes_from_scheduler_state() {
+        let mut core: ExecutionCore<2> = ExecutionCore::new();
+        let first = core.create_process(budget()).unwrap();
+        let second = core.create_process(budget()).unwrap();
+
+        assert_eq!(core.schedule(), DispatchAction::SwitchTo(first));
+        assert!(core.block_process(first).is_ok());
+        assert_eq!(core.current(), None);
+        assert_eq!(core.schedule(), DispatchAction::SwitchTo(second));
+
+        assert!(core.exit(second).is_ok());
+        assert_eq!(core.current(), None);
+        assert_eq!(core.schedule(), DispatchAction::KeepCurrent);
+        assert_eq!(core.current(), None);
+
+        assert!(core.unblock_process(first).is_ok());
+        assert_eq!(core.schedule(), DispatchAction::SwitchTo(first));
+    }
+
+    #[test]
+    fn queue_full_does_not_publish_unblock_or_yield_state() {
+        let mut unblock_core: ExecutionCore<2> = ExecutionCore::new();
+        let blocked = unblock_core.create_process(budget()).unwrap();
+        let other = unblock_core.create_process(budget()).unwrap();
+        assert_eq!(unblock_core.schedule(), DispatchAction::SwitchTo(blocked));
+        assert!(unblock_core.block_process(blocked).is_ok());
+        assert!(unblock_core.scheduler.enqueue(ProcessId(99)));
+        assert_eq!(
+            unblock_core.unblock_process(blocked),
+            Err(CoreError::RunQueueFull)
+        );
+        assert_eq!(
+            unblock_core.find(blocked).map(|p| p.state),
+            Some(ProcessState::Blocked)
+        );
+        assert_eq!(
+            unblock_core.find(other).map(|p| p.state),
+            Some(ProcessState::Runnable)
+        );
+
+        let mut yield_core: ExecutionCore<2> = ExecutionCore::new();
+        let first = yield_core.create_process(budget()).unwrap();
+        let running = yield_core.create_process(budget()).unwrap();
+        assert_eq!(yield_core.schedule(), DispatchAction::SwitchTo(first));
+        assert_eq!(yield_core.schedule(), DispatchAction::SwitchTo(running));
+        assert!(yield_core.scheduler.enqueue(ProcessId(99)));
+        assert_eq!(
+            yield_core.yield_process(running),
+            Err(CoreError::RunQueueFull)
+        );
+        assert_eq!(
+            yield_core.find(running).map(|p| p.state),
+            Some(ProcessState::Running)
+        );
+        assert_eq!(yield_core.current(), Some(running));
     }
 
     #[test]

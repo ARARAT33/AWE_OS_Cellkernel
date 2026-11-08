@@ -1,5 +1,8 @@
 # AWEOS Master Implementation Matrix
 
+> **Evidence-status clarification (2026-11-06):** This is a legacy feature inventory, not a release-readiness certificate. Historical labels such as `Complete`, `Unit Passed` and `Integrated` record module-level milestones and do not prove end-to-end runtime functionality. Use `PRODUCT_READINESS.md` and `docs/PRODUCT_GAP_MATRIX.md` for the current evidence-based gate status. Until each row is revalidated by its specific runtime/integration test, treat it as foundation or planned work; do not use this table to claim that the corresponding OS subsystem is production-ready.
+
+
 | ID | Phase | Module Name | Source Files | Public API / Components | Target Arch | Status | Test Status | Integration Status | Remaining Hardware Boundaries |
 |----|-------|-------------|--------------|--------------------------|-------------|--------|-------------|--------------------|-------------------------------|
 | MOD-A01 | Phase A | Repository Workspace & Targets | `Cargo.toml`, `x86_64-aweos.json`, `rust-toolchain.toml` | Workspace, Target spec | x86_64, AArch64, ARM, RV64 | Complete | Unit/Build Passed | Integrated | None |

@@ -176,7 +176,6 @@ dependencies = [
 name = "aweos-kernel"
 version = "0.2.1"
 dependencies = [
- "awe-ayui",
  "awe-boot-protocol",
 ]
 

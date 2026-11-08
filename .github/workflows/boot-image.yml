@@ -76,3 +76,34 @@ jobs:
         with:
           name: aweos-bootable-images
           path: dist/
+
+  exception-injection-selftest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-none
+
+      - uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-exc-selftest-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-exc-selftest-
+
+      - name: Install QEMU and ISO Tools
+        run: sudo apt-get update && sudo apt-get install -y grub-pc-bin grub-common xorriso mtools qemu-system-x86
+
+      - name: Lint and check the self-test feature build
+        run: |
+          cargo clippy -p aweos-kernel --features kernel-selftest -- -D warnings
+          cargo check -p aweos-kernel-bin --target x86_64-unknown-none --features selftest
+
+      - name: Run QEMU exception-injection self test
+        run: cargo test -p awe-product-core-tests product_core::qemu_exception_injection_selftest -- --exact --nocapture

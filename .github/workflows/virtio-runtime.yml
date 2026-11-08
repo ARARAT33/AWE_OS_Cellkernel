@@ -8,6 +8,7 @@ on:
 
 permissions:
   contents: read
+  pull-requests: write
 
 concurrency:
   group: virtio-runtime-${{ github.workflow }}-${{ github.ref }}
@@ -27,15 +28,17 @@ jobs:
           targets: x86_64-unknown-none
           components: rustfmt
 
+      # Cache only cargo registry/git downloads. `target` is deliberately NOT
+      # cached: a stale target cache previously caused exit-101 failures of
+      # `cargo test --workspace --all-targets` in this job while the identical
+      # uncached command passed in ci-diagnostics. The restore-keys fallback
+      # is removed so a changed Cargo.lock can never restore a stale cache.
       - uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            target
-          key: ${{ runner.os }}-virtio-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-virtio-cargo-
+          key: ${{ runner.os }}-virtio-cargo-v2-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Install QEMU and boot-image tools
         run: sudo apt-get update && sudo apt-get install -y grub-pc-bin grub-common xorriso mtools qemu-system-x86
@@ -44,8 +47,36 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Run storage and driver contract tests
-        run: cargo test --workspace --all-targets
+        shell: bash
+        run: |
+          set +e
+          cargo test --workspace --all-targets 2>&1 | tee /tmp/cargo-test-all.log
+          code=${PIPESTATUS[0]}
+          if [ "$code" -ne 0 ]; then
+            {
+              echo "## cargo test --workspace --all-targets failed (exit $code)"
+              echo '~~~text'
+              tail -n 200 /tmp/cargo-test-all.log
+              echo '~~~'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+          exit "$code"
 
+      - name: Comment test failure tail on PR
+        if: failure() && github.event_name == 'pull_request'
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const fs = require('fs');
+            let tail = '';
+            try { tail = require('child_process').execSync('tail -n 200 /tmp/cargo-test-all.log').toString(); } catch (e) { tail = 'log unavailable: ' + e.message; }
+            const body = `## virtio test step failure (head ${{ github.sha }})\n~~~text\n${tail}\n~~~`;
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: body.slice(0, 60000)
+            });
       - name: Build kernel
         env:
           AWEOS_QEMU_SMOKE: "1"
@@ -175,4 +206,5 @@ jobs:
             dist/qemu-host.log
             dist/qemu-virtio-debug.log
             dist/qemu-device-evidence.json
+            /tmp/cargo-test-all.log
           if-no-files-found: warn

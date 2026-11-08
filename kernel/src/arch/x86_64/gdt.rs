@@ -126,6 +126,49 @@ impl Tss64 {
             iomap_base: size_of::<Tss64>() as u16,
         }
     }
+
+    /// Assign a stack top to an Interrupt Stack Table slot.
+    ///
+    /// The slot index is the architectural IST number (1..=7), matching the
+    /// low three bits of an IDT entry's options word. The stack top must be
+    /// non-zero and 16-byte aligned because the CPU loads it directly into
+    /// RSP on entry.
+    pub fn set_ist(&mut self, index: u8, stack_top: u64) -> Result<(), &'static str> {
+        if !(1..=7).contains(&index) {
+            return Err("IST index must be in 1..=7");
+        }
+        if stack_top == 0 {
+            return Err("IST stack top must be non-zero");
+        }
+        if stack_top & 0xF != 0 {
+            return Err("IST stack top must be 16-byte aligned");
+        }
+        match index {
+            1 => self.ist1 = stack_top,
+            2 => self.ist2 = stack_top,
+            3 => self.ist3 = stack_top,
+            4 => self.ist4 = stack_top,
+            5 => self.ist5 = stack_top,
+            6 => self.ist6 = stack_top,
+            7 => self.ist7 = stack_top,
+            _ => return Err("unreachable IST index"),
+        }
+        Ok(())
+    }
+
+    /// Read back an IST slot's stack top. Unassigned or invalid slots read 0.
+    pub fn ist(&self, index: u8) -> u64 {
+        match index {
+            1 => self.ist1,
+            2 => self.ist2,
+            3 => self.ist3,
+            4 => self.ist4,
+            5 => self.ist5,
+            6 => self.ist6,
+            7 => self.ist7,
+            _ => 0,
+        }
+    }
 }
 
 pub const KERNEL_CODE_SELECTOR: u16 = 0x08;
@@ -229,5 +272,42 @@ pub fn init_gdt(kernel_stack_top: u64) {
         (*tss_ptr).rsp0 = kernel_stack_top;
         (*gdt_ptr).set_tss_ptr(tss_ptr);
         (*gdt_ptr).load_ptr();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn set_ist_assigns_valid_stack_tops() {
+        let mut tss = Tss64::new();
+        assert!(tss.set_ist(1, 0x0000_0000_0090_0000).is_ok());
+        assert!(tss.set_ist(7, 0x0000_0000_00A0_0000).is_ok());
+        assert_eq!(tss.ist(1), 0x0000_0000_0090_0000);
+        assert_eq!(tss.ist(7), 0x0000_0000_00A0_0000);
+    }
+
+    #[test]
+    fn set_ist_rejects_invalid_slots_and_tops() {
+        let mut tss = Tss64::new();
+        // Slot 0 and slots above the architectural 7 are not IST entries.
+        assert!(tss.set_ist(0, 0x9000).is_err());
+        assert!(tss.set_ist(8, 0x9000).is_err());
+        // The CPU would load the value straight into RSP: zero or misaligned
+        // tops must be refused instead of silently corrupting entry.
+        assert!(tss.set_ist(1, 0).is_err());
+        assert!(tss.set_ist(1, 0x9001).is_err());
+        assert_eq!(tss.ist(1), 0);
+    }
+
+    #[test]
+    fn unassigned_ist_slots_read_zero() {
+        let tss = Tss64::new();
+        for index in 1..=7 {
+            assert_eq!(tss.ist(index), 0);
+        }
+        assert_eq!(tss.ist(0), 0);
+        assert_eq!(tss.ist(8), 0);
     }
 }

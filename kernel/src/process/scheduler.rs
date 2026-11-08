@@ -59,9 +59,8 @@ impl<const N: usize> Scheduler<N> {
         ) {
             return Err(SchedulerError::NotRunnable);
         }
-        if self.len == N {
-            return Err(SchedulerError::QueueFull);
-        }
+        // Check for an existing entry before capacity: re-enqueuing an already
+        // queued process is idempotent, even when the queue is full.
         if self
             .queue
             .iter()
@@ -70,13 +69,42 @@ impl<const N: usize> Scheduler<N> {
         {
             return Ok(());
         }
-        if N == 0 {
+        if self.len == N || N == 0 {
             return Err(SchedulerError::QueueFull);
         }
         let index = (self.head + self.len) % N;
         self.queue[index] = Some(process.id);
         self.len += 1;
         Ok(())
+    }
+
+    /// Remove a process from the circular run queue without changing the
+    /// relative order of the other entries. Returns false when it was absent.
+    pub fn remove(&mut self, id: ProcessId) -> bool {
+        let Some(offset) =
+            (0..self.len).find(|&offset| self.queue[(self.head + offset) % N] == Some(id))
+        else {
+            return false;
+        };
+
+        for current_offset in offset..self.len - 1 {
+            let destination = (self.head + current_offset) % N;
+            let source = (self.head + current_offset + 1) % N;
+            self.queue[destination] = self.queue[source];
+        }
+
+        let tail = (self.head + self.len - 1) % N;
+        self.queue[tail] = None;
+        self.len -= 1;
+        if self.len == 0 {
+            self.head = 0;
+        }
+        true
+    }
+
+    /// Return whether a process is still present in the runnable queue.
+    pub fn contains(&self, id: ProcessId) -> bool {
+        self.queue.iter().flatten().any(|queued| *queued == id)
     }
 
     pub fn dequeue(&mut self) -> Result<ProcessId, SchedulerError> {
@@ -87,6 +115,9 @@ impl<const N: usize> Scheduler<N> {
         self.head = (self.head + 1) % N;
         self.len -= 1;
         self.ticks = self.ticks.wrapping_add(1);
+        if self.len == 0 {
+            self.head = 0;
+        }
         Ok(id)
     }
 
@@ -96,11 +127,17 @@ impl<const N: usize> Scheduler<N> {
 
     pub fn prepare_next(
         &mut self,
-        contexts: &[ProcessContext; N],
+        contexts: &[Option<ProcessContext>; N],
     ) -> Result<DispatchTarget, SchedulerError> {
-        let id = self.dequeue()?;
+        // Validate the queue head and its context before consuming the entry.
+        // A broken/missing context must not silently drop a runnable process.
+        if self.len == 0 {
+            return Err(SchedulerError::Empty);
+        }
+        let id = self.queue[self.head].ok_or(SchedulerError::Empty)?;
         let context = contexts
             .iter()
+            .flatten()
             .find(|ctx| ctx.process_id == id)
             .ok_or(SchedulerError::UnknownProcess)?;
         if !context.is_valid() {
@@ -111,13 +148,17 @@ impl<const N: usize> Scheduler<N> {
             state: ProcessState::Runnable,
             budget: super::ResourceBudget::unlimited(),
         };
-        DispatchTarget::from_descriptor(&descriptor, &context.cpu).map_err(SchedulerError::Dispatch)
+        let target = DispatchTarget::from_descriptor(&descriptor, &context.cpu)
+            .map_err(SchedulerError::Dispatch)?;
+        // Only remove the queue head after all validation has succeeded.
+        self.dequeue()?;
+        Ok(target)
     }
 
     pub fn prepare_switch(
         &mut self,
         current: &SwitchFrame,
-        contexts: &[ProcessContext; N],
+        contexts: &[Option<ProcessContext>; N],
     ) -> Result<DispatchTarget, SchedulerError> {
         let target = self.prepare_next(contexts)?;
         prepare_dispatch(current, &target).map_err(SchedulerError::Dispatch)?;
@@ -130,7 +171,7 @@ impl<const N: usize> Scheduler<N> {
     pub unsafe fn switch_next(
         &mut self,
         current: &mut SwitchFrame,
-        contexts: &[ProcessContext; N],
+        contexts: &[Option<ProcessContext>; N],
     ) -> Result<DispatchTarget, SchedulerError> {
         let target = self.prepare_switch(current, contexts)?;
         validate_backend_frames(current, &target.frame).map_err(SchedulerError::Backend)?;
@@ -146,10 +187,111 @@ impl<const N: usize> Scheduler<N> {
     pub unsafe fn switch_next(
         &mut self,
         current: &mut SwitchFrame,
-        contexts: &[ProcessContext; N],
+        contexts: &[Option<ProcessContext>; N],
     ) -> Result<DispatchTarget, SchedulerError> {
         let _ = current;
         let _ = contexts;
         Err(SchedulerError::Backend(BackendError::InvalidCurrent))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn process(id: u64) -> ProcessDescriptor {
+        ProcessDescriptor {
+            id: ProcessId(id),
+            state: ProcessState::Runnable,
+            budget: super::super::ResourceBudget::unlimited(),
+        }
+    }
+
+    #[test]
+    fn remove_preserves_fifo_order_across_wraparound() {
+        let mut scheduler = Scheduler::<3>::new();
+        scheduler.enqueue(&process(1)).unwrap();
+        scheduler.enqueue(&process(2)).unwrap();
+        scheduler.enqueue(&process(3)).unwrap();
+        assert_eq!(scheduler.dequeue(), Ok(ProcessId(1)));
+        scheduler.enqueue(&process(4)).unwrap();
+
+        assert!(scheduler.remove(ProcessId(3)));
+        assert_eq!(scheduler.len(), 2);
+        assert_eq!(scheduler.dequeue(), Ok(ProcessId(2)));
+        assert_eq!(scheduler.dequeue(), Ok(ProcessId(4)));
+        assert_eq!(scheduler.dequeue(), Err(SchedulerError::Empty));
+    }
+
+    #[test]
+    fn duplicate_enqueue_is_idempotent_even_when_full() {
+        let mut scheduler = Scheduler::<2>::new();
+        scheduler.enqueue(&process(1)).unwrap();
+        scheduler.enqueue(&process(2)).unwrap();
+
+        assert_eq!(scheduler.enqueue(&process(1)), Ok(()));
+        assert_eq!(scheduler.len(), 2);
+        assert_eq!(scheduler.dequeue(), Ok(ProcessId(1)));
+        assert_eq!(scheduler.dequeue(), Ok(ProcessId(2)));
+    }
+
+    #[test]
+    fn dispatch_uses_registered_context_for_max_process_id_with_sparse_slots() {
+        let id = ProcessId(u64::MAX);
+        let mut scheduler = Scheduler::<2>::new();
+        scheduler.enqueue(&process(id.0)).unwrap();
+        let real_context = ProcessContext::new(
+            id,
+            super::super::context::CpuContext::kernel_entry(0x3000, 0x4000, 0),
+        );
+        let contexts = [None, Some(real_context)];
+
+        let target = scheduler.prepare_next(&contexts).unwrap();
+        assert_eq!(target.process, id);
+        assert_eq!(target.frame.rip, 0x3000);
+    }
+
+    #[test]
+    fn dispatch_rejects_missing_context_without_consuming_queue_entry() {
+        let mut scheduler = Scheduler::<2>::new();
+        scheduler.enqueue(&process(7)).unwrap();
+
+        assert!(matches!(
+            scheduler.prepare_next(&[None, None]),
+            Err(SchedulerError::UnknownProcess)
+        ));
+        assert_eq!(scheduler.len(), 1);
+
+        let real_context = ProcessContext::new(
+            ProcessId(7),
+            super::super::context::CpuContext::kernel_entry(0x3000, 0x4000, 0),
+        );
+        let target = scheduler.prepare_next(&[Some(real_context), None]).unwrap();
+        assert_eq!(target.process, ProcessId(7));
+        assert_eq!(scheduler.len(), 0);
+    }
+
+    #[test]
+    fn contains_tracks_queue_membership_after_remove_and_dequeue() {
+        let mut scheduler = Scheduler::<2>::new();
+        scheduler.enqueue(&process(11)).unwrap();
+        scheduler.enqueue(&process(12)).unwrap();
+        assert!(scheduler.contains(ProcessId(11)));
+        assert!(scheduler.remove(ProcessId(11)));
+        assert!(!scheduler.contains(ProcessId(11)));
+        assert!(scheduler.contains(ProcessId(12)));
+        assert_eq!(scheduler.dequeue(), Ok(ProcessId(12)));
+        assert!(!scheduler.contains(ProcessId(12)));
+    }
+
+    #[test]
+    fn zero_capacity_queue_fails_safely() {
+        let mut scheduler = Scheduler::<0>::new();
+        assert_eq!(
+            scheduler.enqueue(&process(1)),
+            Err(SchedulerError::QueueFull)
+        );
+        assert!(!scheduler.remove(ProcessId(1)));
+        assert_eq!(scheduler.dequeue(), Err(SchedulerError::Empty));
     }
 }

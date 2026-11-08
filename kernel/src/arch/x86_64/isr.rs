@@ -1,7 +1,11 @@
 #![no_std]
 
-/// CPU state captured at an interrupt boundary. The layout is intentionally
-/// explicit so the eventual assembly ISR stubs have one stable Rust ABI.
+/// CPU state captured by the x86_64 common ISR entry.
+///
+/// In 64-bit mode, the processor unconditionally saves the interrupted
+/// SS:RSP after the return frame, including same-CPL interrupts with no IST
+/// stack switch. The structure therefore has one fixed hardware-frame layout
+/// for all vectors (with the stub-normalized error-code slot).
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct InterruptFrame {
@@ -62,9 +66,34 @@ impl InterruptFrame {
         (upper == 0 || upper == 0xffff) && self.rip != 0
     }
 
-    pub const fn stack_pointer_valid(&self) -> bool {
-        let upper = self.rsp >> 48;
-        (upper == 0 || upper == 0xffff) && (self.rsp & 0x7) == 0
+    /// Whether the interrupted code was running outside ring 0.
+    ///
+    /// This reports the saved CS privilege level; it does not determine
+    /// whether the hardware-saved RSP/SS fields are present (they always are
+    /// in 64-bit mode).
+    pub const fn interrupted_from_user(&self) -> bool {
+        self.cs & 0x3 != 0
+    }
+
+    /// Return the RSP unconditionally saved by the processor in 64-bit mode.
+    ///
+    /// Long-mode interrupt/exception frames always contain the interrupted
+    /// SS:RSP, even when CPL does not change and the IDT gate has IST=0.
+    pub const fn interrupted_stack_pointer(&self) -> u64 {
+        self.rsp
+    }
+
+    /// Return the SS unconditionally saved by the processor in 64-bit mode.
+    pub const fn interrupted_stack_segment(&self) -> u64 {
+        self.ss
+    }
+
+    pub fn stack_pointer_valid(&self) -> bool {
+        let rsp = self.interrupted_stack_pointer();
+        let upper = rsp >> 48;
+        // Long mode aligns the new interrupt frame, not the interrupted
+        // program's saved RSP. The old RSP may therefore be byte-unaligned.
+        rsp != 0 && (upper == 0 || upper == 0xffff)
     }
 
     pub const fn rflags_valid(&self) -> bool {
@@ -73,11 +102,13 @@ impl InterruptFrame {
         self.rflags & 0x2 != 0 && self.rflags & (1 << 17) == 0
     }
 
-    pub const fn validate(&self) -> bool {
+    pub fn validate(&self) -> bool {
         self.instruction_pointer_valid() && self.stack_pointer_valid() && self.rflags_valid()
     }
 }
 
+/// Architectural x86 exception vectors for which the CPU pushes an
+/// error-code word before entering the handler.
 pub const fn is_exception_with_error_code(vector: u8) -> bool {
     matches!(vector, 8 | 10 | 11 | 12 | 13 | 14 | 17 | 21 | 29 | 30)
 }
@@ -106,8 +137,72 @@ mod tests {
 
     #[test]
     fn error_code_vectors_are_explicit() {
-        assert!(is_exception_with_error_code(14));
-        assert!(is_exception_with_error_code(13));
-        assert!(!is_exception_with_error_code(32));
+        for vector in [8, 10, 11, 12, 13, 14, 17, 21, 29, 30] {
+            assert!(is_exception_with_error_code(vector), "vector {vector}");
+        }
+        for vector in [
+            0, 1, 2, 3, 4, 5, 6, 7, 9, 15, 16, 18, 19, 20, 28, 31, 32, 255,
+        ] {
+            assert!(!is_exception_with_error_code(vector), "vector {vector}");
+        }
+    }
+
+    #[test]
+    fn ring_zero_frame_uses_hardware_saved_rsp_and_ss() {
+        let mut f = InterruptFrame::empty();
+        f.vector = 32; // Same-CPL external interrupt, no IST slot.
+        f.rip = 0x0040_0000;
+        f.cs = 0x08;
+        f.rflags = 0x202;
+        f.rsp = 0x0080_0000;
+        f.ss = 0x10;
+
+        assert_eq!(f.interrupted_stack_pointer(), 0x0080_0000);
+        assert_eq!(f.interrupted_stack_segment(), 0x10);
+        assert!(f.validate());
+    }
+
+    #[test]
+    fn unaligned_interrupted_rsp_is_valid_in_long_mode() {
+        let mut f = InterruptFrame::empty();
+        f.vector = 32;
+        f.rip = 0x0040_0000;
+        f.cs = 0x08;
+        f.rflags = 0x202;
+        f.rsp = 0x0080_0001;
+        f.ss = 0x10;
+
+        assert!(f.stack_pointer_valid());
+        assert!(f.validate());
+    }
+
+    #[test]
+    fn ist_same_ring_frame_uses_hardware_saved_rsp_and_ss() {
+        let mut f = InterruptFrame::empty();
+        f.vector = 8; // Double Fault uses IST2.
+        f.rip = 0x0040_0000;
+        f.cs = 0x08; // Same privilege level: CPL0.
+        f.rflags = 0x202;
+        f.rsp = 0x0080_0000;
+        f.ss = 0x10;
+
+        assert!(!f.interrupted_from_user());
+        assert_eq!(f.interrupted_stack_pointer(), 0x0080_0000);
+        assert_eq!(f.interrupted_stack_segment(), 0x10);
+        assert!(f.validate());
+    }
+
+    #[test]
+    fn ring_three_frame_uses_hardware_saved_rsp_and_ss() {
+        let mut f = InterruptFrame::empty();
+        f.rip = 0x0040_0000;
+        f.cs = 0x1b;
+        f.rflags = 0x202;
+        f.rsp = 0x0080_0000;
+        f.ss = 0x23;
+
+        assert_eq!(f.interrupted_stack_pointer(), 0x0080_0000);
+        assert_eq!(f.interrupted_stack_segment(), 0x23);
+        assert!(f.validate());
     }
 }
