@@ -1,4 +1,3 @@
-[object Object],[object Object]
 
 ---
 
@@ -48,3 +47,48 @@
 2. Unify `ProcessManager` and `ExecutionCore` behind one authoritative current-task model.
 3. Implement per-process page-table roots and checked user-memory copy operations before enabling Ring 3.
 4. Follow up on the re-evaluation comments: rebase or close stale PRs #55/#53/#52 (and check #50/#48) against current main `969d298`.
+
+## 2026-11-09 — x86_64 target-stack dispatch acknowledgement
+
+### Baseline and branch discipline
+
+- Baseline audit began at main commit 6025b264aa80efd605d6eb5517c9ccb3f6dfc92b. The plan was updated first in commit f14a7db4f860193d38941a86374c64f039341fd8.
+- Implementation commit: 1e27e61e609437560ab4cfd40ed52813abf7afef. Formatting-only correction: b2d212ca2a7558b9c044383abc7ed8d1341ac144.
+- All implementation and documentation commits were written directly to main with a parent-SHA compare-and-swap update. No branch or PR was created; the existing chore/ci-verify-main-2026-11-08 branch and open PRs #55, #53, #52, #50 and #48 were left untouched.
+- The GitHub API exposes committed repository state only. No local clone/worktree was available to inspect uncommitted local edits or run commands in a local checkout.
+
+### Implemented
+
+- kernel/src/process/context_switch.rs: extended the kernel-private x86_64 SwitchFrame from 64 to 88 bytes; added a 24-byte completion triplet at fixed offsets 64/72/80 with compile-time layout assertions. Completion metadata is validated for canonical code/context addresses and System V AMD64 target-stack alignment. Added tests for aligned and misaligned callback frames and orphan metadata.
+- kernel/src/process/x86_64_switch.S: loads all callback metadata before changing stacks; after installing the target RSP it calls the optional completion hook on that target stack, preserves the target RIP, then jumps to the target RIP.
+- kernel/src/process/mod.rs: added switch_to_dispatch, which rejects null/noncanonical/misaligned pointers and accepts only the exact pending DispatchTarget. It acknowledges the pending process through ProcessManager on the target stack, cancels a pending dispatch if frame/backend validation fails, and halts fail-closed if target-stack acknowledgement cannot be committed.
+- kernel/src/arch/x86_64/selftest.rs: added a feature-gated fresh 4 KiB process stack test. It switches boot stack → process stack, verifies the callback published Running before process entry, exits, switches back, acknowledges idle, and reaps the process.
+- docs/CELL_RUNTIME.md: documented the callback ABI, validation, single-core/shared-kernel-address-space assumptions, and explicit non-goals.
+- The first implementation commit passed compilation/tests but failed rustfmt checks. The formatting was corrected in b2d212c; the final validation matrix below is for that corrected commit.
+
+### Final validation on main commit b2d212ca2a7558b9c044383abc7ed8d1341ac144
+
+- AWEOS CI Pipeline run 42655918770 — SUCCESS: cargo check --workspace --all-targets; cargo test --workspace (337 passed, 0 failed); cargo fmt --all --check; product-core tests (11 passed); cargo clippy --workspace --all-targets with -D warnings and the repository's documented lint allowances.
+- AWEOS Quality Gate run 42655918945 — SUCCESS: workspace formatting/check/tests (337 passed); product-core integration tests (11 passed); targeted persistent-storage round-trip/recovery test (1 passed); full AWE Nexus services/compatibility integration test (1 passed); workspace Clippy.
+- AWEOS Bootable Image Pipeline run 42655918803 — SUCCESS: kernel-selftest Clippy; x86_64-unknown-none selftest-feature check; QEMU exception-injection self-test (1 passed); release kernel build; GRUB Multiboot2 header validation; ISO creation; QEMU serial smoke test reached 'AWEOS: kernel is alive'. The exception self-test's phase sequence cannot reach the NMI-wait marker if the new two-stack test returns failure.
+- AWEOS VirtIO Runtime run 42655919123 — SUCCESS: contract tests and QEMU launch. QEMU exposed virtio-blk-pci; serial evidence showed boot protocol validated, kernel state RUNNING, and kernel alive. This run did not perform a verified block-device read/write or persistence test.
+- AWEOS Cloud Security Gate run 42655919237 — SUCCESS.
+- AWEOS Multi-Architecture Images run 42655918899 — SUCCESS for configured image builds. This is build evidence, not ARM64/RISC-V runtime boot evidence.
+- AOSIN Cross-Platform Installers run 42655919007 — SUCCESS for the configured Linux and Windows GUI/CLI installer jobs.
+
+### Remaining risks and honest scope
+
+- The new path is an architecture-owned dispatch acknowledgement primitive and a feature-gated QEMU regression, not a production scheduler. The normal kernel boot path still does not start a preemptive process scheduler.
+- ProcessManager's stored ProcessContext is not yet updated from the outgoing SwitchFrame by this wrapper; context persistence across multiple real processes and integration with ExecutionCore remain the next critical work.
+- The mechanism is single-core, assumes interrupts remain disabled during the switch, and requires the manager, callback context, and both stacks to stay pinned and mapped in the shared kernel address space. It is not SMP-safe and does not provide address-space isolation.
+- Ring 3, per-process page tables, supervisor-only kernel mappings, checked user-copy, capability-checked syscalls, timer preemption, and user-mode isolation remain unimplemented or not validated.
+- QEMU validation used the repository's Multiboot2/GRUB path. The UEFI loader build/check passed in the Quality Gate, but no full OVMF/UEFI firmware boot was performed in this run. No physical hardware was tested.
+- VirtIO evidence proves QEMU device exposure and kernel boot, not functional block I/O. Network TX/RX, authenticated remote cell IPC, durable native filesystem recovery, and USB/GPU/audio/Wi-Fi hardware drivers remain separate unvalidated gates.
+
+### Next priorities
+
+1. Persist the outgoing SwitchFrame into ProcessManager's ProcessContext on every dispatch and test two runnable processes round-robin on separate QEMU stacks.
+2. Unify ProcessManager and ExecutionCore so there is one authoritative current-task/lifecycle model; connect scheduler tick, interrupt return, and the architecture switch path.
+3. Add guarded page-table roots and checked kernel/user mappings before any Ring-3 entry; keep user mode disabled until isolation tests exist.
+4. Continue VirtIO block I/O with real request/completion and read-after-write tests, then persistent storage/crash-recovery tests.
+5. Add explicit QEMU self-test serial milestones for the two-stack path and expand regression/fuzz/stress coverage.

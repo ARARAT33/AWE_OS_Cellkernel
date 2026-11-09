@@ -77,3 +77,12 @@ This plan is committed before implementation. The completion record, exact files
 - The completion callback is a kernel-only, single-core mechanism. It must not be presented as an address-space isolation boundary or SMP-safe scheduler.
 - Ring 3 remains disabled until per-process page-table roots, supervisor-only kernel mappings, checked user-copy primitives, and capability-checked syscalls exist.
 - Storage persistence, network TX/RX, authenticated remote cell IPC, and physical-hardware support remain separate unvalidated gates.
+---
+
+## Completion record — 2026-11-09
+
+- P0 target-stack completion callback and exact pending-dispatch acknowledgement were implemented in 1e27e61e609437560ab4cfd40ed52813abf7afef; formatting was corrected in b2d212ca2a7558b9c044383abc7ed8d1341ac144.
+- P1 feature-gated two-stack QEMU regression passed in Bootable Image Pipeline run 42655918803. The test checks ProcessManager Running → Exited, switch back to boot stack, idle acknowledgement, and reap.
+- Final CI, Quality Gate, Cloud Security, Bootable Image/QEMU, VirtIO Runtime, Multi-Architecture image build, and AOSIN installer runs for b2d212ca2a7558b9c044383abc7ed8d1341ac144 all completed successfully.
+- P2 is complete for the listed checks. P3 documentation is being recorded in this commit.
+- P0/P1 do not imply a production scheduler: outgoing context persistence into ProcessManager, multi-process round-robin, ExecutionCore unification, SMP, Ring 3, and full UEFI firmware boot remain open.
