@@ -206,12 +206,12 @@ fn run_context_switch_selftest() -> bool {
             manager,
             PROCESS_A,
             process_a_entry as *const () as usize as u64,
-            SWITCH_A_STACK.as_mut_ptr(),
+            core::ptr::addr_of_mut!(SWITCH_A_STACK) as *mut u8,
         ) || !register_process(
             manager,
             PROCESS_B,
             process_b_entry as *const () as usize as u64,
-            SWITCH_B_STACK.as_mut_ptr(),
+            core::ptr::addr_of_mut!(SWITCH_B_STACK) as *mut u8,
         ) {
             return false;
         }
@@ -234,7 +234,7 @@ fn run_context_switch_selftest() -> bool {
             PROCESS_A,
             a_frame_ptr,
             process_a_entry as *const () as usize as u64,
-            SWITCH_A_STACK.as_mut_ptr(),
+            core::ptr::addr_of_mut!(SWITCH_A_STACK) as *mut u8,
         ) {
             return false;
         }
@@ -252,7 +252,7 @@ fn run_context_switch_selftest() -> bool {
             PROCESS_B,
             b_frame_ptr,
             process_b_entry as *const () as usize as u64,
-            SWITCH_B_STACK.as_mut_ptr(),
+            core::ptr::addr_of_mut!(SWITCH_B_STACK) as *mut u8,
         ) {
             return false;
         }
@@ -321,11 +321,15 @@ unsafe fn dispatch_process(
     boot_frame_ptr: *mut SwitchFrame,
     expected: ProcessId,
 ) -> bool {
-    let target = match (*manager_ptr).next_dispatch() {
-        Ok(target) if target.process == expected => target,
-        _ => return false,
-    };
-    switch_to_dispatch(manager_ptr, boot_frame_ptr, target).is_ok()
+    // SAFETY: the caller guarantees pinned, mapped, exclusively-owned manager
+    // and boot-frame pointers and disabled interrupts.
+    unsafe {
+        let target = match (*manager_ptr).next_dispatch() {
+            Ok(target) if target.process == expected => target,
+            _ => return false,
+        };
+        switch_to_dispatch(manager_ptr, boot_frame_ptr, target).is_ok()
+    }
 }
 
 /// Persist a just-yielded process's outgoing frame and verify it describes a
@@ -337,18 +341,23 @@ unsafe fn persist_yield(
     entry_rip: u64,
     stack: *mut u8,
 ) -> bool {
-    let stack_start = stack as u64;
-    let stack_end = stack_start + 4096;
-    let manager = &mut *manager_ptr;
-    if manager
-        .persist_outgoing_frame(process, &*frame_ptr)
-        .is_err()
-    {
+    // SAFETY: the caller guarantees pinned, mapped, exclusively-owned manager
+    // and frame pointers.
+    let (persisted, persisted_ok) = unsafe {
+        let manager = &mut *manager_ptr;
+        let persisted_ok = manager
+            .persist_outgoing_frame(process, &*frame_ptr)
+            .is_ok();
+        (manager.process_context(process), persisted_ok)
+    };
+    if !persisted_ok {
         return false;
     }
-    let Some(persisted) = manager.process_context(process) else {
+    let Some(persisted) = persisted else {
         return false;
     };
+    let stack_start = stack as u64;
+    let stack_end = stack_start + 4096;
     // The saved RIP must have advanced past the process entry (it is the
     // resume label inside the switch backend), and RSP must still point
     // into the process's own stack.

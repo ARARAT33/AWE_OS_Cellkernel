@@ -1059,7 +1059,7 @@ mod tests {
             manager.persist_outgoing_frame(ProcessId(9), &good),
             Err(ProcessManagerError::InvalidProcess)
         );
-        assert_eq!(manager.process_context(ProcessId(9)), None);
+        assert!(manager.process_context(ProcessId(9)).is_none());
 
         manager.make_runnable(ProcessId(1)).unwrap();
         dispatch_and_confirm(&mut manager, ProcessId(1));
