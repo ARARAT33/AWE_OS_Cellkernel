@@ -1032,7 +1032,10 @@ mod tests {
         manager
             .persist_outgoing_frame(ProcessId(1), &outgoing)
             .unwrap();
-        assert_eq!(manager.process_context(ProcessId(1)).unwrap().cpu.rsp, 0x8000);
+        assert_eq!(
+            manager.process_context(ProcessId(1)).unwrap().cpu.rsp,
+            0x8000
+        );
     }
 
     #[test]
