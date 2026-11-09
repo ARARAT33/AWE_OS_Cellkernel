@@ -1,6 +1,9 @@
 #![no_std]
 
-use awe_boot_protocol::{Architecture, BootInfo, validate};
+pub mod security;
+pub mod validate;
+
+use awe_boot_protocol::{Architecture, BootInfo, validate as validate_boot_info};
 
 pub struct LoaderState {
     pub info: BootInfo,
@@ -14,7 +17,7 @@ impl LoaderState {
     }
 
     pub fn ready(&self) -> bool {
-        validate(&self.info)
+        validate_boot_info(&self.info)
     }
 
     pub fn set_cpu_count(&mut self, count: u32) -> &mut Self {
