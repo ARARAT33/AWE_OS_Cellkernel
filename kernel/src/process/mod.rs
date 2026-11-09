@@ -11,8 +11,7 @@ pub mod x86_64_backend;
 #[cfg(target_arch = "x86_64")]
 use crate::memory::address::is_canonical_x86_64_48;
 use context::ProcessContext;
-#[cfg(target_arch = "x86_64")]
-use context_switch::SwitchFrame;
+use context_switch::{SwitchCompletion, SwitchFrame};
 use core::sync::atomic::{AtomicU64, Ordering};
 use dispatch::DispatchTarget;
 use scheduler::{Scheduler, SchedulerError};
@@ -457,6 +456,61 @@ impl<const N: usize> ProcessManager<N> {
         Ok(())
     }
 
+    /// Return a copy of the stored execution context for `id`.
+    pub fn process_context(&self, id: ProcessId) -> Option<ProcessContext> {
+        self.find_index(id).and_then(|index| self.contexts[index])
+    }
+
+    /// Persist the outgoing SwitchFrame of a process that has just been
+    /// switched away from into its stored execution context.
+    ///
+    /// The architecture backend saves the switched-away registers into the
+    /// caller-provided SwitchFrame storage. The dispatch loop must call this
+    /// with that storage when the scheduler regains control; otherwise a
+    /// re-dispatched process would resume from its original entry context
+    /// instead of its actual execution state.
+    ///
+    /// Only processes that can be dispatched again (Running, Runnable or
+    /// Blocked) accept persistence: a Created process has never executed and
+    /// an Exited context is dead state until reaped. Stale completion
+    /// metadata in the outgoing frame is ignored and cleared: the saved
+    /// registers are the authoritative state, and completion hooks belong to
+    /// the dispatch path, not to a persisted context.
+    pub fn persist_outgoing_frame(
+        &mut self,
+        process: ProcessId,
+        frame: &SwitchFrame,
+    ) -> Result<(), ProcessManagerError> {
+        let index = self
+            .find_index(process)
+            .ok_or(ProcessManagerError::InvalidProcess)?;
+        let descriptor = self.processes[index].ok_or(ProcessManagerError::InvalidProcess)?;
+        match descriptor.state {
+            ProcessState::Running | ProcessState::Runnable | ProcessState::Blocked => {}
+            ProcessState::Created | ProcessState::Exited => {
+                return Err(ProcessManagerError::InvalidState);
+            }
+        }
+        let context = self.contexts[index].ok_or(ProcessManagerError::InvalidContext)?;
+        if context.process_id != process {
+            return Err(ProcessManagerError::InvalidContext);
+        }
+
+        let mut outgoing = *frame;
+        outgoing.completion = SwitchCompletion::none();
+        if !outgoing.is_well_formed() {
+            return Err(ProcessManagerError::InvalidContext);
+        }
+
+        let mut updated = context;
+        outgoing.apply_to_context(&mut updated.cpu);
+        if !updated.is_valid() {
+            return Err(ProcessManagerError::InvalidContext);
+        }
+        self.contexts[index] = Some(updated);
+        Ok(())
+    }
+
     /// Dequeue and retain one exact dispatch target. A second dequeue is
     /// rejected until the pending switch is acknowledged or cancelled.
     pub fn next_dispatch(&mut self) -> Result<DispatchTarget, ProcessManagerError> {
@@ -515,6 +569,14 @@ unsafe extern "C" fn confirm_pending_dispatch_on_target<const N: usize>(
 
 /// Perform a validated x86_64 switch and acknowledge the exact pending target
 /// on that target's stack.
+///
+/// After the switch completes and control eventually returns to the dispatch
+/// caller (because the target yielded, blocked or exited), the caller must
+/// persist the switched-away process's outgoing frame through
+/// `ProcessManager::persist_outgoing_frame` before that process is
+/// dispatched again. The backend writes the outgoing registers into the
+/// frame storage that was current at switch time, but the manager cannot
+/// observe that storage by itself.
 ///
 /// # Safety
 /// - manager must point to a pinned ProcessManager in shared kernel memory.
@@ -906,5 +968,124 @@ mod tests {
             Some(ProcessState::Exited)
         );
         assert_eq!(manager.next_dispatch().unwrap().process, ProcessId(2));
+    }
+
+    #[test]
+    fn persist_outgoing_frame_updates_the_stored_context() {
+        let mut manager: ProcessManager<2> = ProcessManager::new();
+        manager.register(descriptor_with_id(1), context(1)).unwrap();
+        manager.make_runnable(ProcessId(1)).unwrap();
+        dispatch_and_confirm(&mut manager, ProcessId(1));
+
+        let outgoing = SwitchFrame {
+            rbx: 0x11,
+            rbp: 0x12,
+            r12: 0x13,
+            r13: 0x14,
+            r14: 0x15,
+            r15: 0x16,
+            rsp: 0x8008,
+            rip: 0x400000,
+            completion: SwitchCompletion::none(),
+        };
+        manager
+            .persist_outgoing_frame(ProcessId(1), &outgoing)
+            .unwrap();
+
+        let persisted = manager.process_context(ProcessId(1)).unwrap();
+        assert_eq!(persisted.process_id, ProcessId(1));
+        assert_eq!(persisted.cpu.rip, 0x400000);
+        assert_eq!(persisted.cpu.rsp, 0x8008);
+        assert_eq!(persisted.cpu.rbx, 0x11);
+        assert_eq!(persisted.cpu.r15, 0x16);
+        // rflags and cr3 are not carried by the frame and stay untouched.
+        assert!(persisted.is_valid());
+    }
+
+    #[test]
+    fn persist_outgoing_frame_clears_stale_completion_metadata() {
+        let mut manager: ProcessManager<2> = ProcessManager::new();
+        manager.register(descriptor_with_id(1), context(1)).unwrap();
+        manager.make_runnable(ProcessId(1)).unwrap();
+        dispatch_and_confirm(&mut manager, ProcessId(1));
+
+        // The frame storage of a dispatched target keeps the completion
+        // triplet of its dispatch; those registers are stale after the
+        // backend saved the outgoing state over the first eight words.
+        let mut outgoing = SwitchFrame {
+            rbx: 0x11,
+            rbp: 0x12,
+            r12: 0x13,
+            r13: 0x14,
+            r14: 0x15,
+            r15: 0x16,
+            rsp: 0x8000,
+            rip: 0x400000,
+            completion: SwitchCompletion::none(),
+        };
+        outgoing.completion = SwitchCompletion {
+            callback: 0x400000,
+            context: 0x1000,
+            argument: 7,
+        };
+
+        manager
+            .persist_outgoing_frame(ProcessId(1), &outgoing)
+            .unwrap();
+        assert_eq!(manager.process_context(ProcessId(1)).unwrap().cpu.rsp, 0x8000);
+    }
+
+    #[test]
+    fn persist_outgoing_frame_rejects_dead_processes_and_bad_frames() {
+        let mut manager: ProcessManager<2> = ProcessManager::new();
+        manager.register(descriptor_with_id(1), context(1)).unwrap();
+
+        let good = SwitchFrame {
+            rip: 0x400000,
+            rsp: 0x8008,
+            ..SwitchFrame::default()
+        };
+
+        // A Created process has never executed.
+        assert_eq!(
+            manager.persist_outgoing_frame(ProcessId(1), &good),
+            Err(ProcessManagerError::InvalidState)
+        );
+        // Unknown processes have no context slot.
+        assert_eq!(
+            manager.persist_outgoing_frame(ProcessId(9), &good),
+            Err(ProcessManagerError::InvalidProcess)
+        );
+        assert_eq!(manager.process_context(ProcessId(9)), None);
+
+        manager.make_runnable(ProcessId(1)).unwrap();
+        dispatch_and_confirm(&mut manager, ProcessId(1));
+
+        let zero_rip = SwitchFrame {
+            rip: 0,
+            rsp: 0x8008,
+            ..SwitchFrame::default()
+        };
+        assert_eq!(
+            manager.persist_outgoing_frame(ProcessId(1), &zero_rip),
+            Err(ProcessManagerError::InvalidContext)
+        );
+
+        let noncanonical_rsp = SwitchFrame {
+            rip: 0x400000,
+            rsp: 0xffff_7fff_ffff_fff0,
+            ..SwitchFrame::default()
+        };
+        assert_eq!(
+            manager.persist_outgoing_frame(ProcessId(1), &noncanonical_rsp),
+            Err(ProcessManagerError::InvalidContext)
+        );
+
+        // An Exited context is dead state until reaped.
+        manager.exit(ProcessId(1)).unwrap();
+        assert_eq!(
+            manager.persist_outgoing_frame(ProcessId(1), &good),
+            Err(ProcessManagerError::InvalidState)
+        );
     }
 }
