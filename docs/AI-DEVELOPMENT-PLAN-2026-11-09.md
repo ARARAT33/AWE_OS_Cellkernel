@@ -47,3 +47,33 @@ The audit found a correctness defect repeated across the bootloader and kernel: 
 ## Session completion record
 
 This plan is committed before implementation. The completion record, exact files changed, test outcomes, CI run IDs and remaining blockers will be appended to `docs/AI-DEVELOPMENT-LOG.md` after validation.
+
+---
+
+## Continuation run — 2026-11-09 (x86_64 dispatch completion)
+
+### Baseline and repository safety
+
+- Audited the repository default branch main at 6025b264aa80efd605d6eb5517c9ccb3f6dfc92b (2026-11-09 16:18:18 UTC). The root tree contains 447 entries and 28 Rust workspace members.
+- main is the default branch. Existing branch chore/ci-verify-main-2026-11-08 and open PRs #55, #53, #52, #50 and #48 are preserved and will not be checked out, rebased, merged, or deleted.
+- All writes in this run are scoped explicitly to main; no feature branch or PR will be created. GitHub's API exposes committed refs only, so it cannot inspect an unrelated local clone's uncommitted worktree. Each update uses the current blob SHA and branch ref; if either changes unexpectedly, stop and re-audit.
+- The current main head's latest Actions runs (2026-11-09 16:18 UTC) report successful workspace CI, Quality Gate, Cloud Security, boot image/QEMU, VirtIO QEMU, multi-architecture image builds, and AOSIN installers.
+
+### Prioritized implementation plan
+
+1. **P0 — Architecture-owned dispatch completion.** Extend the x86_64 switch-frame ABI with an optional, validated target-stack completion callback. Add a wrapper that accepts only the exact pending DispatchTarget, invokes ProcessManager::confirm_dispatch after the CPU has loaded the target stack, and fails closed if acknowledgement cannot be committed. Keep the contract explicitly single-core and kernel-address-space-only.
+2. **P1 — Real QEMU context-switch regression.** Add a feature-gated two-stack round-trip self-test: boot context → fresh process stack → completion acknowledgement → return to boot stack. Verify the process becomes Running only after the target-stack callback, then exit, acknowledge idle, and reap it. This is not Ring-3 or SMP validation.
+3. **P2 — Validate.** Run workspace format/tests/Clippy and the dedicated QEMU boot/exception-injection workflow. Inspect job steps/logs and report each result separately. Do not infer physical-hardware, durable storage, or NIC functionality from these checks.
+4. **P3 — Record evidence.** Update docs/AI-DEVELOPMENT-LOG.md with exact commit/run IDs, changed files, failures, limitations, and next priorities.
+
+### Audit findings driving P0
+
+- ProcessManager now retains a single pending DispatchTarget, checks exact target equality, and rejects premature reaping.
+- The x86_64 assembly currently saves/restores the callee-saved register frame and jumps to the target RIP, but it has no target-stack callback. No production path calls confirm_dispatch; the kernel boot path explicitly states that a scheduler is not yet running.
+- The existing QEMU test validates exception/IST handling, not a real task-to-task context switch. A passing ISO smoke test proves early boot reaches its serial marker only; it does not prove scheduler execution.
+
+### Hard limits
+
+- The completion callback is a kernel-only, single-core mechanism. It must not be presented as an address-space isolation boundary or SMP-safe scheduler.
+- Ring 3 remains disabled until per-process page-table roots, supervisor-only kernel mappings, checked user-copy primitives, and capability-checked syscalls exist.
+- Storage persistence, network TX/RX, authenticated remote cell IPC, and physical-hardware support remain separate unvalidated gates.
