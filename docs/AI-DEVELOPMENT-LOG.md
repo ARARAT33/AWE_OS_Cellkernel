@@ -109,7 +109,8 @@
 
 ### Validation
 
-- To be recorded after CI on the PR: workspace fmt/tests/clippy, boot-image exception self-test and QEMU smoke, VirtIO runtime, quality/security gates. This entry will be updated with real run results; no completion is claimed before those pass.
+- First PR check suite (head before the fix commit) failed on three real, diagnosable errors: static-mut mutable references (as_mut_ptr on the selftest stacks), unsafe-op-in-unsafe-fn bodies, and an assert_eq requiring Debug on ProcessContext. Fixed in a440d80 (addr_of_mut!, explicit unsafe blocks, is_none()); the rustfmt bot then applied formatting as e1f12fc.
+- Full-suite validation on the corrected head is in progress on PR #63; this entry will be updated with the real run results. No completion is claimed before those checks pass.
 
 ### Remaining risks and honest scope
 
