@@ -177,7 +177,6 @@ pub fn run() {
     serial_write_str("AWEOS SELFTEST: ALL PHASES PASSED\r\n");
 }
 
-
 /// Exercise the real assembly switch path with a fresh process stack. The
 /// target-stack callback must publish Running before the task entry executes.
 fn run_context_switch_selftest() -> bool {
@@ -208,11 +207,7 @@ fn run_context_switch_selftest() -> bool {
         };
         let context = ProcessContext::new(
             TEST_PROCESS,
-            CpuContext::kernel_entry(
-                switch_task_entry as *const () as usize as u64,
-                task_rsp,
-                0,
-            ),
+            CpuContext::kernel_entry(switch_task_entry as *const () as usize as u64, task_rsp, 0),
         );
         if manager.register(descriptor, context).is_err()
             || manager.make_runnable(TEST_PROCESS).is_err()

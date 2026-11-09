@@ -8,15 +8,16 @@ pub mod dispatch_runtime;
 pub mod scheduler;
 pub mod x86_64_backend;
 
-use context::ProcessContext;
-use context_switch::SwitchFrame;
-use core::sync::atomic::{AtomicU64, Ordering};
 #[cfg(target_arch = "x86_64")]
 use crate::memory::address::is_canonical_x86_64_48;
+use context::ProcessContext;
 #[cfg(target_arch = "x86_64")]
-use x86_64_backend::{BackendError, switch_checked};
+use context_switch::SwitchFrame;
+use core::sync::atomic::{AtomicU64, Ordering};
 use dispatch::DispatchTarget;
 use scheduler::{Scheduler, SchedulerError};
+#[cfg(target_arch = "x86_64")]
+use x86_64_backend::{BackendError, switch_checked};
 
 #[repr(transparent)]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -491,7 +492,6 @@ impl<const N: usize> ProcessManager<N> {
     }
 }
 
-
 /// Confirm a dispatch from the target stack, after the architecture backend
 /// has installed that stack and before it jumps to the process RIP.
 #[cfg(target_arch = "x86_64")]
@@ -549,8 +549,7 @@ pub unsafe fn switch_to_dispatch<const N: usize>(
         return Err(DispatchSwitchError::InvalidFramePointer);
     }
 
-    let exact_pending_target =
-        unsafe { (*manager).pending_dispatch == Some(target) };
+    let exact_pending_target = unsafe { (*manager).pending_dispatch == Some(target) };
     if !exact_pending_target {
         return Err(DispatchSwitchError::DispatchMismatch);
     }
