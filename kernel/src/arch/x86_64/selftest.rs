@@ -223,7 +223,7 @@ fn run_context_switch_selftest() -> bool {
         ));
 
         // Dispatch A: fresh entry on its own stack, must yield back.
-        if !dispatch_process(manager_ptr, boot_frame_ptr, PROCESS_A) {
+        if !dispatch_process(manager_ptr, boot_frame_ptr, a_frame_ptr, PROCESS_A) {
             return false;
         }
         if SWITCH_A_PHASE.load(Ordering::SeqCst) != 1 {
@@ -241,7 +241,7 @@ fn run_context_switch_selftest() -> bool {
         serial_write_str("AWEOS SELFTEST: process A yielded; outgoing context persisted\r\n");
 
         // Dispatch B: fresh entry, yields; A is requeued by commit_running.
-        if !dispatch_process(manager_ptr, boot_frame_ptr, PROCESS_B) {
+        if !dispatch_process(manager_ptr, boot_frame_ptr, b_frame_ptr, PROCESS_B) {
             return false;
         }
         if SWITCH_B_PHASE.load(Ordering::SeqCst) != 1 {
@@ -259,7 +259,7 @@ fn run_context_switch_selftest() -> bool {
         serial_write_str("AWEOS SELFTEST: process B yielded; outgoing context persisted\r\n");
 
         // Re-dispatch A: it must resume from the persisted context and exit.
-        if !dispatch_process(manager_ptr, boot_frame_ptr, PROCESS_A) {
+        if !dispatch_process(manager_ptr, boot_frame_ptr, a_frame_ptr, PROCESS_A) {
             return false;
         }
         if SWITCH_A_PHASE.load(Ordering::SeqCst) != 2 {
@@ -272,7 +272,7 @@ fn run_context_switch_selftest() -> bool {
         }
 
         // Re-dispatch B: resumes, exits, is reaped; registry must be empty.
-        if !dispatch_process(manager_ptr, boot_frame_ptr, PROCESS_B) {
+        if !dispatch_process(manager_ptr, boot_frame_ptr, b_frame_ptr, PROCESS_B) {
             return false;
         }
         if SWITCH_B_PHASE.load(Ordering::SeqCst) != 2 {
@@ -315,19 +315,27 @@ fn register_process(
     manager.register(descriptor, context).is_ok() && manager.make_runnable(process).is_ok()
 }
 
-/// Dequeue the exact expected process and switch to it on its own stack.
+/// Dequeue the exact expected process, publish its entry/persisted context
+/// into its frame storage, and switch to it on its own stack.
 unsafe fn dispatch_process(
     manager_ptr: *mut ProcessManager<2>,
     boot_frame_ptr: *mut SwitchFrame,
+    frame_ptr: *mut SwitchFrame,
     expected: ProcessId,
 ) -> bool {
     // SAFETY: the caller guarantees pinned, mapped, exclusively-owned manager
-    // and boot-frame pointers and disabled interrupts.
+    // and frame pointers and disabled interrupts.
     unsafe {
         let target = match (*manager_ptr).next_dispatch() {
             Ok(target) if target.process == expected => target,
             _ => return false,
         };
+        // The process frame must already hold a well-formed context before
+        // the process can yield away from it: switch_checked validates the
+        // outgoing frame *before* the backend overwrites it with the real
+        // outgoing registers. On a first dispatch this is the entry context;
+        // on a re-dispatch it is the persisted resume context.
+        *frame_ptr = target.frame;
         switch_to_dispatch(manager_ptr, boot_frame_ptr, target).is_ok()
     }
 }
