@@ -14,8 +14,8 @@
 //! question and is not claimed by this module.
 
 use super::gdt::Tss64;
-use crate::memory::address::is_canonical_x86_64_48;
 use super::idt::Idt;
+use crate::memory::address::is_canonical_x86_64_48;
 
 /// Non-maskable interrupt vector.
 pub const NMI_VECTOR: u8 = 2;

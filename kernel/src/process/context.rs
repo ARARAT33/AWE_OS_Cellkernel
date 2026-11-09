@@ -57,7 +57,9 @@ mod tests {
 
     #[test]
     fn cpu_context_accepts_both_canonical_halves() {
-        assert!(CpuContext::kernel_entry(0xffff_8000_0000_1000, 0xffff_8000_0000_8000, 0).validate());
+        assert!(
+            CpuContext::kernel_entry(0xffff_8000_0000_1000, 0xffff_8000_0000_8000, 0).validate()
+        );
     }
 
     #[test]

@@ -53,7 +53,6 @@ impl BootGuard {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;

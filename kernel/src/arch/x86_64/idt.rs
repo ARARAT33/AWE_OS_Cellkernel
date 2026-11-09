@@ -1,7 +1,7 @@
 #![no_std]
 
-use core::mem::size_of;
 use crate::memory::address::is_canonical_x86_64_48;
+use core::mem::size_of;
 
 #[repr(C, packed)]
 #[derive(Clone, Copy)]
