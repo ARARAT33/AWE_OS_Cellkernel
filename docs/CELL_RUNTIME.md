@@ -117,8 +117,16 @@ validation and syscall-level capability checks are implemented and tested.
 
 ## x86_64 target-stack dispatch acknowledgement
 
-The x86_64 SwitchFrame keeps its original eight register/stack/RIP words at offsets 0–56 and adds a kernel-only completion triplet at offsets 64, 72 and 80. When the callback is present, the assembly backend loads the target stack first, calls the non-unwinding callback with its opaque context and argument, then jumps to the target RIP. The frame validator requires a canonical callback/context and a System V AMD64 function-entry stack alignment (RSP % 16 == 8).
+The x86_64 SwitchFrame keeps its original eight register/stack/RIP words at offsets 0–56 and adds a kernel-only completion triplet at offsets 64, 72 and 80. When the callback is present, the assembly backend loads the target stack first, calls the non-unwinding callback with its opaque context and argument, then jumps to the target RIP. The frame validator requires a canonical callback/context and a System V AMD64 function-entry stack alignment (RSP % 16 == 0 or 8; the backend pushes one alignment pad in the 16n case).
 
 process::switch_to_dispatch accepts only the exact pending DispatchTarget and uses that callback to commit ProcessManager::confirm_dispatch on the target stack. A callback failure halts the kernel because publishing an unacknowledged task as current would violate a security-sensitive invariant. The API is unsafe and currently single-core: the manager and both stacks must remain pinned and mapped in the shared kernel address space, and the caller must keep interrupts disabled. It does not enable Ring 3, per-process address spaces, SMP, or general preemption.
 
 The feature-gated QEMU exception self-test now includes a two-stack round trip through this path and checks the process lifecycle through exit, idle acknowledgement, and reap.
+
+## Outgoing-context persistence and round-robin resume
+
+The dispatch loop must persist the switched-away process's outgoing frame through `ProcessManager::persist_outgoing_frame` once the scheduler regains control. The x86_64 backend writes the outgoing registers into the frame storage that was current at switch time; without this persistence step a re-dispatched process would resume from its original entry context instead of its actual execution state.
+
+`persist_outgoing_frame` validates the saved RIP/RSP as canonical, clears stale completion metadata (completion hooks belong to the dispatch path, not to a persisted context), applies the saved registers to the stored `ProcessContext`, and rejects processes that cannot be dispatched again (Created/Exited) as well as unknown processes and malformed frames. `ProcessManager::process_context` returns a copy of the stored context for verification.
+
+The feature-gated QEMU self-test now runs a two-process round-robin on separate fresh stacks: each process yields once, the driver persists its outgoing frame (RIP must have advanced past the process entry and RSP must stay inside that process's own stack), and each process must then resume from the persisted context before exiting, acknowledging the switch to idle and being reaped. This is runtime evidence for the persist/resume path; it is still single-core, kernel-address-space-only and does not enable Ring 3, preemption or per-process address spaces.

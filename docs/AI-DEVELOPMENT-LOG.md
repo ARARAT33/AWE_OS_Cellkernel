@@ -93,3 +93,33 @@
 3. Add guarded page-table roots and checked kernel/user mappings before any Ring-3 entry; keep user mode disabled until isolation tests exist.
 4. Continue VirtIO block I/O with real request/completion and read-after-write tests, then persistent storage/crash-recovery tests.
 5. Add explicit QEMU self-test serial milestones for the two-stack path and expand regression/fuzz/stress coverage.
+
+## 2026-11-09 — outgoing-context persistence and two-process round-robin
+
+### Baseline and branch discipline
+
+- Continued from the 2026-11-09 dispatch-acknowledgement session (main head f885c19). Read the development log, PROJECT_STATUS.md, the process/context-switch sources, the x86_64 self-test, boot-image.yml and the latest commits before changing anything.
+- All work was done on branch `feat/process-context-persistence-2026-11-09` (cut from main f885c19) as commits 4f276b7, fb171e7 and fedf73e. Nothing was force-pushed; open PRs #55/#53/#52/#50/#48 and all other branches were left untouched.
+
+### Implemented
+
+- kernel/src/process/mod.rs: new `ProcessManager::persist_outgoing_frame` (validates canonical RIP/RSP, clears stale completion metadata, applies the outgoing registers to the stored ProcessContext, rejects Created/Exited/unknown processes and malformed frames) and the `process_context` getter; the persistence contract is documented on `switch_to_dispatch`; three new unit tests cover register updates, stale-completion normalization and rejection paths.
+- kernel/src/process/context_switch.rs + x86_64_switch.S: completion-carrying frames now accept saved target RSP of 16n as well as 16n+8; the assembly pushes one alignment pad in the 16n case so the target-stack callback always enters with RSP % 16 == 8 (r9 is used as the caller-saved pad flag). This is required because a persisted resume point has no fixed ABI parity at the switch call site. Unit test updated for both accepted alignments.
+- kernel/src/arch/x86_64/selftest.rs: the two-stack self-test is now a two-process round-robin on separate fresh 4 KiB stacks. Each process yields once; the driver persists the outgoing frame and requires RIP advanced past entry plus RSP inside that process's own stack; each process must resume from the persisted context, exit, acknowledge idle and be reaped. All previous serial milestones are preserved for the CI smoke contracts.
+
+### Validation
+
+- To be recorded after CI on the PR: workspace fmt/tests/clippy, boot-image exception self-test and QEMU smoke, VirtIO runtime, quality/security gates. This entry will be updated with real run results; no completion is claimed before those pass.
+
+### Remaining risks and honest scope
+
+- The persist/resume path is still single-core, shared-kernel-address-space, interrupts-disabled; no Ring 3, per-process page tables, preemptive scheduler tick or SMP.
+- `ExecutionCore` and `ProcessManager` remain separate current-task models; unification is still pending.
+- VirtIO block I/O, network, storage persistence and AYUI are untouched by this session.
+
+### Next priorities
+
+1. Merge this PR after a green check suite; record the real run results here.
+2. Unify `ProcessManager` and `ExecutionCore` behind one authoritative current-task model.
+3. Add guarded page-table roots and checked kernel/user mappings before any Ring-3 entry.
+4. Continue VirtIO block I/O with real request/completion and read-after-write tests.
