@@ -266,8 +266,7 @@ fn run_context_switch_selftest() -> bool {
             return false;
         }
         let manager = &mut *manager_ptr;
-        if manager.confirm_switched_to_idle(PROCESS_A).is_err()
-            || manager.reap(PROCESS_A).is_err()
+        if manager.confirm_switched_to_idle(PROCESS_A).is_err() || manager.reap(PROCESS_A).is_err()
         {
             return false;
         }
@@ -280,8 +279,7 @@ fn run_context_switch_selftest() -> bool {
             return false;
         }
         let manager = &mut *manager_ptr;
-        if manager.confirm_switched_to_idle(PROCESS_B).is_err()
-            || manager.reap(PROCESS_B).is_err()
+        if manager.confirm_switched_to_idle(PROCESS_B).is_err() || manager.reap(PROCESS_B).is_err()
         {
             return false;
         }
@@ -342,7 +340,10 @@ unsafe fn persist_yield(
     let stack_start = stack as u64;
     let stack_end = stack_start + 4096;
     let manager = &mut *manager_ptr;
-    if manager.persist_outgoing_frame(process, &*frame_ptr).is_err() {
+    if manager
+        .persist_outgoing_frame(process, &*frame_ptr)
+        .is_err()
+    {
         return false;
     }
     let Some(persisted) = manager.process_context(process) else {
@@ -389,7 +390,11 @@ extern "C" fn process_a_entry() -> ! {
         fail("process A was not resumed from its persisted context");
         unsafe { super::boot::halt() };
     }
-    let exited = unsafe { (&mut *core::ptr::addr_of_mut!(SWITCH_MANAGER)).exit(PROCESS).is_ok() };
+    let exited = unsafe {
+        (&mut *core::ptr::addr_of_mut!(SWITCH_MANAGER))
+            .exit(PROCESS)
+            .is_ok()
+    };
     if !exited {
         fail("process A could not exit");
         unsafe { super::boot::halt() };
@@ -422,7 +427,11 @@ extern "C" fn process_b_entry() -> ! {
         fail("process B was not resumed from its persisted context");
         unsafe { super::boot::halt() };
     }
-    let exited = unsafe { (&mut *core::ptr::addr_of_mut!(SWITCH_MANAGER)).exit(PROCESS).is_ok() };
+    let exited = unsafe {
+        (&mut *core::ptr::addr_of_mut!(SWITCH_MANAGER))
+            .exit(PROCESS)
+            .is_ok()
+    };
     if !exited {
         fail("process B could not exit");
         unsafe { super::boot::halt() };
