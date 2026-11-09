@@ -1,5 +1,7 @@
 #![no_std]
 
+use crate::memory::address::is_canonical_x86_64_48;
+
 use core::mem::size_of;
 
 #[repr(C, packed)]
@@ -142,6 +144,9 @@ impl Tss64 {
         }
         if stack_top & 0xF != 0 {
             return Err("IST stack top must be 16-byte aligned");
+        }
+        if !is_canonical_x86_64_48(stack_top) {
+            return Err("IST stack top must be canonical");
         }
         match index {
             1 => self.ist1 = stack_top,
@@ -298,6 +303,8 @@ mod tests {
         // tops must be refused instead of silently corrupting entry.
         assert!(tss.set_ist(1, 0).is_err());
         assert!(tss.set_ist(1, 0x9001).is_err());
+        assert!(tss.set_ist(1, 0x0000_8000_0000_0000).is_err());
+        assert!(tss.set_ist(1, 0xffff_7fff_ffff_fff0).is_err());
         assert_eq!(tss.ist(1), 0);
     }
 

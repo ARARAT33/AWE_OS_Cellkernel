@@ -1,6 +1,7 @@
 #![no_std]
 
 use core::mem::size_of;
+use crate::memory::address::is_canonical_x86_64_48;
 
 #[repr(C, packed)]
 #[derive(Clone, Copy)]
@@ -99,8 +100,7 @@ impl Idt {
         if handler == 0 || selector == 0 {
             return false;
         }
-        let upper = handler >> 48;
-        if upper != 0 && upper != 0xffff {
+        if !is_canonical_x86_64_48(handler) {
             return false;
         }
         self.set_handler(vector, handler, selector);
@@ -155,6 +155,21 @@ mod tests {
         assert!(idt.install_validated(32, 0x0000_0000_0040_0000, 0x08));
         assert!(idt.timer_installed());
     }
+    #[test]
+    fn validated_install_rejects_noncanonical_sign_extension_gaps() {
+        let mut idt = Idt::new();
+        assert!(!idt.install_validated(32, 0x0000_8000_0000_0000, 0x08));
+        assert!(!idt.install_validated(32, 0xffff_7fff_ffff_fff0, 0x08));
+        assert!(!idt.timer_installed());
+    }
+
+    #[test]
+    fn validated_install_accepts_high_canonical_handler() {
+        let mut idt = Idt::new();
+        assert!(idt.install_validated(32, 0xffff_8000_0000_1000, 0x08));
+        assert!(idt.timer_installed());
+    }
+
     #[test]
     fn plain_gates_do_not_use_an_ist_slot() {
         let mut idt = Idt::new();

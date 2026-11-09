@@ -1,5 +1,7 @@
 #![no_std]
 
+use crate::memory::address::is_canonical_x86_64_48;
+
 #[repr(C)]
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
 pub struct CpuContext {
@@ -34,8 +36,8 @@ impl CpuContext {
     pub const fn validate(&self) -> bool {
         self.rip != 0
             && self.rsp != 0
-            && self.rip >> 48 == 0
-            && self.rsp >> 48 == 0
+            && is_canonical_x86_64_48(self.rip)
+            && is_canonical_x86_64_48(self.rsp)
             && self.cr3 & 0xfff == 0
             && self.rflags & Self::REQUIRED_RFLAGS != 0
             && self.rflags & !Self::ALLOWED_RFLAGS == 0
@@ -49,6 +51,22 @@ pub struct ProcessContext {
 
 /// AweOS Cell Control Block (CCB) representing a microprocess unit.
 pub type CellControlBlock = ProcessContext;
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cpu_context_accepts_both_canonical_halves() {
+        assert!(CpuContext::kernel_entry(0xffff_8000_0000_1000, 0xffff_8000_0000_8000, 0).validate());
+    }
+
+    #[test]
+    fn cpu_context_rejects_noncanonical_sign_extension_gaps() {
+        assert!(!CpuContext::kernel_entry(0x0000_8000_0000_0000, 0x8000, 0).validate());
+        assert!(!CpuContext::kernel_entry(0x1000, 0xffff_7fff_ffff_fff0, 0).validate());
+    }
+}
+
 impl ProcessContext {
     pub const fn new(process_id: super::ProcessId, cpu: CpuContext) -> Self {
         Self { process_id, cpu }

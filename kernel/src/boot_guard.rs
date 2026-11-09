@@ -1,10 +1,13 @@
 #![no_std]
 
+use crate::memory::address::is_canonical_x86_64_48;
+
 /// Deterministic early-boot invariants used before architecture-specific setup.
 /// The guard is deliberately pure so it can be exercised in host-side tests.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum BootGuardError {
     NonCanonicalEntry,
+    NonCanonicalStack,
     UnalignedStack,
     EmptyStack,
     InvalidInterruptVector,
@@ -24,11 +27,14 @@ impl BootGuard {
         stack_top: u64,
         first_vector: u16,
     ) -> Result<Self, BootGuardError> {
-        if !canonical(entry) {
+        if !is_canonical_x86_64_48(entry) {
             return Err(BootGuardError::NonCanonicalEntry);
         }
         if stack_top == 0 {
             return Err(BootGuardError::EmptyStack);
+        }
+        if !is_canonical_x86_64_48(stack_top) {
+            return Err(BootGuardError::NonCanonicalStack);
         }
         if !stack_top.is_multiple_of(Self::STACK_ALIGNMENT) {
             return Err(BootGuardError::UnalignedStack);
@@ -47,10 +53,6 @@ impl BootGuard {
     }
 }
 
-const fn canonical(value: u64) -> bool {
-    let upper = value >> 48;
-    upper == 0 || upper == 0xffff
-}
 
 #[cfg(test)]
 mod tests {
@@ -58,7 +60,7 @@ mod tests {
 
     #[test]
     fn accepts_valid_boot_boundary() {
-        let guard = BootGuard::validate(0x0000_7fff_1234_5000, 0x0000_8000_0000_1000, 32).unwrap();
+        let guard = BootGuard::validate(0x0000_7fff_1234_5000, 0xffff_8000_0000_1000, 32).unwrap();
         assert_eq!(guard.entry(), 0x0000_7fff_1234_5000);
     }
 
@@ -67,6 +69,22 @@ mod tests {
         assert_eq!(
             BootGuard::validate(0x0001_0000_0000_0000, 0x1000, 32),
             Err(BootGuardError::NonCanonicalEntry)
+        );
+    }
+
+    #[test]
+    fn rejects_noncanonical_entry_and_stack_gaps() {
+        assert_eq!(
+            BootGuard::validate(0x0000_8000_0000_0000, 0x1000, 32),
+            Err(BootGuardError::NonCanonicalEntry)
+        );
+        assert_eq!(
+            BootGuard::validate(0x1000, 0x0000_8000_0000_0000, 32),
+            Err(BootGuardError::NonCanonicalStack)
+        );
+        assert_eq!(
+            BootGuard::validate(0x1000, 0xffff_7fff_ffff_fff0, 32),
+            Err(BootGuardError::NonCanonicalStack)
         );
     }
 

@@ -1,6 +1,7 @@
 #![no_std]
 
 use super::context::CpuContext;
+use crate::memory::address::is_canonical_x86_64_48;
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
@@ -41,7 +42,10 @@ impl SwitchFrame {
     }
 
     pub const fn is_well_formed(&self) -> bool {
-        self.rip != 0 && self.rsp != 0 && self.rip >> 48 == 0 && self.rsp >> 48 == 0
+        self.rip != 0
+            && self.rsp != 0
+            && is_canonical_x86_64_48(self.rip)
+            && is_canonical_x86_64_48(self.rsp)
     }
 }
 
@@ -139,8 +143,14 @@ mod tests {
     #[test]
     fn accepts_distinct_valid_frames() {
         let current = frame(0x1000, 0x2000);
-        let next = frame(0x3000, 0x4000);
+        let next = frame(0xffff_8000_0000_3000, 0xffff_8000_0000_4000);
         assert!(current.is_well_formed());
         assert!(next.is_well_formed());
+    }
+
+    #[test]
+    fn rejects_noncanonical_sign_extension_gaps() {
+        assert!(!frame(0x0000_8000_0000_0000, 0x2000).is_well_formed());
+        assert!(!frame(0x1000, 0xffff_7fff_ffff_fff0).is_well_formed());
     }
 }

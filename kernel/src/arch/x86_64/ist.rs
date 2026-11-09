@@ -14,6 +14,7 @@
 //! question and is not claimed by this module.
 
 use super::gdt::Tss64;
+use crate::memory::address::is_canonical_x86_64_48;
 use super::idt::Idt;
 
 /// Non-maskable interrupt vector.
@@ -102,8 +103,7 @@ pub fn configure_ist_stacks(tss: &mut Tss64, idt: &mut Idt) -> Result<(), &'stat
         }
     }
     for (_, _, top) in assignments {
-        let upper = top >> 48;
-        if top == 0 || (top & 0xF) != 0 || (upper != 0 && upper != 0xffff) {
+        if top == 0 || (top & 0xF) != 0 || !is_canonical_x86_64_48(top) {
             return Err("critical IST stack top is invalid");
         }
     }

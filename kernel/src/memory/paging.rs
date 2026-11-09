@@ -1,5 +1,7 @@
 #![no_std]
 
+use super::address::is_canonical_x86_64_48;
+
 #[repr(transparent)]
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct PageFlags(pub u64);
@@ -101,8 +103,7 @@ pub const fn page_offset(virtual_address: u64) -> u16 {
 
 /// x86_64 canonical-address validation for the four-level paging model.
 pub const fn valid_virtual_address(virtual_address: u64) -> bool {
-    let upper = virtual_address >> 48;
-    upper == 0 || upper == 0xffff
+    is_canonical_x86_64_48(virtual_address)
 }
 
 /// A physical address must be page aligned and representable without truncation.
@@ -145,6 +146,9 @@ mod tests {
         assert!(valid_virtual_address(0x0000_7f12_3456_789a));
         assert!(valid_virtual_address(0xffff_8000_0000_0000));
         assert!(!valid_virtual_address(0x0001_0000_0000_0000));
+        assert!(!valid_virtual_address(0x0000_8000_0000_0000));
+        assert!(!valid_virtual_address(0xffff_7fff_ffff_ffff));
+        assert!(valid_virtual_address(0xffff_ffff_ffff_ffff));
     }
     #[test]
     fn user_mapping_requires_explicit_user_and_present_bits() {

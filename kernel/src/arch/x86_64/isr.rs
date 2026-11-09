@@ -1,5 +1,7 @@
 #![no_std]
 
+use crate::memory::address::is_canonical_x86_64_48;
+
 /// CPU state captured by the x86_64 common ISR entry.
 ///
 /// In 64-bit mode, the processor unconditionally saves the interrupted
@@ -62,8 +64,7 @@ impl InterruptFrame {
     }
 
     pub const fn instruction_pointer_valid(&self) -> bool {
-        let upper = self.rip >> 48;
-        (upper == 0 || upper == 0xffff) && self.rip != 0
+        self.rip != 0 && is_canonical_x86_64_48(self.rip)
     }
 
     /// Whether the interrupted code was running outside ring 0.
@@ -90,10 +91,9 @@ impl InterruptFrame {
 
     pub fn stack_pointer_valid(&self) -> bool {
         let rsp = self.interrupted_stack_pointer();
-        let upper = rsp >> 48;
         // Long mode aligns the new interrupt frame, not the interrupted
         // program's saved RSP. The old RSP may therefore be byte-unaligned.
-        rsp != 0 && (upper == 0 || upper == 0xffff)
+        rsp != 0 && is_canonical_x86_64_48(rsp)
     }
 
     pub const fn rflags_valid(&self) -> bool {
@@ -133,6 +133,29 @@ mod tests {
         f.rsp = 0x1001;
         f.rflags = 0;
         assert!(!f.validate());
+    }
+
+    #[test]
+    fn frame_validation_rejects_both_noncanonical_sign_extension_gaps() {
+        let mut f = InterruptFrame::empty();
+        f.rip = 0x0000_8000_0000_0000;
+        f.rsp = 0x8000;
+        f.rflags = 0x202;
+        assert!(!f.instruction_pointer_valid());
+        assert!(!f.validate());
+
+        f.rip = 0x0040_0000;
+        f.rsp = 0xffff_7fff_ffff_fff0;
+        assert!(!f.stack_pointer_valid());
+    }
+
+    #[test]
+    fn frame_validation_accepts_high_canonical_addresses() {
+        let mut f = InterruptFrame::empty();
+        f.rip = 0xffff_8000_0000_1000;
+        f.rsp = 0xffff_8000_0000_8001;
+        f.rflags = 0x202;
+        assert!(f.validate());
     }
 
     #[test]

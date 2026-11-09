@@ -9,10 +9,15 @@ pub struct PhysAddr(pub u64);
 pub struct VirtAddr(pub u64);
 
 impl VirtAddr {
+    /// 48-bit x86_64 canonical address check for four-level paging.
     #[inline]
     pub const fn is_canonical(self) -> bool {
         let top = self.0 >> 48;
-        top == 0 || top == 0xffff
+        if self.0 & (1u64 << 47) == 0 {
+            top == 0
+        } else {
+            top == 0xffff
+        }
     }
 
     #[inline]
