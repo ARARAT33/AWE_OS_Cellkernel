@@ -7,9 +7,7 @@
 //! subsystem as ready; they do not pretend to execute privileged CPU
 //! instructions in unit-test builds.
 
-use crate::memory::address::{
-    is_canonical_user_address_x86_64_48, is_canonical_x86_64_48,
-};
+use crate::memory::address::{is_canonical_user_address_x86_64_48, is_canonical_x86_64_48};
 
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

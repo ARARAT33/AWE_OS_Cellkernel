@@ -72,7 +72,11 @@ mod tests {
     #[test]
     fn early_interrupt_installation_rejects_noncanonical_handler() {
         let mut idt = Idt::new();
-        assert!(!install_early_interrupts(&mut idt, 0x08, 0x0000_8000_0000_0000));
+        assert!(!install_early_interrupts(
+            &mut idt,
+            0x08,
+            0x0000_8000_0000_0000
+        ));
         assert!(!idt.is_present(TIMER_VECTOR));
     }
 }
