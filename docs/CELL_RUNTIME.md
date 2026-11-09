@@ -113,3 +113,12 @@ handshake; it is not the general syscall ABI and must not be treated as a
 production userspace service interface. General Ring-3 applications remain
 disabled until context-switch completion, current-task authority, user-memory
 validation and syscall-level capability checks are implemented and tested.
+
+
+## x86_64 target-stack dispatch acknowledgement
+
+The x86_64 SwitchFrame keeps its original eight register/stack/RIP words at offsets 0–56 and adds a kernel-only completion triplet at offsets 64, 72 and 80. When the callback is present, the assembly backend loads the target stack first, calls the non-unwinding callback with its opaque context and argument, then jumps to the target RIP. The frame validator requires a canonical callback/context and a System V AMD64 function-entry stack alignment (RSP % 16 == 8).
+
+process::switch_to_dispatch accepts only the exact pending DispatchTarget and uses that callback to commit ProcessManager::confirm_dispatch on the target stack. A callback failure halts the kernel because publishing an unacknowledged task as current would violate a security-sensitive invariant. The API is unsafe and currently single-core: the manager and both stacks must remain pinned and mapped in the shared kernel address space, and the caller must keep interrupts disabled. It does not enable Ring 3, per-process address spaces, SMP, or general preemption.
+
+The feature-gated QEMU exception self-test now includes a two-stack round trip through this path and checks the process lifecycle through exit, idle acknowledgement, and reap.

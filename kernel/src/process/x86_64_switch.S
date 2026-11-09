@@ -19,6 +19,10 @@ awe_x86_64_switch:
     mov [rdi + 48], rsp
     lea rax, [rip + .Lresume]
     mov [rdi + 56], rax
+    mov rax, [rsi + 56]
+    mov rdx, [rsi + 64]       # Optional target-stack completion callback
+    mov rcx, [rsi + 72]       # Opaque callback context
+    mov r8,  [rsi + 80]       # Opaque callback argument
     mov rbx, [rsi + 0]
     mov rbp, [rsi + 8]
     mov r12, [rsi + 16]
@@ -26,7 +30,17 @@ awe_x86_64_switch:
     mov r14, [rsi + 32]
     mov r15, [rsi + 40]
     mov rsp, [rsi + 48]
-    mov rax, [rsi + 56]
+
+    # All target-frame fields are loaded before changing stacks. If present,
+    # the callback runs on the new stack and must return before target RIP.
+    test rdx, rdx
+    jz .Ldispatch
+    push rax                  # Preserve target RIP and align RSP for CALL.
+    mov rdi, rcx
+    mov rsi, r8
+    call rdx
+    pop rax
+.Ldispatch:
     jmp rax
 .Lresume:
     ret

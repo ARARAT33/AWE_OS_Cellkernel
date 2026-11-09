@@ -26,6 +26,13 @@ use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 use super::isr::InterruptFrame;
 use super::{ist, serial_write_str};
+use crate::process::{
+    ProcessDescriptor, ProcessId, ProcessManager, ProcessState, ResourceBudget,
+    context::{CpuContext, ProcessContext},
+    context_switch::SwitchFrame,
+    switch_to_dispatch,
+    x86_64_backend::switch_checked,
+};
 
 /// Sentinel for "no vector armed".
 const EXPECT_NONE: u32 = u32::MAX;
@@ -48,6 +55,12 @@ pub static RESUME_RSP: AtomicU64 = AtomicU64::new(0);
 static NMI_EXPECTED: AtomicBool = AtomicBool::new(false);
 /// Set by the NMI recovery path.
 static NMI_HANDLED: AtomicBool = AtomicBool::new(false);
+
+static SWITCH_TASK_ENTERED: AtomicBool = AtomicBool::new(false);
+static mut SWITCH_MANAGER: ProcessManager<1> = ProcessManager::new();
+static mut SWITCH_BOOT_FRAME: SwitchFrame = SwitchFrame::empty();
+static mut SWITCH_TASK_FRAME: SwitchFrame = SwitchFrame::empty();
+static mut SWITCH_TASK_STACK: [u8; 4096] = [0; 4096];
 
 core::arch::global_asm!(
     r#".intel_syntax noprefix
@@ -138,6 +151,13 @@ pub fn run() {
     }
     serial_write_str("AWEOS SELFTEST: driver resumed after #DF\r\n");
 
+    serial_write_str("AWEOS SELFTEST: testing x86_64 task-stack dispatch\r\n");
+    if !run_context_switch_selftest() {
+        fail("two-stack context-switch/dispatch acknowledgement failed");
+        return;
+    }
+    serial_write_str("AWEOS SELFTEST: two-stack dispatch completion passed\r\n");
+
     serial_write_str("AWEOS SELFTEST: waiting for external NMI\r\n");
     NMI_EXPECTED.store(true, Ordering::SeqCst);
     // Unmask interrupts only now: the PIT tick bounds the NMI wait.
@@ -155,6 +175,104 @@ pub fn run() {
         }
     }
     serial_write_str("AWEOS SELFTEST: ALL PHASES PASSED\r\n");
+}
+
+
+/// Exercise the real assembly switch path with a fresh process stack. The
+/// target-stack callback must publish Running before the task entry executes.
+fn run_context_switch_selftest() -> bool {
+    const TEST_PROCESS: ProcessId = ProcessId(1);
+    SWITCH_TASK_ENTERED.store(false, Ordering::SeqCst);
+
+    unsafe {
+        let manager_ptr = core::ptr::addr_of_mut!(SWITCH_MANAGER);
+        let boot_frame_ptr = core::ptr::addr_of_mut!(SWITCH_BOOT_FRAME);
+        let task_frame_ptr = core::ptr::addr_of_mut!(SWITCH_TASK_FRAME);
+        let stack_start = core::ptr::addr_of_mut!(SWITCH_TASK_STACK) as *mut u8 as u64;
+        let stack_top = (stack_start + 4096) & !0xF;
+        let task_rsp = match stack_top.checked_sub(8) {
+            Some(value) => value,
+            None => return false,
+        };
+
+        *manager_ptr = ProcessManager::new();
+        let manager = &mut *manager_ptr;
+        let descriptor = ProcessDescriptor {
+            id: TEST_PROCESS,
+            state: ProcessState::Created,
+            budget: ResourceBudget {
+                cpu_ticks: 100,
+                memory_bytes: 4096,
+                ipc_messages: 8,
+            },
+        };
+        let context = ProcessContext::new(
+            TEST_PROCESS,
+            CpuContext::kernel_entry(
+                switch_task_entry as *const () as usize as u64,
+                task_rsp,
+                0,
+            ),
+        );
+        if manager.register(descriptor, context).is_err()
+            || manager.make_runnable(TEST_PROCESS).is_err()
+        {
+            return false;
+        }
+        let target = match manager.next_dispatch() {
+            Ok(target) => target,
+            Err(_) => return false,
+        };
+        *task_frame_ptr = target.frame;
+        *boot_frame_ptr = SwitchFrame::from_context(&CpuContext::kernel_entry(
+            run_context_switch_selftest as *const () as usize as u64,
+            current_rsp(),
+            0,
+        ));
+
+        if switch_to_dispatch(manager_ptr, boot_frame_ptr, target).is_err() {
+            return false;
+        }
+
+        let manager = &mut *manager_ptr;
+        let exited = manager
+            .descriptor(TEST_PROCESS)
+            .is_some_and(|process| process.state == ProcessState::Exited);
+        if !SWITCH_TASK_ENTERED.load(Ordering::SeqCst) || !exited {
+            return false;
+        }
+        if manager.confirm_switched_to_idle(TEST_PROCESS).is_err() {
+            return false;
+        }
+        manager.reap(TEST_PROCESS).is_ok() && manager.len() == 0
+    }
+}
+
+/// First instruction stream entered on the new process stack after the
+/// architecture completion callback has committed ProcessManager state.
+extern "C" fn switch_task_entry() -> ! {
+    const TEST_PROCESS: ProcessId = ProcessId(1);
+    let manager_ptr = core::ptr::addr_of_mut!(SWITCH_MANAGER);
+    let ready_to_exit = unsafe {
+        let manager = &mut *manager_ptr;
+        let acknowledged = manager.current_process_id() == Some(TEST_PROCESS)
+            && manager
+                .descriptor(TEST_PROCESS)
+                .is_some_and(|process| process.state == ProcessState::Running);
+        acknowledged && manager.exit(TEST_PROCESS).is_ok()
+    };
+    if !ready_to_exit {
+        fail("target-stack callback did not publish the exact Running process");
+        unsafe { super::boot::halt() };
+    }
+    SWITCH_TASK_ENTERED.store(true, Ordering::SeqCst);
+
+    let task_frame_ptr = core::ptr::addr_of_mut!(SWITCH_TASK_FRAME);
+    let boot_frame_ptr = core::ptr::addr_of!(SWITCH_BOOT_FRAME);
+    if unsafe { switch_checked(&mut *task_frame_ptr, &*boot_frame_ptr) }.is_err() {
+        fail("failed to switch from test process back to boot stack");
+    }
+    unsafe { super::boot::halt() };
 }
 
 /// Attempt to recover the armed self-test vector. Returns true when the

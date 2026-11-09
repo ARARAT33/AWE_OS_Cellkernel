@@ -9,7 +9,12 @@ pub mod scheduler;
 pub mod x86_64_backend;
 
 use context::ProcessContext;
+use context_switch::SwitchFrame;
 use core::sync::atomic::{AtomicU64, Ordering};
+#[cfg(target_arch = "x86_64")]
+use crate::memory::address::is_canonical_x86_64_48;
+#[cfg(target_arch = "x86_64")]
+use x86_64_backend::{BackendError, switch_checked};
 use dispatch::DispatchTarget;
 use scheduler::{Scheduler, SchedulerError};
 
@@ -184,6 +189,19 @@ pub enum ProcessManagerError {
     Scheduler(SchedulerError),
 }
 
+#[cfg(target_arch = "x86_64")]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum DispatchSwitchError {
+    NullManager,
+    NullCurrentFrame,
+    InvalidManagerPointer,
+    InvalidFramePointer,
+    DispatchMismatch,
+    InvalidCompletion,
+    Backend(BackendError),
+    CancelFailed(ProcessManagerError),
+}
+
 impl<const N: usize> Default for ProcessManager<N> {
     fn default() -> Self {
         Self::new()
@@ -284,6 +302,19 @@ impl<const N: usize> ProcessManager<N> {
         self.commit_running(target.process)?;
         self.pending_dispatch = None;
         Ok(())
+    }
+
+    fn confirm_pending_dispatch_for(
+        &mut self,
+        process: ProcessId,
+    ) -> Result<(), ProcessManagerError> {
+        let pending = self
+            .pending_dispatch
+            .ok_or(ProcessManagerError::NoPendingDispatch)?;
+        if pending.process != process {
+            return Err(ProcessManagerError::DispatchMismatch);
+        }
+        self.confirm_dispatch(pending)
     }
 
     /// Cancel a prepared switch when the architecture backend declines it.
@@ -457,6 +488,95 @@ impl<const N: usize> ProcessManager<N> {
         self.processes
             .iter()
             .position(|p| p.map(|d| d.id) == Some(id))
+    }
+}
+
+
+/// Confirm a dispatch from the target stack, after the architecture backend
+/// has installed that stack and before it jumps to the process RIP.
+#[cfg(target_arch = "x86_64")]
+unsafe extern "C" fn confirm_pending_dispatch_on_target<const N: usize>(
+    manager_address: u64,
+    process_id: u64,
+) {
+    if manager_address == 0 {
+        unsafe { crate::arch::x86_64::boot::halt() };
+    }
+    let manager = unsafe { &mut *(manager_address as *mut ProcessManager<N>) };
+    if manager
+        .confirm_pending_dispatch_for(ProcessId(process_id))
+        .is_err()
+    {
+        // Current-task identity is security-sensitive. Never run the target
+        // if its exact pending dispatch cannot be committed.
+        unsafe { crate::arch::x86_64::boot::halt() };
+    }
+}
+
+/// Perform a validated x86_64 switch and acknowledge the exact pending target
+/// on that target's stack.
+///
+/// # Safety
+/// - manager must point to a pinned ProcessManager in shared kernel memory.
+/// - current must point to writable, pinned SwitchFrame storage.
+/// - The caller must have exclusive manager access and keep interrupts disabled
+///   for the whole switch; this implementation is single-core only.
+/// - Both stacks and the callback context must remain mapped in the kernel
+///   address space. This is not a Ring-3 isolation or SMP mechanism.
+#[cfg(target_arch = "x86_64")]
+pub unsafe fn switch_to_dispatch<const N: usize>(
+    manager: *mut ProcessManager<N>,
+    current: *mut SwitchFrame,
+    target: DispatchTarget,
+) -> Result<(), DispatchSwitchError> {
+    if manager.is_null() {
+        return Err(DispatchSwitchError::NullManager);
+    }
+    if current.is_null() {
+        return Err(DispatchSwitchError::NullCurrentFrame);
+    }
+
+    let manager_address = manager as usize as u64;
+    let frame_address = current as usize as u64;
+    if !is_canonical_x86_64_48(manager_address)
+        || manager_address & (core::mem::align_of::<ProcessManager<N>>() as u64 - 1) != 0
+    {
+        return Err(DispatchSwitchError::InvalidManagerPointer);
+    }
+    if !is_canonical_x86_64_48(frame_address)
+        || frame_address & (core::mem::align_of::<SwitchFrame>() as u64 - 1) != 0
+    {
+        return Err(DispatchSwitchError::InvalidFramePointer);
+    }
+
+    let exact_pending_target =
+        unsafe { (*manager).pending_dispatch == Some(target) };
+    if !exact_pending_target {
+        return Err(DispatchSwitchError::DispatchMismatch);
+    }
+
+    let next = match unsafe {
+        target.frame.with_completion(
+            confirm_pending_dispatch_on_target::<N>,
+            manager_address,
+            target.process.0,
+        )
+    } {
+        Ok(frame) => frame,
+        Err(_) => {
+            return match unsafe { (&mut *manager).cancel_dispatch(target) } {
+                Ok(()) => Err(DispatchSwitchError::InvalidCompletion),
+                Err(error) => Err(DispatchSwitchError::CancelFailed(error)),
+            };
+        }
+    };
+
+    match unsafe { switch_checked(&mut *current, &next) } {
+        Ok(()) => Ok(()),
+        Err(error) => match unsafe { (&mut *manager).cancel_dispatch(target) } {
+            Ok(()) => Err(DispatchSwitchError::Backend(error)),
+            Err(cancel_error) => Err(DispatchSwitchError::CancelFailed(cancel_error)),
+        },
     }
 }
 

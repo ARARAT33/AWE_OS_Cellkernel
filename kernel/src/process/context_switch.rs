@@ -3,6 +3,29 @@
 use super::context::CpuContext;
 use crate::memory::address::is_canonical_x86_64_48;
 
+pub type SwitchCompletionCallback = unsafe extern "C" fn(u64, u64);
+
+#[repr(C)]
+#[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
+pub struct SwitchCompletion {
+    /// Zero disables the callback. Otherwise this is a canonical kernel code address.
+    pub callback: u64,
+    /// Opaque, canonical kernel pointer passed as the callback's first argument.
+    pub context: u64,
+    /// Opaque value passed as the callback's second argument.
+    pub argument: u64,
+}
+
+impl SwitchCompletion {
+    pub const fn none() -> Self {
+        Self {
+            callback: 0,
+            context: 0,
+            argument: 0,
+        }
+    }
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
 pub struct SwitchFrame {
@@ -14,9 +37,26 @@ pub struct SwitchFrame {
     pub r15: u64,
     pub rsp: u64,
     pub rip: u64,
+    /// Optional callback invoked by the x86_64 backend after loading this
+    /// frame's stack and before jumping to its saved RIP.
+    pub completion: SwitchCompletion,
 }
 
 impl SwitchFrame {
+    pub const fn empty() -> Self {
+        Self {
+            rbx: 0,
+            rbp: 0,
+            r12: 0,
+            r13: 0,
+            r14: 0,
+            r15: 0,
+            rsp: 0,
+            rip: 0,
+            completion: SwitchCompletion::none(),
+        }
+    }
+
     pub const fn from_context(ctx: &CpuContext) -> Self {
         Self {
             rbx: ctx.rbx,
@@ -27,6 +67,7 @@ impl SwitchFrame {
             r15: ctx.r15,
             rsp: ctx.rsp,
             rip: ctx.rip,
+            completion: SwitchCompletion::none(),
         }
     }
 
@@ -41,19 +82,62 @@ impl SwitchFrame {
         ctx.rip = self.rip;
     }
 
+    /// Attach a kernel-only completion hook to a target frame.
+    ///
+    /// # Safety
+    /// The callback must be a valid non-unwinding System V AMD64 function.
+    /// Its context pointer must remain valid and kernel-accessible until the
+    /// target stack has been installed and the callback has returned.
+    pub unsafe fn with_completion(
+        mut self,
+        callback: SwitchCompletionCallback,
+        context: u64,
+        argument: u64,
+    ) -> Result<Self, SwitchError> {
+        self.completion = SwitchCompletion {
+            callback: callback as usize as u64,
+            context,
+            argument,
+        };
+        if self.is_well_formed() {
+            Ok(self)
+        } else {
+            Err(SwitchError::InvalidCompletion)
+        }
+    }
+
     pub const fn is_well_formed(&self) -> bool {
+        let completion_valid = if self.completion.callback == 0 {
+            self.completion.context == 0 && self.completion.argument == 0
+        } else {
+            is_canonical_x86_64_48(self.completion.callback)
+                && self.completion.context != 0
+                && is_canonical_x86_64_48(self.completion.context)
+                // The assembly pushes the target RIP before calling the hook.
+                // An ABI function entry must therefore start with RSP % 16 == 8.
+                && self.rsp & 0xF == 8
+        };
+
         self.rip != 0
             && self.rsp != 0
             && is_canonical_x86_64_48(self.rip)
             && is_canonical_x86_64_48(self.rsp)
+            && completion_valid
     }
 }
+
+// The first eight u64s are consumed directly by x86_64_switch.S. Keep the
+// completion triplet at offsets 64/72/80 when changing this kernel-private ABI.
+const _: [(); 64] = [(); core::mem::offset_of!(SwitchFrame, completion)];
+const _: [(); 24] = [(); core::mem::size_of::<SwitchCompletion>()];
+const _: [(); 88] = [(); core::mem::size_of::<SwitchFrame>()];
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum SwitchError {
     InvalidCurrent,
     InvalidNext,
     IdenticalTarget,
+    InvalidCompletion,
     UnsupportedArchitecture,
 }
 
@@ -152,5 +236,26 @@ mod tests {
     fn rejects_noncanonical_sign_extension_gaps() {
         assert!(!frame(0x0000_8000_0000_0000, 0x2000).is_well_formed());
         assert!(!frame(0x1000, 0xffff_7fff_ffff_fff0).is_well_formed());
+    }
+
+    #[test]
+    fn completion_callback_requires_a_sysv_entry_stack() {
+        unsafe extern "C" fn completion(_: u64, _: u64) {}
+
+        let misaligned = frame(0x400000, 0x800000);
+        assert_eq!(
+            unsafe { misaligned.with_completion(completion, 0x1000, 7) },
+            Err(SwitchError::InvalidCompletion)
+        );
+
+        let aligned = frame(0x400000, 0x800008);
+        assert!(unsafe { aligned.with_completion(completion, 0x1000, 7) }.is_ok());
+    }
+
+    #[test]
+    fn disabled_completion_rejects_orphan_metadata() {
+        let mut target = frame(0x400000, 0x800000);
+        target.completion.context = 0x1000;
+        assert!(!target.is_well_formed());
     }
 }
