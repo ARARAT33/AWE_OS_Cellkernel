@@ -93,3 +93,43 @@
 3. Add guarded page-table roots and checked kernel/user mappings before any Ring-3 entry; keep user mode disabled until isolation tests exist.
 4. Continue VirtIO block I/O with real request/completion and read-after-write tests, then persistent storage/crash-recovery tests.
 5. Add explicit QEMU self-test serial milestones for the two-stack path and expand regression/fuzz/stress coverage.
+
+## 2026-11-09 — outgoing-context persistence and two-process round-robin
+
+### Baseline and branch discipline
+
+- Continued from the 2026-11-09 dispatch-acknowledgement session (main head f885c19). Read the development log, PROJECT_STATUS.md, the process/context-switch sources, the x86_64 self-test, boot-image.yml and the latest commits before changing anything.
+- All work was done on branch `feat/process-context-persistence-2026-11-09` (cut from main f885c19) as commits 4f276b7, fb171e7 and fedf73e. Nothing was force-pushed; open PRs #55/#53/#52/#50/#48 and all other branches were left untouched.
+
+### Implemented
+
+- kernel/src/process/mod.rs: new `ProcessManager::persist_outgoing_frame` (validates canonical RIP/RSP, clears stale completion metadata, applies the outgoing registers to the stored ProcessContext, rejects Created/Exited/unknown processes and malformed frames) and the `process_context` getter; the persistence contract is documented on `switch_to_dispatch`; three new unit tests cover register updates, stale-completion normalization and rejection paths.
+- kernel/src/process/context_switch.rs + x86_64_switch.S: completion-carrying frames now accept saved target RSP of 16n as well as 16n+8; the assembly pushes one alignment pad in the 16n case so the target-stack callback always enters with RSP % 16 == 8 (r9 is used as the caller-saved pad flag). This is required because a persisted resume point has no fixed ABI parity at the switch call site. Unit test updated for both accepted alignments.
+- kernel/src/arch/x86_64/selftest.rs: the two-stack self-test is now a two-process round-robin on separate fresh 4 KiB stacks. Each process yields once; the driver persists the outgoing frame and requires RIP advanced past entry plus RSP inside that process's own stack; each process must resume from the persisted context, exit, acknowledge idle and be reaped. All previous serial milestones are preserved for the CI smoke contracts.
+
+### Validation
+
+- First PR check suite (head before the fix commit) failed on three real, diagnosable errors: static-mut mutable references (as_mut_ptr on the selftest stacks), unsafe-op-in-unsafe-fn bodies, and an assert_eq requiring Debug on ProcessContext. Fixed in a440d80 (addr_of_mut!, explicit unsafe blocks, is_none()); the rustfmt bot then applied formatting as e1f12fc.
+- Second failure, diagnosed from the real QEMU serial log in the `exception-injection-selftest` job: the two-process round-robin halted with "process A failed to yield back to the boot stack". Root cause: the round-robin driver left each process's SwitchFrame storage empty until the first yield, so `switch_checked` rejected the outgoing frame (InvalidCurrent) before the backend could write the real outgoing registers. The proven single-process path always copied `target.frame` into the task frame storage before dispatching. Fixed in 4561e67: `dispatch_process` now publishes the dispatch target frame (entry context on first dispatch, persisted resume context on re-dispatch) into the process's frame storage before switching.
+- Final full-suite validation on PR #63 head 4561e67: all 16 check-runs completed **success** (Actions run IDs from the check-run URLs): `cloud-security` + `cloud-release-contract` — run 42700430843; `Rust workspace` + `UEFI loader` — run 42700430760; `Workspace Build & Validation` — run 42700431007; `Workspace clippy with PR diagnostics` — run 42700430716; `cargo failure diagnostics` — run 42700430953; `exception-injection-selftest` + `build-and-smoke-test-image` — run 42700431073; `virtio-block-contract-and-qemu` — run 42700430930; `Build Multi-Arch Boot Images` — run 42700430739; `Build AOSIN Installers` (ubuntu/windows, gui/cli, 4/4) — run 42700431117; `Apply rustfmt and commit fixes` — run 42700417531.
+- The decisive runtime evidence is the green `exception-injection-selftest` on head 4561e67: the QEMU self-test ran the two-process round-robin (A and B on separate fresh 4 KiB stacks, each yielding once, outgoing frames persisted, each resumed from its persisted context, exited, acknowledged idle and was reaped), then completed the NMI/IST1 phase and printed "ALL PHASES PASSED".
+
+### Remaining risks and honest scope
+
+- The persist/resume path is still single-core, shared-kernel-address-space, interrupts-disabled; no Ring 3, per-process page tables, preemptive scheduler tick or SMP.
+- `ExecutionCore` and `ProcessManager` remain separate current-task models; unification is still pending.
+- VirtIO block I/O, network, storage persistence and AYUI are untouched by this session.
+
+### Files changed in this session (branch feat/process-context-persistence-2026-11-09, PR #63)
+
+- kernel/src/process/mod.rs — persist_outgoing_frame, process_context getter, dispatch-loop persistence contract, unit tests.
+- kernel/src/process/context_switch.rs + kernel/src/process/x86_64_switch.S — dual target-RSP alignment acceptance and the assembly alignment pad.
+- kernel/src/arch/x86_64/selftest.rs — two-process round-robin; 4561e67 publishes the dispatch target frame before each switch (the QEMU-proven fix).
+- docs/CELL_RUNTIME.md, docs/AI-DEVELOPMENT-LOG.md — contract documentation and this honest record.
+
+### Next priorities
+
+1. Merge this PR (green suite above) and record the merge SHA here.
+2. Unify `ProcessManager` and `ExecutionCore` behind one authoritative current-task model.
+3. Add guarded page-table roots and checked kernel/user mappings before any Ring-3 entry.
+4. Continue VirtIO block I/O with real request/completion and read-after-write tests.
