@@ -44,10 +44,7 @@ pub fn validate_manifest(m: &Manifest, image_len: u64, arch: Architecture) -> bo
         Some(v) => v,
         None => return false,
     };
-    if end > image_len || m.architecture != arch as u32 {
-        return false;
-    }
-    true
+    end <= image_len && m.architecture == arch as u32
 }
 
 pub fn validate_boot_info(info: &BootInfo, arch: Architecture) -> bool {
