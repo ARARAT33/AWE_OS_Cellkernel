@@ -113,9 +113,12 @@ impl SwitchFrame {
             is_canonical_x86_64_48(self.completion.callback)
                 && self.completion.context != 0
                 && is_canonical_x86_64_48(self.completion.context)
-                // The assembly pushes the target RIP before calling the hook.
-                // An ABI function entry must therefore start with RSP % 16 == 8.
-                && self.rsp & 0xF == 8
+                // The assembly pushes the target RIP (plus one pad word when
+                // the saved RSP is 16-byte aligned) before calling the hook.
+                // An ABI function entry must therefore start with
+                // RSP % 16 == 8, which the backend guarantees for both the
+                // 16n and 16n+8 saved-RSP cases.
+                && matches!(self.rsp & 0xF, 0 | 8)
         };
 
         self.rip != 0
@@ -239,17 +242,23 @@ mod tests {
     }
 
     #[test]
-    fn completion_callback_requires_a_sysv_entry_stack() {
+    fn completion_callback_accepts_both_aligned_entry_stacks() {
         unsafe extern "C" fn completion(_: u64, _: u64) {}
 
-        let misaligned = frame(0x400000, 0x800000);
+        // A 16-byte-aligned saved RSP: the backend pushes one pad word
+        // before the callback so the entry still sees RSP % 16 == 8.
+        let aligned = frame(0x400000, 0x800000);
+        assert!(unsafe { aligned.with_completion(completion, 0x1000, 7) }.is_ok());
+
+        // A 16n+8 saved RSP: no pad is needed.
+        let aligned_eight = frame(0x400000, 0x800008);
+        assert!(unsafe { aligned_eight.with_completion(completion, 0x1000, 7) }.is_ok());
+
+        let misaligned = frame(0x400000, 0x800004);
         assert_eq!(
             unsafe { misaligned.with_completion(completion, 0x1000, 7) },
             Err(SwitchError::InvalidCompletion)
         );
-
-        let aligned = frame(0x400000, 0x800008);
-        assert!(unsafe { aligned.with_completion(completion, 0x1000, 7) }.is_ok());
     }
 
     #[test]

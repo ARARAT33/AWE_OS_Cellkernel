@@ -35,11 +35,26 @@ awe_x86_64_switch:
     # the callback runs on the new stack and must return before target RIP.
     test rdx, rdx
     jz .Ldispatch
+    # System V AMD64: RSP must be 16-byte aligned at the CALL. The target
+    # frame's saved RSP is 16n or 16n+8; pad only the 16n case so the callback
+    # entry always observes RSP % 16 == 8. r9 is caller-saved and not part of
+    # the saved/restore register set.
+    xor r9, r9
+    test rsp, 8
+    jnz .Lcallback_push
+    push rax                  # Alignment pad, removed after the callback.
+    mov r9, 1
+.Lcallback_push:
     push rax                  # Preserve target RIP and align RSP for CALL.
     mov rdi, rcx
     mov rsi, r8
     call rdx
     pop rax
+    test r9, r9
+    jz .Lcallback_done
+    add rsp, 8
+.Lcallback_done:
+    jmp rax
 .Ldispatch:
     jmp rax
 .Lresume:
