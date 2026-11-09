@@ -56,6 +56,7 @@
 - Implementation commit: 1e27e61e609437560ab4cfd40ed52813abf7afef. Formatting-only correction: b2d212ca2a7558b9c044383abc7ed8d1341ac144.
 - All implementation and documentation commits were written directly to main with a parent-SHA compare-and-swap update. No branch or PR was created; the existing chore/ci-verify-main-2026-11-08 branch and open PRs #55, #53, #52, #50 and #48 were left untouched.
 - The GitHub API exposes committed repository state only. No local clone/worktree was available to inspect uncommitted local edits or run commands in a local checkout.
+- Workspace inventory: 29 Cargo workspace members across boot (4), kernel/kernel-bin (2), services (11), apps (8), tools (3), and product-core tests (1); the recursive Git tree contains 447 entries.
 
 ### Implemented
 
