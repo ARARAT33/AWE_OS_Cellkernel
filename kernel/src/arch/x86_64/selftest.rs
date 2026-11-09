@@ -345,9 +345,7 @@ unsafe fn persist_yield(
     // and frame pointers.
     let (persisted, persisted_ok) = unsafe {
         let manager = &mut *manager_ptr;
-        let persisted_ok = manager
-            .persist_outgoing_frame(process, &*frame_ptr)
-            .is_ok();
+        let persisted_ok = manager.persist_outgoing_frame(process, &*frame_ptr).is_ok();
         (manager.process_context(process), persisted_ok)
     };
     if !persisted_ok {
