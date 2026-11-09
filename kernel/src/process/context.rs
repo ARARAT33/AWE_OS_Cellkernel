@@ -51,6 +51,15 @@ pub struct ProcessContext {
 
 /// AweOS Cell Control Block (CCB) representing a microprocess unit.
 pub type CellControlBlock = ProcessContext;
+impl ProcessContext {
+    pub const fn new(process_id: super::ProcessId, cpu: CpuContext) -> Self {
+        Self { process_id, cpu }
+    }
+    pub const fn is_valid(&self) -> bool {
+        self.cpu.validate()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -69,11 +78,3 @@ mod tests {
     }
 }
 
-impl ProcessContext {
-    pub const fn new(process_id: super::ProcessId, cpu: CpuContext) -> Self {
-        Self { process_id, cpu }
-    }
-    pub const fn is_valid(&self) -> bool {
-        self.cpu.validate()
-    }
-}
