@@ -129,7 +129,7 @@
 
 ### Next priorities
 
-1. Merge this PR (green suite above) and record the merge SHA here.
+1. DONE: PR #63 merged into main as d6d7480 (merge method, expected-head-SHA compare against 445085f). The green validation above ran on PR head 4561e67 (+ docs commit 445085f, log-only); token pushes to main do not trigger Actions, so the merged main head has no direct Actions run of its own — the standard caveat recorded on 2026-11-08 applies. All work on feat/process-context-persistence-2026-11-09 is preserved; nothing was force-pushed or deleted.
 2. Unify `ProcessManager` and `ExecutionCore` behind one authoritative current-task model.
 3. Add guarded page-table roots and checked kernel/user mappings before any Ring-3 entry.
 4. Continue VirtIO block I/O with real request/completion and read-after-write tests.
