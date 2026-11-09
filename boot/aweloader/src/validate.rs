@@ -1,7 +1,7 @@
 #![no_std]
 
-use awe_boot_protocol::{Architecture, AWE_BOOT_VERSION};
-use crate::security::{validate_manifest, Manifest};
+use crate::security::{Manifest, validate_manifest};
+use awe_boot_protocol::{AWE_BOOT_VERSION, Architecture};
 
 pub fn validate_aweos(manifest: &Manifest, image_len: u64, architecture: Architecture) -> bool {
     validate_manifest(manifest, image_len, architecture)

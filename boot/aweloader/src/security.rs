@@ -87,7 +87,11 @@ mod tests {
 
     #[test]
     fn manifest_validation_accepts_a_well_formed_v1_header() {
-        assert!(validate_manifest(&valid_manifest(), 256, Architecture::X86_64));
+        assert!(validate_manifest(
+            &valid_manifest(),
+            256,
+            Architecture::X86_64
+        ));
     }
 
     #[test]
