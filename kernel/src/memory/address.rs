@@ -12,6 +12,13 @@ pub const fn is_canonical_x86_64_48(address: u64) -> bool {
     }
 }
 
+/// Validate a non-null user pointer in the lower canonical half of a
+/// four-level x86_64 address space. Mapping and access permissions are checked
+/// separately by the active address-space implementation.
+pub const fn is_canonical_user_address_x86_64_48(address: u64) -> bool {
+    address != 0 && address >> 47 == 0
+}
+
 #[repr(transparent)]
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct VirtualAddress(pub u64);
@@ -77,5 +84,13 @@ mod tests {
         assert!(!is_canonical_x86_64_48(0x0000_8000_0000_0000));
         assert!(!is_canonical_x86_64_48(0xffff_7fff_ffff_ffff));
         assert!(!VirtualAddress(0x0000_8000_0000_0000).is_canonical());
+    }
+
+    #[test]
+    fn user_pointer_validation_is_lower_half_only() {
+        assert!(is_canonical_user_address_x86_64_48(0x0000_7fff_ffff_ffff));
+        assert!(!is_canonical_user_address_x86_64_48(0));
+        assert!(!is_canonical_user_address_x86_64_48(0x0000_8000_0000_0000));
+        assert!(!is_canonical_user_address_x86_64_48(0xffff_8000_0000_0000));
     }
 }

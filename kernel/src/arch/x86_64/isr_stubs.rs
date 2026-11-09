@@ -600,7 +600,7 @@ unsafe extern "C" {
     pub fn awe_isr_255();
 }
 
-pub fn init_idt_stubs(idt: &mut super::idt::Idt, cs: u16) {
+pub fn init_idt_stubs(idt: &mut super::idt::Idt, cs: u16) -> bool {
     // Initialize all 256 IDT entries
     for i in 0..=255u8 {
         // Get the function pointer dynamically using a match
@@ -863,8 +863,11 @@ pub fn init_idt_stubs(idt: &mut super::idt::Idt, cs: u16) {
             254 => awe_isr_254 as *const (),
             255 => awe_isr_255 as *const (),
         };
-        idt.set_handler(i, handler as usize as u64, cs);
+        if !idt.set_handler(i, handler as usize as u64, cs) {
+            return false;
+        }
     }
+    true
 }
 
 fn print_u64_hex(mut val: u64) {
@@ -1215,7 +1218,10 @@ mod tests {
     #[test]
     fn all_256_idt_vectors_are_installed() {
         let mut idt = super::super::idt::Idt::new();
-        init_idt_stubs(&mut idt, super::super::gdt::KERNEL_CODE_SELECTOR);
+        assert!(init_idt_stubs(
+            &mut idt,
+            super::super::gdt::KERNEL_CODE_SELECTOR
+        ));
         for vector in 0..=u8::MAX {
             assert!(idt.is_present(vector), "IDT vector {vector} is missing");
         }

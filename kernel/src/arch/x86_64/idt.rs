@@ -64,8 +64,12 @@ impl Idt {
             entries: [IdtEntry::missing(); 256],
         }
     }
-    pub fn set_handler(&mut self, vector: u8, handler: u64, selector: u16) {
+    pub fn set_handler(&mut self, vector: u8, handler: u64, selector: u16) -> bool {
+        if handler == 0 || selector == 0 || !is_canonical_x86_64_48(handler) {
+            return false;
+        }
         self.entries[vector as usize] = IdtEntry::new(handler, selector);
+        true
     }
     pub fn is_present(&self, vector: u8) -> bool {
         self.entries[vector as usize].is_present()
@@ -97,14 +101,7 @@ impl Idt {
     }
 
     pub fn install_validated(&mut self, vector: u8, handler: u64, selector: u16) -> bool {
-        if handler == 0 || selector == 0 {
-            return false;
-        }
-        if !is_canonical_x86_64_48(handler) {
-            return false;
-        }
-        self.set_handler(vector, handler, selector);
-        true
+        self.set_handler(vector, handler, selector)
     }
 
     pub fn timer_installed(&self) -> bool {
@@ -155,6 +152,17 @@ mod tests {
         assert!(idt.install_validated(32, 0x0000_0000_0040_0000, 0x08));
         assert!(idt.timer_installed());
     }
+    #[test]
+    fn direct_handler_installation_fails_closed() {
+        let mut idt = Idt::new();
+        assert!(!idt.set_handler(32, 0x0000_8000_0000_0000, 0x08));
+        assert!(!idt.set_handler(32, 0xffff_7fff_ffff_fff0, 0x08));
+        assert!(!idt.set_handler(32, 0x1000, 0));
+        assert!(!idt.is_present(32));
+        assert!(idt.set_handler(32, 0xffff_8000_0000_1000, 0x08));
+        assert!(idt.is_present(32));
+    }
+
     #[test]
     fn validated_install_rejects_noncanonical_sign_extension_gaps() {
         let mut idt = Idt::new();

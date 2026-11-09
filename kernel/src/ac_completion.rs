@@ -7,6 +7,10 @@
 //! subsystem as ready; they do not pretend to execute privileged CPU
 //! instructions in unit-test builds.
 
+use crate::memory::address::{
+    is_canonical_user_address_x86_64_48, is_canonical_x86_64_48,
+};
+
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BringupPhase {
@@ -121,6 +125,8 @@ impl ContextFrame {
     pub const fn validate(self) -> bool {
         self.instruction_pointer != 0
             && self.stack_pointer != 0
+            && is_canonical_x86_64_48(self.instruction_pointer)
+            && is_canonical_x86_64_48(self.stack_pointer)
             && self.address_space != 0
             && (self.stack_pointer & 0xf) == 0
     }
@@ -137,7 +143,7 @@ pub struct SyscallBoundary {
 impl SyscallBoundary {
     pub const fn validate(self) -> bool {
         let ptr_ok = match self.user_pointer {
-            Some(p) => p != 0,
+            Some(p) => is_canonical_user_address_x86_64_48(p),
             None => true,
         };
         self.arg_count <= self.max_args && self.max_args <= 6 && ptr_ok
@@ -285,6 +291,24 @@ mod tests {
             .validate()
         );
         assert!(
+            !ContextFrame {
+                instruction_pointer: 0x0000_8000_0000_0000,
+                stack_pointer: 0x1000,
+                flags: 0,
+                address_space: 2
+            }
+            .validate()
+        );
+        assert!(
+            !ContextFrame {
+                instruction_pointer: 0x1000,
+                stack_pointer: 0xffff_7fff_ffff_fff0,
+                flags: 0,
+                address_space: 2
+            }
+            .validate()
+        );
+        assert!(
             SyscallBoundary {
                 number: 3,
                 arg_count: 2,
@@ -299,6 +323,24 @@ mod tests {
                 arg_count: 7,
                 max_args: 6,
                 user_pointer: Some(0x1000)
+            }
+            .validate()
+        );
+        assert!(
+            !SyscallBoundary {
+                number: 3,
+                arg_count: 1,
+                max_args: 6,
+                user_pointer: Some(0x0000_8000_0000_0000)
+            }
+            .validate()
+        );
+        assert!(
+            !SyscallBoundary {
+                number: 3,
+                arg_count: 1,
+                max_args: 6,
+                user_pointer: Some(0xffff_8000_0000_0000)
             }
             .validate()
         );

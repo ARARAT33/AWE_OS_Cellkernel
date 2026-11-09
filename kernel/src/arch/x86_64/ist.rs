@@ -170,7 +170,7 @@ mod tests {
         let mut tss = Tss64::new();
         let mut idt = Idt::new();
         for vector in 0..=255u8 {
-            idt.set_handler(vector, stub as *const () as usize as u64, 0x08);
+            assert!(idt.set_handler(vector, stub as *const () as usize as u64, 0x08));
         }
 
         assert!(configure_ist_stacks(&mut tss, &mut idt).is_ok());

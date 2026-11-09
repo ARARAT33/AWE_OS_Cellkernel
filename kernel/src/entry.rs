@@ -92,7 +92,10 @@ pub fn kernel_entry(info: &BootInfo) -> KernelBootStatus {
         let idt_ptr = core::ptr::addr_of_mut!(IDT);
         let tss_ptr = core::ptr::addr_of_mut!(crate::arch::x86_64::gdt::TSS);
         unsafe {
-            init_idt_stubs(&mut *idt_ptr, KERNEL_CODE_SELECTOR);
+            if !init_idt_stubs(&mut *idt_ptr, KERNEL_CODE_SELECTOR) {
+                serial_write_str("AWEOS: FATAL: invalid IDT handler address\r\n");
+                crate::arch::x86_64::boot::halt();
+            }
             // Boot-order contract: the critical #NMI/#DF/#MC vectors get
             // their dedicated IST stacks after the handlers are installed
             // and before the IDT is loaded. Failing closed is the only
