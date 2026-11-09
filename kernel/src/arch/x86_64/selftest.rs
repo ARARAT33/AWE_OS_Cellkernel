@@ -56,11 +56,17 @@ static NMI_EXPECTED: AtomicBool = AtomicBool::new(false);
 /// Set by the NMI recovery path.
 static NMI_HANDLED: AtomicBool = AtomicBool::new(false);
 
-static SWITCH_TASK_ENTERED: AtomicBool = AtomicBool::new(false);
-static mut SWITCH_MANAGER: ProcessManager<1> = ProcessManager::new();
+/// Round-robin phase of test process A: 0 = never entered, 1 = entered and
+/// yielded, 2 = resumed from the persisted context and exited.
+static SWITCH_A_PHASE: AtomicU32 = AtomicU32::new(0);
+/// Same phase machine for test process B.
+static SWITCH_B_PHASE: AtomicU32 = AtomicU32::new(0);
+static mut SWITCH_MANAGER: ProcessManager<2> = ProcessManager::new();
 static mut SWITCH_BOOT_FRAME: SwitchFrame = SwitchFrame::empty();
-static mut SWITCH_TASK_FRAME: SwitchFrame = SwitchFrame::empty();
-static mut SWITCH_TASK_STACK: [u8; 4096] = [0; 4096];
+static mut SWITCH_A_FRAME: SwitchFrame = SwitchFrame::empty();
+static mut SWITCH_B_FRAME: SwitchFrame = SwitchFrame::empty();
+static mut SWITCH_A_STACK: [u8; 4096] = [0; 4096];
+static mut SWITCH_B_STACK: [u8; 4096] = [0; 4096];
 
 core::arch::global_asm!(
     r#".intel_syntax noprefix
@@ -177,96 +183,254 @@ pub fn run() {
     serial_write_str("AWEOS SELFTEST: ALL PHASES PASSED\r\n");
 }
 
-/// Exercise the real assembly switch path with a fresh process stack. The
-/// target-stack callback must publish Running before the task entry executes.
+/// Exercise the real assembly switch path with two fresh process stacks in a
+/// round-robin. Each process yields once and its outgoing context must be
+/// persisted by the driver; each process must then resume from that persisted
+/// context (not from its original entry point) before it exits and is reaped.
 fn run_context_switch_selftest() -> bool {
-    const TEST_PROCESS: ProcessId = ProcessId(1);
-    SWITCH_TASK_ENTERED.store(false, Ordering::SeqCst);
+    const PROCESS_A: ProcessId = ProcessId(1);
+    const PROCESS_B: ProcessId = ProcessId(2);
+
+    SWITCH_A_PHASE.store(0, Ordering::SeqCst);
+    SWITCH_B_PHASE.store(0, Ordering::SeqCst);
 
     unsafe {
         let manager_ptr = core::ptr::addr_of_mut!(SWITCH_MANAGER);
         let boot_frame_ptr = core::ptr::addr_of_mut!(SWITCH_BOOT_FRAME);
-        let task_frame_ptr = core::ptr::addr_of_mut!(SWITCH_TASK_FRAME);
-        let stack_start = core::ptr::addr_of_mut!(SWITCH_TASK_STACK) as *mut u8 as u64;
-        let stack_top = (stack_start + 4096) & !0xF;
-        let task_rsp = match stack_top.checked_sub(8) {
-            Some(value) => value,
-            None => return false,
-        };
+        let a_frame_ptr = core::ptr::addr_of_mut!(SWITCH_A_FRAME);
+        let b_frame_ptr = core::ptr::addr_of_mut!(SWITCH_B_FRAME);
 
         *manager_ptr = ProcessManager::new();
         let manager = &mut *manager_ptr;
-        let descriptor = ProcessDescriptor {
-            id: TEST_PROCESS,
-            state: ProcessState::Created,
-            budget: ResourceBudget {
-                cpu_ticks: 100,
-                memory_bytes: 4096,
-                ipc_messages: 8,
-            },
-        };
-        let context = ProcessContext::new(
-            TEST_PROCESS,
-            CpuContext::kernel_entry(switch_task_entry as *const () as usize as u64, task_rsp, 0),
-        );
-        if manager.register(descriptor, context).is_err()
-            || manager.make_runnable(TEST_PROCESS).is_err()
-        {
+        if !register_process(
+            manager,
+            PROCESS_A,
+            process_a_entry as *const () as usize as u64,
+            SWITCH_A_STACK.as_mut_ptr(),
+        ) || !register_process(
+            manager,
+            PROCESS_B,
+            process_b_entry as *const () as usize as u64,
+            SWITCH_B_STACK.as_mut_ptr(),
+        ) {
             return false;
         }
-        let target = match manager.next_dispatch() {
-            Ok(target) => target,
-            Err(_) => return false,
-        };
-        *task_frame_ptr = target.frame;
+
         *boot_frame_ptr = SwitchFrame::from_context(&CpuContext::kernel_entry(
             run_context_switch_selftest as *const () as usize as u64,
             current_rsp(),
             0,
         ));
 
-        if switch_to_dispatch(manager_ptr, boot_frame_ptr, target).is_err() {
+        // Dispatch A: fresh entry on its own stack, must yield back.
+        if !dispatch_process(manager_ptr, boot_frame_ptr, PROCESS_A) {
+            return false;
+        }
+        if SWITCH_A_PHASE.load(Ordering::SeqCst) != 1 {
+            return false;
+        }
+        if !persist_yield(
+            manager_ptr,
+            PROCESS_A,
+            a_frame_ptr,
+            process_a_entry as *const () as usize as u64,
+            SWITCH_A_STACK.as_mut_ptr(),
+        ) {
+            return false;
+        }
+        serial_write_str("AWEOS SELFTEST: process A yielded; outgoing context persisted\r\n");
+
+        // Dispatch B: fresh entry, yields; A is requeued by commit_running.
+        if !dispatch_process(manager_ptr, boot_frame_ptr, PROCESS_B) {
+            return false;
+        }
+        if SWITCH_B_PHASE.load(Ordering::SeqCst) != 1 {
+            return false;
+        }
+        if !persist_yield(
+            manager_ptr,
+            PROCESS_B,
+            b_frame_ptr,
+            process_b_entry as *const () as usize as u64,
+            SWITCH_B_STACK.as_mut_ptr(),
+        ) {
+            return false;
+        }
+        serial_write_str("AWEOS SELFTEST: process B yielded; outgoing context persisted\r\n");
+
+        // Re-dispatch A: it must resume from the persisted context and exit.
+        if !dispatch_process(manager_ptr, boot_frame_ptr, PROCESS_A) {
+            return false;
+        }
+        if SWITCH_A_PHASE.load(Ordering::SeqCst) != 2 {
+            return false;
+        }
+        let manager = &mut *manager_ptr;
+        if manager.confirm_switched_to_idle(PROCESS_A).is_err()
+            || manager.reap(PROCESS_A).is_err()
+        {
             return false;
         }
 
+        // Re-dispatch B: resumes, exits, is reaped; registry must be empty.
+        if !dispatch_process(manager_ptr, boot_frame_ptr, PROCESS_B) {
+            return false;
+        }
+        if SWITCH_B_PHASE.load(Ordering::SeqCst) != 2 {
+            return false;
+        }
         let manager = &mut *manager_ptr;
-        let exited = manager
-            .descriptor(TEST_PROCESS)
-            .is_some_and(|process| process.state == ProcessState::Exited);
-        if !SWITCH_TASK_ENTERED.load(Ordering::SeqCst) || !exited {
+        if manager.confirm_switched_to_idle(PROCESS_B).is_err()
+            || manager.reap(PROCESS_B).is_err()
+        {
             return false;
         }
-        if manager.confirm_switched_to_idle(TEST_PROCESS).is_err() {
-            return false;
-        }
-        manager.reap(TEST_PROCESS).is_ok() && manager.len() == 0
+
+        serial_write_str("AWEOS SELFTEST: round-robin resume from persisted contexts passed\r\n");
+        manager.len() == 0
     }
 }
 
-/// First instruction stream entered on the new process stack after the
-/// architecture completion callback has committed ProcessManager state.
-extern "C" fn switch_task_entry() -> ! {
-    const TEST_PROCESS: ProcessId = ProcessId(1);
-    let manager_ptr = core::ptr::addr_of_mut!(SWITCH_MANAGER);
-    let ready_to_exit = unsafe {
-        let manager = &mut *manager_ptr;
-        let acknowledged = manager.current_process_id() == Some(TEST_PROCESS)
-            && manager
-                .descriptor(TEST_PROCESS)
-                .is_some_and(|process| process.state == ProcessState::Running);
-        acknowledged && manager.exit(TEST_PROCESS).is_ok()
+/// Register a process with a fresh 4 KiB stack and make it runnable.
+/// `stack` must point to 4096 writable, pinned, kernel-mapped bytes.
+fn register_process(
+    manager: &mut ProcessManager<2>,
+    process: ProcessId,
+    entry: u64,
+    stack: *mut u8,
+) -> bool {
+    let stack_start = stack as u64;
+    let stack_top = (stack_start + 4096) & !0xF;
+    let Some(task_rsp) = stack_top.checked_sub(8) else {
+        return false;
     };
-    if !ready_to_exit {
-        fail("target-stack callback did not publish the exact Running process");
+    let descriptor = ProcessDescriptor {
+        id: process,
+        state: ProcessState::Created,
+        budget: ResourceBudget {
+            cpu_ticks: 100,
+            memory_bytes: 4096,
+            ipc_messages: 8,
+        },
+    };
+    let context = ProcessContext::new(process, CpuContext::kernel_entry(entry, task_rsp, 0));
+    manager.register(descriptor, context).is_ok() && manager.make_runnable(process).is_ok()
+}
+
+/// Dequeue the exact expected process and switch to it on its own stack.
+unsafe fn dispatch_process(
+    manager_ptr: *mut ProcessManager<2>,
+    boot_frame_ptr: *mut SwitchFrame,
+    expected: ProcessId,
+) -> bool {
+    let target = match (*manager_ptr).next_dispatch() {
+        Ok(target) if target.process == expected => target,
+        _ => return false,
+    };
+    switch_to_dispatch(manager_ptr, boot_frame_ptr, target).is_ok()
+}
+
+/// Persist a just-yielded process's outgoing frame and verify it describes a
+/// mid-execution resume point inside that process's own stack.
+unsafe fn persist_yield(
+    manager_ptr: *mut ProcessManager<2>,
+    process: ProcessId,
+    frame_ptr: *mut SwitchFrame,
+    entry_rip: u64,
+    stack: *mut u8,
+) -> bool {
+    let stack_start = stack as u64;
+    let stack_end = stack_start + 4096;
+    let manager = &mut *manager_ptr;
+    if manager.persist_outgoing_frame(process, &*frame_ptr).is_err() {
+        return false;
+    }
+    let Some(persisted) = manager.process_context(process) else {
+        return false;
+    };
+    // The saved RIP must have advanced past the process entry (it is the
+    // resume label inside the switch backend), and RSP must still point
+    // into the process's own stack.
+    persisted.cpu.rip != entry_rip
+        && (stack_start..stack_end).contains(&persisted.cpu.rsp)
+        && persisted.is_valid()
+}
+
+/// Verify the manager currently publishes this exact process as Running.
+fn entered_as_running(process: ProcessId) -> bool {
+    let manager = unsafe { &mut *core::ptr::addr_of_mut!(SWITCH_MANAGER) };
+    manager.current_process_id() == Some(process)
+        && manager
+            .descriptor(process)
+            .is_some_and(|descriptor| descriptor.state == ProcessState::Running)
+}
+
+/// Process A entry: runs on its own stack, yields once, and must be resumed
+/// from the persisted context before it exits. Any unexpected state fails the
+/// self-test and halts; this is a validation-only code path.
+extern "C" fn process_a_entry() -> ! {
+    const PROCESS: ProcessId = ProcessId(1);
+    let frame_ptr = core::ptr::addr_of_mut!(SWITCH_A_FRAME);
+    let boot_frame_ptr = core::ptr::addr_of!(SWITCH_BOOT_FRAME);
+
+    if !entered_as_running(PROCESS) {
+        fail("process A entry did not observe the acknowledged Running state");
         unsafe { super::boot::halt() };
     }
-    SWITCH_TASK_ENTERED.store(true, Ordering::SeqCst);
-
-    let task_frame_ptr = core::ptr::addr_of_mut!(SWITCH_TASK_FRAME);
-    let boot_frame_ptr = core::ptr::addr_of!(SWITCH_BOOT_FRAME);
-    if unsafe { switch_checked(&mut *task_frame_ptr, &*boot_frame_ptr) }.is_err() {
-        fail("failed to switch from test process back to boot stack");
+    SWITCH_A_PHASE.store(1, Ordering::SeqCst);
+    if unsafe { switch_checked(&mut *frame_ptr, &*boot_frame_ptr) }.is_err() {
+        fail("process A failed to yield back to the boot stack");
+        unsafe { super::boot::halt() };
     }
+
+    // Control returns here only after a re-dispatch through the persisted
+    // context; the callback must have re-published Running before resuming.
+    if !entered_as_running(PROCESS) || SWITCH_A_PHASE.swap(2, Ordering::SeqCst) != 1 {
+        fail("process A was not resumed from its persisted context");
+        unsafe { super::boot::halt() };
+    }
+    let exited = unsafe { (&mut *core::ptr::addr_of_mut!(SWITCH_MANAGER)).exit(PROCESS).is_ok() };
+    if !exited {
+        fail("process A could not exit");
+        unsafe { super::boot::halt() };
+    }
+    if unsafe { switch_checked(&mut *frame_ptr, &*boot_frame_ptr) }.is_err() {
+        fail("process A failed to switch back after exit");
+    }
+    // The scheduler must reap an exited process and never resume it.
+    fail("exited process A was resumed");
+    unsafe { super::boot::halt() };
+}
+
+/// Process B entry: same phase machine as process A on a separate stack.
+extern "C" fn process_b_entry() -> ! {
+    const PROCESS: ProcessId = ProcessId(2);
+    let frame_ptr = core::ptr::addr_of_mut!(SWITCH_B_FRAME);
+    let boot_frame_ptr = core::ptr::addr_of!(SWITCH_BOOT_FRAME);
+
+    if !entered_as_running(PROCESS) {
+        fail("process B entry did not observe the acknowledged Running state");
+        unsafe { super::boot::halt() };
+    }
+    SWITCH_B_PHASE.store(1, Ordering::SeqCst);
+    if unsafe { switch_checked(&mut *frame_ptr, &*boot_frame_ptr) }.is_err() {
+        fail("process B failed to yield back to the boot stack");
+        unsafe { super::boot::halt() };
+    }
+
+    if !entered_as_running(PROCESS) || SWITCH_B_PHASE.swap(2, Ordering::SeqCst) != 1 {
+        fail("process B was not resumed from its persisted context");
+        unsafe { super::boot::halt() };
+    }
+    let exited = unsafe { (&mut *core::ptr::addr_of_mut!(SWITCH_MANAGER)).exit(PROCESS).is_ok() };
+    if !exited {
+        fail("process B could not exit");
+        unsafe { super::boot::halt() };
+    }
+    if unsafe { switch_checked(&mut *frame_ptr, &*boot_frame_ptr) }.is_err() {
+        fail("process B failed to switch back after exit");
+    }
+    fail("exited process B was resumed");
     unsafe { super::boot::halt() };
 }
 
