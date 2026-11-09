@@ -77,4 +77,3 @@ mod tests {
         assert!(!CpuContext::kernel_entry(0x1000, 0xffff_7fff_ffff_fff0, 0).validate());
     }
 }
-
