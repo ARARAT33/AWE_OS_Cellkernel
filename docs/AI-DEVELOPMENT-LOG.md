@@ -133,3 +133,37 @@
 2. Unify `ProcessManager` and `ExecutionCore` behind one authoritative current-task model.
 3. Add guarded page-table roots and checked kernel/user mappings before any Ring-3 entry.
 4. Continue VirtIO block I/O with real request/completion and read-after-write tests.
+
+## 2026-11-10 — stale-PR triage: resolve all open PRs against main
+
+### What was requested and what was done
+
+- Request: merge all previously created PRs into main. Before acting, each open PR was audited against current main (check-run status, file-by-file comparison, real diffs). Result of the audit: every stale PR branch conflicted with main (update_pull_request_branch reported merge conflicts for #55, #53, #52, #50, #48), and their content is superseded by main's current state.
+
+### Per-PR resolutions (honest reasoning recorded in each PR's closing comment)
+
+- #55 (workspace manifests + workflows + docs): all five workflows and all docs already exist on main in newer form. The single change never applied — removing the unused `awe-platformd` and `awe-script` workspace dependency entries (cargo reports both as unused on every CI run) — was ported to PR #65. Closed as superseded; branch preserved.
+- #53 (kernel CpuContext validation + EndUserRuntime error mapping): verified superseded by direct file comparison — main already has `is_canonical_x86_64_48` validation with both-halves/noncanonical tests, the dedicated `EndUserRuntimeError::CapabilityDenied` variant, and `Starting`-state acceptance. Closed as superseded; branch preserved.
+- #52 (2026-11-08 end-user runtime attempt): superseded by main's contract-tested route (`runtime/end_user.rs`, fail-closed syscall dispatcher, Ring 3 explicitly deferred). The branch fails 7/13 checks on its stale head and would delete main's newer work (entry.rs -246, storaged -265, appd/awos.rs -540). Genuinely new pieces (PS/2 driver, input.rs, graphics.rs, desktop.rs) remain in the branch for a future standalone port. Closed as superseded; branch preserved.
+- #50 (rflags + syscall pointer validation): rflags 0x0202 already on main; `is_valid_user_ptr` superseded by main's strictly fail-closed dispatcher that never interprets arguments as pointers. Closed as superseded; branch preserved.
+- #48 (userspace_entry logging refactor): main deliberately removed `userspace_entry` (it claimed active Ring 3 with no isolated user address space) and already carries the 0x0202 fix. Merging would reintroduce removed unverified code. Closed as superseded; branch preserved.
+- PR #64 (initd restart policies, created by an external bot, 16/16 green) is a draft and not authored by this automation; it was left untouched.
+
+### Validation
+
+- PR #65 (branch chore/workspace-deps-cleanup-2026-11-10, port of #55's surviving change on top of main): all 15 check-runs completed **success** (Actions run IDs from the check-run URLs): `cloud-security` + `cloud-release-contract` — run 42887720665; `build-and-smoke-test-image` + `exception-injection-selftest` — run 42887720608; `virtio-block-contract-and-qemu` — run 42887720623; `Build Multi-Arch Boot Images` — run 42887720602; `Rust workspace` + `UEFI loader` — run 42887720834; `Workspace Build & Validation` — run 42887720817; `Workspace clippy with PR diagnostics` — run 42887720703; `cargo failure diagnostics` — run 42887720537; `Build AOSIN Installers` (ubuntu/windows, gui/cli, 4/4) — run 42887720729.
+- PR #65 merged into main as fd58c95 (merge method, expected-head-SHA compare against fa953a8). Standard caveat: token pushes and merges do not trigger Actions on main itself; the green evidence is the PR head run.
+- No failing suite was merged at any point; no branch was deleted; nothing was force-pushed.
+
+### Files changed in this session
+
+- Cargo.toml (via PR #65) — two unused workspace dependency entries removed.
+- docs/AI-DEVELOPMENT-LOG.md — this entry.
+- Closing comments on PRs #55, #53, #52, #50, #48.
+
+### Next priorities
+
+1. Unify `ProcessManager` and `ExecutionCore` behind one authoritative current-task model.
+2. Add guarded page-table roots and checked kernel/user mappings before any Ring-3 entry.
+3. Continue VirtIO block I/O with real request/completion and read-after-write tests.
+4. Optional: carefully port the PS/2 keyboard driver from the preserved #52 branch as a standalone PR with a green suite.
