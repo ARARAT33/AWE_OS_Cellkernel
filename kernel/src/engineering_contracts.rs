@@ -748,4 +748,118 @@ mod tests {
         assert!(monotonic_after(4, 9));
         assert!(!monotonic_after(9, 4));
     }
+
+    #[test]
+    fn scheduler_rejects_empty_queue_and_unknown_thread() {
+        let mut s = PriorityScheduler::new();
+        assert_eq!(s.next(), Err(CoreError::WouldBlock));
+        assert_eq!(s.set_state(1, ThreadState::Runnable), Err(CoreError::NotFound));
+        assert_eq!(s.tick(1, 1), Err(CoreError::NotFound));
+    }
+
+    #[test]
+    fn scheduler_tick_on_non_running_thread_fails() {
+        let mut s = PriorityScheduler::new();
+        let id = s.spawn(5, 3).unwrap();
+        assert_eq!(s.tick(id, 1), Err(CoreError::State));
+    }
+
+    #[test]
+    fn scheduler_preempts_after_quantum_exhaustion() {
+        let mut s = PriorityScheduler::new();
+        let a = s.spawn(5, 2).unwrap();
+        let b = s.spawn(5, 2).unwrap();
+        assert_eq!(s.next().unwrap(), a);
+        assert!(s.tick(a, 2).unwrap());
+        s.set_state(a, ThreadState::Runnable).unwrap();
+        assert_eq!(s.next().unwrap(), b);
+    }
+
+    #[test]
+    fn capability_table_grant_exhaustion_is_bounded() {
+        let mut c = CapabilityTable::new();
+        for _ in 0..MAX_CAPABILITIES {
+            assert!(c.grant(0b001).is_ok());
+        }
+        assert_eq!(c.grant(0b001), Err(CoreError::Capacity));
+    }
+
+    #[test]
+    fn capability_check_rejects_dead_capability() {
+        let mut c = CapabilityTable::new();
+        let cap = c.grant(0b100).unwrap();
+        c.revoke(cap.id).unwrap();
+        assert_eq!(c.check(cap.id, 0b100), Err(CoreError::Permission));
+    }
+
+    #[test]
+    fn page_table_capacity_is_bounded() {
+        let mut p = PageTable::new();
+        for i in 0..MAX_MAPPINGS {
+            assert!(p.map(PageMapping {
+                virtual_page: (i + 1) as u64,
+                frame: (i + 1) as u64,
+                writable: false,
+                user: false,
+            }).is_ok());
+        }
+        assert_eq!(
+            p.map(PageMapping {
+                virtual_page: 999,
+                frame: 999,
+                writable: false,
+                user: false,
+            }),
+            Err(CoreError::Capacity)
+        );
+    }
+
+    #[test]
+    fn page_table_unmap_nonexistent_page_fails() {
+        let mut p = PageTable::new();
+        assert_eq!(p.unmap(42), Err(CoreError::NotFound));
+    }
+
+    #[test]
+    fn frame_allocator_add_range_rejects_zero_and_overflow() {
+        let mut a = FrameAllocator::new();
+        assert_eq!(a.add_range(10, 0), Err(CoreError::Capacity));
+        assert_eq!(a.add_range(100, MAX_FRAMES + 1), Err(CoreError::Capacity));
+    }
+
+    #[test]
+    fn frame_allocator_allocate_rejects_zero_owner() {
+        let mut a = FrameAllocator::new();
+        a.add_range(100, 1).unwrap();
+        assert_eq!(a.allocate(0), Err(CoreError::Invalid));
+    }
+
+    #[test]
+    fn ipc_channel_recv_on_empty_fails() {
+        let mut q = IpcChannel::new(4);
+        assert_eq!(q.recv(), Err(CoreError::WouldBlock));
+    }
+
+    #[test]
+    fn interrupt_controller_accepts_all_u8_vectors() {
+        let mut c = InterruptController::new();
+        for v in 0..=u8::MAX {
+            assert!(c.route(v, 0).is_ok(), "vector {v} must be routable");
+        }
+    }
+
+    #[test]
+    fn interrupt_controller_mask_nonexistent_route_fails() {
+        let mut c = InterruptController::new();
+        assert_eq!(c.mask(40, true), Err(CoreError::NotFound));
+    }
+
+    #[test]
+    fn trace_buffer_sequence_wraps_without_panic() {
+        let mut t = TraceBuffer::new();
+        for _ in 0..(MAX_TRACE * 3) {
+            t.push(1, 0, 0);
+        }
+        assert_eq!(t.sequence(), (MAX_TRACE * 3) as u64);
+    }
 }
