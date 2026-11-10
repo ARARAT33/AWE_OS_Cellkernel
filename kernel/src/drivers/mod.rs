@@ -38,6 +38,7 @@ pub mod linux_transaction_orchestrator;
 pub mod pci;
 pub mod pci_virtio_probe;
 pub mod product_gate;
+pub mod ps2;
 pub mod universal;
 pub mod virtio;
 pub mod virtio_block;
