@@ -180,3 +180,20 @@
 3. Continue the larger kernel integration work only after the service contract is validated: unify `ProcessManager` and `ExecutionCore` current-task ownership, then design per-process page-table roots and checked user-copy before any Ring-3 enablement.
 4. Continue VirtIO block I/O from device exposure toward request/completion and read-after-write evidence; do not claim persistent storage until crash-recovery tests exist.
 
+### Validation addendum — 2026-11-10
+
+- PR #64 head `f6cf808771d3257765abc24a1c8e63db5b23bd8c` completed all 16 reported check-runs successfully:
+  - CI Pipeline run 42840888445 — workspace compilation, all workspace tests, formatting and boot-image artifact verification succeeded.
+  - Quality Gate run 42840888203 — Rust workspace formatting/check/tests, product-core evidence, Clippy and UEFI loader target check succeeded.
+  - Bootable Image run 42840888204 — QEMU ISO smoke test and exception-injection self-test both succeeded.
+  - VirtIO Runtime run 42840887828 — contract tests, kernel build and QEMU VirtIO-device boot succeeded.
+  - Cloud Security run 42840887851 — cloud security and release-contract jobs succeeded.
+  - Multi-Arch Images run 42840888085 — configured image build and artifact verification succeeded.
+  - AOSIN Installers run 42840888182 — all four Linux/Windows GUI/CLI installer jobs succeeded.
+  - PR diagnostics, cargo failure diagnostics and rustfmt workflow also completed successfully.
+- The Quality Gate job log reports 340 kernel tests passing and 11 product-core integration tests passing. The initd test output explicitly confirms the three new restart-policy regression tests passed.
+- The QEMU exception-injection self-test passed. This validates the existing feature-gated kernel self-test path, not full user-mode isolation, SMP, or physical hardware.
+- The Multi-Arch result is image-build evidence only; it does not prove ARM64 or RISC-V runtime boot. The VirtIO result proves the QEMU device was exposed and the kernel booted; it does not prove block read/write or durable storage.
+- All 16 checks refer to the PR head before this documentation-only validation addendum. This addendum is being committed to the same review branch; the updated head must receive its own checks before the PR is considered fully green.
+- PR #64 remains a draft and unmerged. Main remains unchanged.
+
