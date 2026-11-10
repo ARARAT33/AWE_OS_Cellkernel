@@ -141,13 +141,26 @@ impl ServiceTable {
 
     pub fn set_state(&mut self, id: ServiceId, next: ServiceState) -> Result<(), ServiceError> {
         let index = id.0 as usize;
-        if index >= MAX_SERVICES || self.specs[index].is_none() {
+        if index >= MAX_SERVICES {
             return Err(ServiceError::InvalidSpec);
         }
-        if self.states[index] == ServiceState::Quarantined {
+        let Some(spec) = self.specs[index] else {
+            return Err(ServiceError::InvalidSpec);
+        };
+        let current = self.states[index];
+        if current == ServiceState::Quarantined {
             return Err(ServiceError::Quarantined);
         }
-        if !transition(self.states[index], next) {
+
+        // Do not let callers bypass the service's restart policy by using
+        // set_state(Failed/Stopped -> Starting) instead of restart().
+        if next == ServiceState::Starting
+            && current != ServiceState::Declared
+            && !restart_allowed(spec.restart, current)
+        {
+            return Err(ServiceError::InvalidTransition);
+        }
+        if !transition(current, next) {
             return Err(ServiceError::InvalidTransition);
         }
         self.states[index] = next;
@@ -240,6 +253,96 @@ mod tests {
         table.set_state(ServiceId(1), ServiceState::Failed).unwrap();
         table.restart(ServiceId(1)).unwrap();
         assert_eq!(table.state(ServiceId(1)), Some(ServiceState::Starting));
+    }
+
+    #[test]
+    fn set_state_cannot_bypass_never_restart_policy() {
+        let mut table = ServiceTable::new();
+        table
+            .register(ServiceSpec {
+                restart: RestartPolicy::Never,
+                ..SPEC
+            })
+            .unwrap();
+        table
+            .set_state(ServiceId(1), ServiceState::Starting)
+            .unwrap();
+        table
+            .set_state(ServiceId(1), ServiceState::Failed)
+            .unwrap();
+
+        assert_eq!(
+            table.set_state(ServiceId(1), ServiceState::Starting),
+            Err(ServiceError::InvalidTransition)
+        );
+        assert_eq!(table.state(ServiceId(1)), Some(ServiceState::Failed));
+    }
+
+    #[test]
+    fn on_failure_policy_does_not_restart_a_stopped_service() {
+        let mut table = ServiceTable::new();
+        table.register(SPEC).unwrap();
+        table
+            .set_state(ServiceId(1), ServiceState::Starting)
+            .unwrap();
+        table
+            .set_state(ServiceId(1), ServiceState::Running)
+            .unwrap();
+        table
+            .set_state(ServiceId(1), ServiceState::Stopping)
+            .unwrap();
+        table
+            .set_state(ServiceId(1), ServiceState::Stopped)
+            .unwrap();
+
+        assert_eq!(
+            table.set_state(ServiceId(1), ServiceState::Starting),
+            Err(ServiceError::InvalidTransition)
+        );
+        assert_eq!(table.state(ServiceId(1)), Some(ServiceState::Stopped));
+    }
+
+    #[test]
+    fn set_state_honors_on_failure_and_always_restart_policies() {
+        let mut on_failure = ServiceTable::new();
+        on_failure.register(SPEC).unwrap();
+        on_failure
+            .set_state(ServiceId(1), ServiceState::Starting)
+            .unwrap();
+        on_failure
+            .set_state(ServiceId(1), ServiceState::Failed)
+            .unwrap();
+        on_failure
+            .set_state(ServiceId(1), ServiceState::Starting)
+            .unwrap();
+        assert_eq!(
+            on_failure.state(ServiceId(1)),
+            Some(ServiceState::Starting)
+        );
+
+        let mut always = ServiceTable::new();
+        always
+            .register(ServiceSpec {
+                restart: RestartPolicy::Always,
+                ..SPEC
+            })
+            .unwrap();
+        always
+            .set_state(ServiceId(1), ServiceState::Starting)
+            .unwrap();
+        always
+            .set_state(ServiceId(1), ServiceState::Running)
+            .unwrap();
+        always
+            .set_state(ServiceId(1), ServiceState::Stopping)
+            .unwrap();
+        always
+            .set_state(ServiceId(1), ServiceState::Stopped)
+            .unwrap();
+        always
+            .set_state(ServiceId(1), ServiceState::Starting)
+            .unwrap();
+        assert_eq!(always.state(ServiceId(1)), Some(ServiceState::Starting));
     }
 
     #[test]
