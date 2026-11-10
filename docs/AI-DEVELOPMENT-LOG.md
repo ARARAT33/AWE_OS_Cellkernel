@@ -133,3 +133,67 @@
 2. Unify `ProcessManager` and `ExecutionCore` behind one authoritative current-task model.
 3. Add guarded page-table roots and checked kernel/user mappings before any Ring-3 entry.
 4. Continue VirtIO block I/O with real request/completion and read-after-write tests.
+
+## 2026-11-10 — initd restart-policy enforcement
+
+### Baseline audit
+
+- Audited `main` at `dc898bf66af0f906ac42de9dcbc8b8eae81b8bfc`; the latest main commit is documentation-only and records the PR #63 merge SHA `d6d7480`.
+- The recursive repository tree contains 447 entries. The Cargo workspace declares 29 members across boot, kernel, services, apps, tools and product-core tests.
+- Re-read the previous development log, the 2026-11-09 plan, `PROJECT_STATUS.md`, `PRODUCT_READINESS.md`, the root workspace manifest, initd service lifecycle implementation and core-manager integration.
+- The only open PR returned by the repository API is stale PR #55 (`jules-15057688346474764158-9051ab9e`). It remains untouched. Existing feature/archive branches were preserved.
+- Latest main-head Actions runs (created 2026-11-09 21:15 UTC) all completed successfully:
+  - CI Pipeline run 42700825481: workspace check, workspace tests, formatting and boot-image artifact checks all succeeded.
+  - Quality Gate run 42700824931: Rust workspace formatting/check/tests/product-core evidence/Clippy and UEFI loader check all succeeded.
+  - Bootable Image run 42700825011: exception-injection self-test and QEMU ISO smoke test both succeeded.
+  - VirtIO Runtime run 42700825036: contract tests, kernel build, QEMU VirtIO PCI exposure and QEMU boot succeeded.
+  - Cloud Security run 42700825148, Multi-Arch Images run 42700824975, and AOSIN Installers run 42700825085 all succeeded.
+- Evidence boundaries: the VirtIO job proves QEMU device exposure and kernel boot, not verified block read/write or durable storage. The UEFI job is a loader target check, not a firmware boot. Multi-architecture image builds do not prove ARM64/RISC-V runtime boot.
+
+### Finding
+
+- `services/initd::ServiceTable::set_state` accepted the generic `Failed -> Starting` and `Stopped -> Starting` transitions without consulting each service's `RestartPolicy`.
+- The separate `restart()` method checked `restart_allowed`, but callers could bypass it through the public `set_state()` API. This meant `RestartPolicy::Never` could be bypassed after failure, and `OnFailure` could be bypassed for a cleanly stopped service.
+- The issue is a service-lifecycle policy enforcement defect, not proof of a kernel privilege boundary; initd remains a bounded contract/runtime crate.
+
+### Implemented on a review branch
+
+- Branch: `fix/initd-restart-policy-enforcement-2026-11-10` (based on the audited main head).
+- Commit: `11aa60fd90ba412d588ec392bbda395e7745ffa9`.
+- `services/initd/src/lib.rs`: `set_state` now obtains the registered service spec and enforces `restart_allowed` for transitions into `Starting` from any state other than initial `Declared`. Quarantined services remain fail-closed.
+- Added regression tests for:
+  - `RestartPolicy::Never` rejecting Failed -> Starting through `set_state`.
+  - `RestartPolicy::OnFailure` rejecting Stopped -> Starting.
+  - `RestartPolicy::OnFailure` allowing Failed -> Starting.
+  - `RestartPolicy::Always` allowing Stopped -> Starting.
+- No existing source files or branches were deleted, no force push was used, and main was not modified.
+
+### Validation state
+
+- No local repository checkout or Rust execution environment is available through the GitHub repository connector, so no local `cargo fmt`, `cargo test`, or `cargo clippy` result is claimed.
+- The successful Actions runs above are baseline evidence for `dc898bf` only; they do not validate this new branch. Pull-request CI must validate the change before it is considered complete.
+
+### Next priorities
+
+1. Inspect all pull-request check runs for this branch; fix any real formatting, test, Clippy or integration failures before considering the change complete.
+2. Keep the service restart-policy regression tests in the suite.
+3. Continue the larger kernel integration work only after the service contract is validated: unify `ProcessManager` and `ExecutionCore` current-task ownership, then design per-process page-table roots and checked user-copy before any Ring-3 enablement.
+4. Continue VirtIO block I/O from device exposure toward request/completion and read-after-write evidence; do not claim persistent storage until crash-recovery tests exist.
+
+### Validation addendum — 2026-11-10
+
+- PR #64 head `f6cf808771d3257765abc24a1c8e63db5b23bd8c` completed all 16 reported check-runs successfully:
+  - CI Pipeline run 42840888445 — workspace compilation, all workspace tests, formatting and boot-image artifact verification succeeded.
+  - Quality Gate run 42840888203 — Rust workspace formatting/check/tests, product-core evidence, Clippy and UEFI loader target check succeeded.
+  - Bootable Image run 42840888204 — QEMU ISO smoke test and exception-injection self-test both succeeded.
+  - VirtIO Runtime run 42840887828 — contract tests, kernel build and QEMU VirtIO-device boot succeeded.
+  - Cloud Security run 42840887851 — cloud security and release-contract jobs succeeded.
+  - Multi-Arch Images run 42840888085 — configured image build and artifact verification succeeded.
+  - AOSIN Installers run 42840888182 — all four Linux/Windows GUI/CLI installer jobs succeeded.
+  - PR diagnostics, cargo failure diagnostics and rustfmt workflow also completed successfully.
+- The Quality Gate job log reports 340 kernel tests passing and 11 product-core integration tests passing. The initd test output explicitly confirms the three new restart-policy regression tests passed.
+- The QEMU exception-injection self-test passed. This validates the existing feature-gated kernel self-test path, not full user-mode isolation, SMP, or physical hardware.
+- The Multi-Arch result is image-build evidence only; it does not prove ARM64 or RISC-V runtime boot. The VirtIO result proves the QEMU device was exposed and the kernel booted; it does not prove block read/write or durable storage.
+- All 16 checks refer to the PR head before this documentation-only validation addendum. This addendum is being committed to the same review branch; the updated head must receive its own checks before the PR is considered fully green.
+- PR #64 remains a draft and unmerged. Main remains unchanged.
+
