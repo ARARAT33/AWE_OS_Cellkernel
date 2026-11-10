@@ -267,9 +267,7 @@ mod tests {
         table
             .set_state(ServiceId(1), ServiceState::Starting)
             .unwrap();
-        table
-            .set_state(ServiceId(1), ServiceState::Failed)
-            .unwrap();
+        table.set_state(ServiceId(1), ServiceState::Failed).unwrap();
 
         assert_eq!(
             table.set_state(ServiceId(1), ServiceState::Starting),
@@ -315,10 +313,7 @@ mod tests {
         on_failure
             .set_state(ServiceId(1), ServiceState::Starting)
             .unwrap();
-        assert_eq!(
-            on_failure.state(ServiceId(1)),
-            Some(ServiceState::Starting)
-        );
+        assert_eq!(on_failure.state(ServiceId(1)), Some(ServiceState::Starting));
 
         let mut always = ServiceTable::new();
         always
