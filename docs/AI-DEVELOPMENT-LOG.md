@@ -167,3 +167,48 @@
 2. Add guarded page-table roots and checked kernel/user mappings before any Ring-3 entry.
 3. Continue VirtIO block I/O with real request/completion and read-after-write tests.
 4. Optional: carefully port the PS/2 keyboard driver from the preserved #52 branch as a standalone PR with a green suite.
+## 2026-11-10 — PS/2 driver port from the preserved #52 branch
+
+### Baseline and branch discipline
+
+- Continued from the stale-PR triage session (main head e7a12a5, PR #65 merged as fd58c95). Read the development log first and audited the current state before changing anything: main branch, open PRs, recent commits, drivers/ and arch/ module trees. External draft PR #64 (initd restart policies) was left untouched.
+- Chose the recorded next-priority item 4 (port the PS/2 driver from the preserved feat/aweos-runtime-30-direct branch as a standalone PR) because priorities 1-3 (ProcessManager/ExecutionCore unification, page-table roots, VirtIO block I/O) are each multi-session refactors, while the PS/2 port is a self-contained, fully testable increment toward the AYUI input stack.
+- All work was done on branch feat/ps2-driver-port-2026-11-10 (cut from main e7a12a5) as commit b5bf780. Nothing was force-pushed; no branch was deleted.
+
+### Audit of the ported file (the branch version was broken)
+
+- kernel/src/drivers/ps2.rs in the preserved #52 branch was never compiled or tested: the file was not wired into the module tree and the branch CI failed 7/13.
+- Reading the branch code against its own tests exposed two real mouse-decoder defects:
+  1. Movement bytes were decoded with overflow-bit arithmetic (dx = x - 256 only when the X-overflow bit was set), so every ordinary negative delta mis-decoded (0xFE -> +254). The branch's own test expected -2 and would have failed.
+  2. A first mouse byte with overflow bits 6/7 set was stored instead of being rejected immediately, so the branch's malformed-packet test (which expected Err on the first byte) also would have failed.
+
+### Implemented
+
+- kernel/src/drivers/ps2.rs (new): PS/2 (i8042) driver with a set-2 scancode KeyboardDecoder (0xE0 extended / 0xF0 break prefixes, arrows, Enter/Tab/Escape/Backspace/Space), a MouseDecoder with corrected nine-bit two's-complement sign handling (sign-extension through i8), immediate InvalidPacket rejection of first bytes with overflow bits, always-one-bit-3 stream resynchronization, a bounded 128-slot FIFO EventQueue (fail-closed QueueFull), and a polled Controller whose x86_64 path uses the architecture-owned io_in8/io_out8 primitives with a bounded drain-and-enable init; all other architectures fail closed with Unsupported. All public APIs are documented.
+- kernel/src/drivers/mod.rs: registered pub mod ps2 (one line, alphabetical).
+- Eight unit tests: press/release/extended scancode sequences, extended-break prefix state reset, signed motion in both directions at the sign boundary, invalid-packet rejection with clean resync, desync drop, and queue FIFO/bounds/wraparound.
+
+### Validation (real CI results)
+
+- PR #66 (head b5bf780, unchanged by the rustfmt bot): all 15 check-runs completed **success** (Actions run IDs from the check-run URLs): Apply rustfmt and commit fixes — run 42892494782; Build AOSIN Installers — run 42892526134; cargo failure diagnostics — run 42892526161; cloud-security — run 42892526263; Workspace Build & Validation — run 42892526485; Rust workspace + UEFI loader — run 42892526490; Workspace clippy with PR diagnostics — run 42892526575; Build Multi-Arch Boot Images — run 42892526620; build-and-smoke-test-image + exception-injection-selftest — run 42892526795; virtio-block-contract-and-qemu — run 42892526787; cloud-release-contract — run 42892526795 job family.
+- The new unit tests ran inside the green Workspace Build & Validation / CI pipeline suites on the PR head; the rustfmt check completed success with no correction push needed.
+- PR #66 merged into main as 4a3492d (merge method, expected-head-SHA compare against b5bf780). Standard caveat: token pushes/merges do not trigger Actions on main itself; the green evidence is the PR head run.
+
+### Honest scope
+
+- No interrupt-driven input, no IRQ wiring, and no real-hardware or QEMU input validation is claimed: the controller is an explicitly polled primitive and the unit tests exercise the decoders and the queue, not hardware.
+- Controller::init/poll are unsafe, compile their port-I/O path only on x86_64, and are not yet called from any boot path, service or AYUI component.
+- ProcessManager/ExecutionCore unification (priority 1), per-process page-table roots (priority 2) and VirtIO block I/O request/completion (priority 3) remain untouched and still open.
+
+### Files changed in this session
+
+- kernel/src/drivers/ps2.rs — new, via PR #66.
+- kernel/src/drivers/mod.rs — one-line module registration, via PR #66.
+- docs/AI-DEVELOPMENT-LOG.md — this entry.
+
+### Next priorities
+
+1. Unify ProcessManager and ExecutionCore behind one authoritative current-task model (start with a bounded, contract-tested integration step).
+2. Add guarded page-table roots and checked kernel/user mappings before any Ring-3 entry.
+3. Continue VirtIO block I/O with real request/completion and read-after-write tests.
+4. Integrate the PS/2 controller with the kernel IRQ path or a driverd input service before any AYUI input claims.
