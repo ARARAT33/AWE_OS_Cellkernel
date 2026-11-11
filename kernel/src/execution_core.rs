@@ -369,7 +369,8 @@ mod tests {
         let mut second_outgoing = target.frame;
         second_outgoing.rip = 0x1101;
         second_outgoing.rsp = 0x3010;
-        core.persist_outgoing_frame(second, &second_outgoing).unwrap();
+        core.persist_outgoing_frame(second, &second_outgoing)
+            .unwrap();
 
         core.unblock_process(first).unwrap();
         let target = core.schedule().unwrap();

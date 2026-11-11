@@ -19,11 +19,7 @@ mod product_core {
     use aweos_kernel::compat::linux::{Elf64Image, LinuxSyscallDispatcher};
     use aweos_kernel::compat::windows::{NtStatus, PeImage, Win32SyscallDispatcher};
     use aweos_kernel::compat::wlin::WlinBridge;
-    use aweos_kernel::process::{
-        ResourceBudget,
-        context::CpuContext,
-        context_switch::SwitchFrame,
-    };
+    use aweos_kernel::process::{ResourceBudget, context::CpuContext, context_switch::SwitchFrame};
     use aweos_kernel::storage::{
         BLOCK_SIZE, BlockDevice, NodeKind, RamBlockDevice, RecoveryAction, Vfs,
     };
