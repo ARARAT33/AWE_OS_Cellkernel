@@ -243,7 +243,7 @@ Validated code head: `58c2dfd596c708c0b4e3426c37c77471aa4aa67f`.
 - CI Diagnostics run **43053697388**: success.
 - AOSIN installer workflow run **43053696963**: all four Linux/Windows GUI/CLI installer jobs succeeded.
 - Rustfmt automation run **43053687964**: success.
-- At the time this entry was recorded, Bootable Image Pipeline run **43053697042**, VirtIO Runtime run **43053697468**, and Multi-Architecture Images run **43053697934** were still in progress. Their QEMU/image/device results are deliberately not claimed here; the next run must inspect their final jobs and logs.
+- Final outcome (verified in the next scheduled run): Bootable Image Pipeline run **43053697042**, VirtIO Runtime run **43053697468** and Multi-Architecture Images run **43053697934** all ended **cancelled** on head 58c2dfd: their jobs exceeded the configured GitHub Actions maximum execution times (build-and-smoke-test-image 20m; exception-injection-selftest 25m; virtio-block-contract-and-qemu 25m; Build Multi-Arch Boot Images 25m) and were killed. No QEMU/image/device evidence exists for head 58c2dfd; the PR stayed a draft and was not merged.
 
 ### Corrections made during validation
 
@@ -265,3 +265,31 @@ Validated code head: `58c2dfd596c708c0b4e3426c37c77471aa4aa67f`.
 2. Inspect the still-running Bootable Image, VirtIO Runtime, and Multi-Architecture workflows; continue VirtIO block request/completion and read-after-write persistence only with QEMU evidence.
 3. Wire a real kernel dispatch loop and CPU-timer accounting to the single ProcessManager authority, without enabling SMP until per-CPU current-task state and synchronization exist.
 4. Integrate the polled PS/2 controller with the IRQ/driver-service path before claiming AYUI input support.
+
+## 2026-11-11 (second session) — PR #67 CI verification: long jobs cancelled at timeouts, fresh full re-run queued
+
+### What was done
+
+- Continued from the 2026-11-11 unification session. Per its recorded next-priority item 2, inspected the final state of the three workflows that were still running when the previous entry was recorded (Bootable Image Pipeline run **43053697042**, VirtIO Runtime run **43053697468**, Multi-Architecture Images run **43053697934**), all on PR #67 validated code head 58c2dfd.
+- Result: all three runs ended **cancelled**. Their jobs exceeded the configured maximum execution time and were killed by GitHub Actions (build-and-smoke-test-image 20m; exception-injection-selftest 25m; virtio-block-contract-and-qemu 25m; Build Multi-Arch Boot Images 25m). The virtio run additionally logged that no artifacts were produced.
+- The previous entry's "still in progress" wording was corrected above with this real final outcome; a cancelled run is not counted as green.
+
+### Diagnosis (honest reading of the evidence)
+
+- The same PR head passed the nine workspace/quality/security/installer/clippy/rustfmt workflows in normal durations earlier that day, and the same three long workflows finished green in 3-8 minutes on PR #66 one day earlier on a near-identical tree.
+- A kernel-hang theory cannot fully explain the Multi-Architecture job: it is a pure Rust build job with no QEMU, yet it also hit its 25m limit, while the same job passed in about 3.5 minutes on PR #66. The simultaneous timeout of all three long jobs on 2026-11-11 is most consistent with runner-platform slowness or queue starvation on that day, not with a code regression.
+- This is a diagnosis, not proof. The decisive test is a fresh full-suite run: this commit (docs-only, deliberately without a [skip ci] marker) re-triggers every workflow on a new PR head. PR #67 stays a draft and must not be merged unless the Bootable Image, VirtIO Runtime and Multi-Architecture runs complete with success on the fresh head.
+
+### Rules kept
+
+- No Rust source changed in this session; no merge, no force-push, no branch deletion; external draft PR #64 untouched.
+
+### Files changed in this session
+
+- docs/AI-DEVELOPMENT-LOG.md — this entry plus the correction of the previous entry's in-progress claim.
+
+### Next priorities
+
+1. If the fresh re-run is fully green: mark PR #67 ready for review and merge with an expected-head-SHA compare-and-swap; record run IDs and the standard main-branch caveat (token merges do not trigger Actions on main).
+2. If the long jobs time out again on a fresh head: treat it as a real defect, capture the job logs, and bisect between runner-platform slowness and a code-induced hang, starting from the QEMU serial log of exception-injection-selftest on the PR head versus PR #66.
+3. Then continue with guarded per-process page-table roots and checked user-copy primitives before any Ring-3 entry, and VirtIO block request/completion with read-after-write persistence.
