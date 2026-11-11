@@ -293,3 +293,18 @@ Validated code head: `58c2dfd596c708c0b4e3426c37c77471aa4aa67f`.
 1. If the fresh re-run is fully green: mark PR #67 ready for review and merge with an expected-head-SHA compare-and-swap; record run IDs and the standard main-branch caveat (token merges do not trigger Actions on main).
 2. If the long jobs time out again on a fresh head: treat it as a real defect, capture the job logs, and bisect between runner-platform slowness and a code-induced hang, starting from the QEMU serial log of exception-injection-selftest on the PR head versus PR #66.
 3. Then continue with guarded per-process page-table roots and checked user-copy primitives before any Ring-3 entry, and VirtIO block request/completion with read-after-write persistence.
+
+### Final outcome of this session (same day)
+
+- The docs-only re-trigger commit 0cf0f09 produced a fully green suite on the fresh PR head: **16/16 check-runs success**, including the three previously cancelled workflows — Bootable Image Pipeline (exception-injection-selftest + build-and-smoke-test-image) run **43094204694**; VirtIO Runtime (virtio-block-contract-and-qemu) run **43094204603**; Multi-Architecture Images run **43094204786**. Also green: CI Pipeline / Rust workspace + UEFI loader run **43094204605**; Workspace Build & Validation run **43094204721**; Clippy with PR diagnostics run **43094204705**; cargo failure diagnostics run **43094204706**; cloud-security + cloud-release-contract run **43094204829**; AOSIN installers run **43094204599** (4/4 jobs); rustfmt automation run **43094193967**.
+- This confirms the earlier cancellations were runner-side timeouts/queue starvation on 2026-11-11, not a code defect: the same long jobs passed on a tree whose only difference from 58c2dfd is documentation.
+- PR #67 was marked ready for review and merged into main as **97a4bb120c5751095fb52746df200819423f7786** (merge method, expected-head-SHA compare against 0cf0f09). Standard caveat: token merges do not trigger Actions on main itself; the green evidence is the PR head run 0cf0f09.
+- The ProcessManager / ExecutionCore unification (one authoritative current-task/lifecycle model) is now on main. External draft PR #64 remains open, untouched and conflicting (mergeable_state dirty); it is not authored by this automation.
+
+### Next priorities (updated)
+
+1. Add guarded per-process page-table roots, explicit kernel/user mapping permissions, and checked user-copy primitives before any Ring-3 entry.
+2. Wire a real kernel dispatch loop and CPU-timer accounting to the single ProcessManager authority, without enabling SMP until per-CPU current-task state and synchronization exist.
+3. Continue VirtIO block I/O with real request/completion and read-after-write persistence tests, with QEMU evidence.
+4. Re-evaluate external draft PR #64 (initd restart policies) against current main: rebase or ask for a rebase; it conflicts and must not be merged as-is.
+5. Integrate the polled PS/2 controller with the IRQ/driver-service path before claiming AYUI input support.
