@@ -186,6 +186,7 @@ pub enum ProcessManagerError {
     DispatchPending,
     NoPendingDispatch,
     DispatchMismatch,
+    BudgetExceeded,
     Scheduler(SchedulerError),
 }
 
@@ -280,6 +281,98 @@ impl<const N: usize> ProcessManager<N> {
         self.scheduler
             .enqueue(&candidate)
             .map_err(ProcessManagerError::Scheduler)?;
+        self.processes[index] = Some(candidate);
+        Ok(())
+    }
+
+    /// Yield the currently executing process back to the bounded run queue.
+    /// The current identity remains unpublished until a later dispatch is acknowledged.
+    pub fn yield_process(&mut self, id: ProcessId) -> Result<(), ProcessManagerError> {
+        if self.pending_dispatch.is_some() {
+            return Err(ProcessManagerError::DispatchPending);
+        }
+        if self.current != Some(id) {
+            return Err(ProcessManagerError::InvalidState);
+        }
+        let index = self
+            .find_index(id)
+            .ok_or(ProcessManagerError::InvalidProcess)?;
+        let mut candidate = self.processes[index].ok_or(ProcessManagerError::InvalidProcess)?;
+        if candidate.state != ProcessState::Running {
+            return Err(ProcessManagerError::InvalidState);
+        }
+        candidate
+            .transition(ProcessState::Runnable)
+            .map_err(|_| ProcessManagerError::InvalidState)?;
+        self.scheduler
+            .enqueue(&candidate)
+            .map_err(ProcessManagerError::Scheduler)?;
+        self.processes[index] = Some(candidate);
+        Ok(())
+    }
+
+    /// Block a runnable process or the exact current process.
+    /// A blocked current process remains the physical current task until the
+    /// architecture confirms a switch to another task or to the idle context.
+    pub fn block_process(&mut self, id: ProcessId) -> Result<(), ProcessManagerError> {
+        if self.pending_dispatch.is_some() {
+            return Err(ProcessManagerError::DispatchPending);
+        }
+        let index = self
+            .find_index(id)
+            .ok_or(ProcessManagerError::InvalidProcess)?;
+        let mut candidate = self.processes[index].ok_or(ProcessManagerError::InvalidProcess)?;
+        match candidate.state {
+            ProcessState::Running if self.current == Some(id) => {}
+            ProcessState::Runnable if self.current != Some(id) => {
+                if !self.scheduler.remove(id) {
+                    return Err(ProcessManagerError::InvalidState);
+                }
+            }
+            _ => return Err(ProcessManagerError::InvalidState),
+        }
+        candidate
+            .transition(ProcessState::Blocked)
+            .map_err(|_| ProcessManagerError::InvalidState)?;
+        self.processes[index] = Some(candidate);
+        Ok(())
+    }
+
+    /// Make a blocked process runnable only after queue admission succeeds.
+    pub fn unblock_process(&mut self, id: ProcessId) -> Result<(), ProcessManagerError> {
+        if self.pending_dispatch.is_some() {
+            return Err(ProcessManagerError::DispatchPending);
+        }
+        let index = self
+            .find_index(id)
+            .ok_or(ProcessManagerError::InvalidProcess)?;
+        let mut candidate = self.processes[index].ok_or(ProcessManagerError::InvalidProcess)?;
+        if candidate.state != ProcessState::Blocked {
+            return Err(ProcessManagerError::InvalidState);
+        }
+        candidate
+            .transition(ProcessState::Runnable)
+            .map_err(|_| ProcessManagerError::InvalidState)?;
+        self.scheduler
+            .enqueue(&candidate)
+            .map_err(ProcessManagerError::Scheduler)?;
+        self.processes[index] = Some(candidate);
+        Ok(())
+    }
+
+    /// Charge CPU budget only to the process whose execution is currently
+    /// acknowledged by the architecture switch-completion path.
+    pub fn consume_cpu(&mut self, id: ProcessId, ticks: u64) -> Result<(), ProcessManagerError> {
+        if self.current_process_id() != Some(id) {
+            return Err(ProcessManagerError::InvalidState);
+        }
+        let index = self
+            .find_index(id)
+            .ok_or(ProcessManagerError::InvalidProcess)?;
+        let mut candidate = self.processes[index].ok_or(ProcessManagerError::InvalidProcess)?;
+        if !candidate.budget.consume_cpu(ticks) {
+            return Err(ProcessManagerError::BudgetExceeded);
+        }
         self.processes[index] = Some(candidate);
         Ok(())
     }
@@ -456,6 +549,29 @@ impl<const N: usize> ProcessManager<N> {
         Ok(())
     }
 
+    /// Confirm that a blocked current process has actually switched to the
+    /// architecture's idle context. This is not a scheduling decision; the
+    /// caller must invoke it only after the hardware stack switch is complete.
+    pub fn confirm_blocked_to_idle(
+        &mut self,
+        expected_current: ProcessId,
+    ) -> Result<(), ProcessManagerError> {
+        if self.pending_dispatch.is_some() {
+            return Err(ProcessManagerError::DispatchPending);
+        }
+        if self.current != Some(expected_current) {
+            return Err(ProcessManagerError::InvalidProcess);
+        }
+        let descriptor = self
+            .descriptor(expected_current)
+            .ok_or(ProcessManagerError::InvalidProcess)?;
+        if descriptor.state != ProcessState::Blocked {
+            return Err(ProcessManagerError::InvalidState);
+        }
+        self.current = None;
+        Ok(())
+    }
+
     /// Return a copy of the stored execution context for `id`.
     pub fn process_context(&self, id: ProcessId) -> Option<ProcessContext> {
         self.find_index(id).and_then(|index| self.contexts[index])
@@ -523,6 +639,11 @@ impl<const N: usize> ProcessManager<N> {
             .map_err(ProcessManagerError::Scheduler)?;
         self.pending_dispatch = Some(target);
         Ok(target)
+    }
+
+    /// Inspect the exact one-shot target currently awaiting architecture acknowledgement.
+    pub const fn pending_dispatch_target(&self) -> Option<DispatchTarget> {
+        self.pending_dispatch
     }
 
     pub fn descriptor(&self, id: ProcessId) -> Option<ProcessDescriptor> {

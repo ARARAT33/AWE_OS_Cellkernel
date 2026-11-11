@@ -1,21 +1,29 @@
 #![no_std]
-#![allow(clippy::collapsible_if)]
 
-use crate::process::{ProcessDescriptor, ProcessId, ProcessState, ResourceBudget};
-use crate::scheduler::{DispatchAction, Scheduler};
+use crate::process::{
+    ProcessDescriptor, ProcessId, ProcessManager, ProcessManagerError, ProcessState, ProcessTable,
+    ResourceBudget, context::CpuContext, context_switch::SwitchFrame, dispatch::DispatchTarget,
+    scheduler::SchedulerError,
+};
 
+/// Errors exposed by the execution-core compatibility facade.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum CoreError {
     ProcessTableFull,
     ProcessIdExhausted,
     RunQueueFull,
     InvalidTransition,
+    InvalidContext,
     BudgetExceeded,
+    NoRunnable,
+    DispatchPending,
+    DispatchMismatch,
     NotExited,
+    CurrentlyRunning,
     StillScheduled,
 }
 
-/// Trace record for execution core event diagnostics.
+/// Trace record for execution-core event diagnostics.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct CoreTraceRecord {
     pub process: ProcessId,
@@ -23,13 +31,14 @@ pub struct CoreTraceRecord {
     pub value: u64,
 }
 
-/// A bounded integration boundary for the A-C execution core.
-/// It keeps scheduling, lifecycle and resource accounting in one deterministic
-/// state machine without allocating or depending on hardware drivers.
+/// Compatibility facade over the authoritative ProcessManager.
+///
+/// This type deliberately owns no process table, scheduler, or current-task
+/// field of its own. Process descriptors, execution contexts, queue membership,
+/// pending dispatch and current-process identity all live in ProcessManager.
 pub struct ExecutionCore<const N: usize> {
-    scheduler: Scheduler<N>,
-    processes: [Option<ProcessDescriptor>; N],
-    next_id: u64,
+    processes: ProcessManager<N>,
+    ids: ProcessTable,
     trace_records: [Option<CoreTraceRecord>; 32],
     trace_count: usize,
 }
@@ -43,198 +52,168 @@ impl<const N: usize> Default for ExecutionCore<N> {
 impl<const N: usize> ExecutionCore<N> {
     pub const fn new() -> Self {
         Self {
-            scheduler: Scheduler::new(),
-            processes: [None; N],
-            next_id: 1,
+            processes: ProcessManager::new(),
+            ids: ProcessTable::new(),
             trace_records: [None; 32],
             trace_count: 0,
         }
     }
 
-    pub fn create_process(&mut self, budget: ResourceBudget) -> Result<ProcessId, CoreError> {
-        let mut slot = 0;
-        while slot < N {
-            if self.processes[slot].is_none() {
-                // Zero is the exhausted sentinel. Unlike saturating_add,
-                // this prevents repeatedly issuing u64::MAX after exhaustion.
-                if self.next_id == 0 {
-                    return Err(CoreError::ProcessIdExhausted);
-                }
-                let id = ProcessId(self.next_id);
-                self.next_id = self.next_id.checked_add(1).unwrap_or(0);
-                let mut descriptor = ProcessDescriptor {
-                    id,
-                    state: ProcessState::Created,
-                    budget,
-                };
-                descriptor
-                    .transition(ProcessState::Runnable)
-                    .map_err(|_| CoreError::InvalidTransition)?;
-                self.processes[slot] = Some(descriptor);
-                if !self.scheduler.enqueue(id) {
-                    self.processes[slot] = None;
-                    return Err(CoreError::ProcessTableFull);
-                }
-                self.record_trace(id, 1, budget.cpu_ticks);
-                return Ok(id);
-            }
-            slot += 1;
+    /// Register a process with an explicit, validated kernel CPU context.
+    /// A metadata-only process with no executable context is no longer admitted.
+    pub fn create_process(
+        &mut self,
+        budget: ResourceBudget,
+        cpu: CpuContext,
+    ) -> Result<ProcessId, CoreError> {
+        if !cpu.validate() {
+            return Err(CoreError::InvalidContext);
         }
-        Err(CoreError::ProcessTableFull)
+        let id = self
+            .ids
+            .allocate_id()
+            .ok_or(CoreError::ProcessIdExhausted)?;
+        let descriptor = ProcessDescriptor {
+            id,
+            state: ProcessState::Created,
+            budget,
+        };
+        let context = crate::process::context::ProcessContext::new(id, cpu);
+        self.processes
+            .register(descriptor, context)
+            .map_err(map_process_error)?;
+        if let Err(error) = self.processes.make_runnable(id) {
+            // Registration is rolled back as a normal Created -> Exited ->
+            // reaped lifecycle. The monotonic ID is intentionally not reused.
+            let _ = self.processes.exit(id);
+            let _ = self.processes.reap(id);
+            return Err(map_process_error(error));
+        }
+        self.record_trace(id, 1, budget.cpu_ticks);
+        Ok(id)
+    }
+
+    /// Select the next dispatch target. If a process is currently running,
+    /// its outgoing frame must be persisted with `persist_outgoing_frame`
+    /// before this call; the process is then yielded into the shared queue.
+    /// The returned token must be confirmed only by the architecture completion
+    /// path after the target stack is active.
+    pub fn schedule(&mut self) -> Result<DispatchTarget, CoreError> {
+        if let Some(current) = self.processes.current_process_id() {
+            self.processes
+                .yield_process(current)
+                .map_err(map_process_error)?;
+        }
+        let target = self.processes.next_dispatch().map_err(map_process_error)?;
+        self.record_trace(target.process, 7, 0);
+        Ok(target)
+    }
+
+    /// Persist the outgoing register frame into the authoritative ProcessManager
+    /// context table. Call this after the architecture backend has saved the
+    /// outgoing registers and before selecting that process for another dispatch.
+    pub fn persist_outgoing_frame(
+        &mut self,
+        id: ProcessId,
+        frame: &SwitchFrame,
+    ) -> Result<(), CoreError> {
+        self.processes
+            .persist_outgoing_frame(id, frame)
+            .map_err(map_process_error)
+    }
+
+    pub fn confirm_dispatch(&mut self, target: DispatchTarget) -> Result<(), CoreError> {
+        self.processes
+            .confirm_dispatch(target)
+            .map_err(map_process_error)?;
+        self.record_trace(target.process, 8, 0);
+        Ok(())
+    }
+
+    pub fn cancel_dispatch(&mut self, target: DispatchTarget) -> Result<(), CoreError> {
+        self.processes
+            .cancel_dispatch(target)
+            .map_err(map_process_error)
+    }
+
+    pub const fn pending_dispatch(&self) -> Option<DispatchTarget> {
+        self.processes.pending_dispatch_target()
+    }
+
+    pub fn yield_process(&mut self, id: ProcessId) -> Result<(), CoreError> {
+        self.processes
+            .yield_process(id)
+            .map_err(map_process_error)?;
+        self.record_trace(id, 4, 0);
+        Ok(())
     }
 
     pub fn block_process(&mut self, id: ProcessId) -> Result<(), CoreError> {
-        let index = self.find_index(id).ok_or(CoreError::InvalidTransition)?;
-        let mut candidate = self.processes[index].ok_or(CoreError::InvalidTransition)?;
-        if candidate.state != ProcessState::Running && candidate.state != ProcessState::Runnable {
-            return Err(CoreError::InvalidTransition);
-        }
-        if candidate.state == ProcessState::Runnable {
-            candidate
-                .transition(ProcessState::Running)
-                .map_err(|_| CoreError::InvalidTransition)?;
-        }
-        candidate
-            .transition(ProcessState::Blocked)
-            .map_err(|_| CoreError::InvalidTransition)?;
-
-        // Blocking must release both a queued slot and the current slot.
-        self.scheduler.remove(id);
-        self.processes[index] = Some(candidate);
+        self.processes
+            .block_process(id)
+            .map_err(map_process_error)?;
         self.record_trace(id, 2, 0);
         Ok(())
     }
 
     pub fn unblock_process(&mut self, id: ProcessId) -> Result<(), CoreError> {
-        let index = self.find_index(id).ok_or(CoreError::InvalidTransition)?;
-        let mut candidate = self.processes[index].ok_or(CoreError::InvalidTransition)?;
-        if candidate.state != ProcessState::Blocked {
-            return Err(CoreError::InvalidTransition);
-        }
-        candidate
-            .transition(ProcessState::Runnable)
-            .map_err(|_| CoreError::InvalidTransition)?;
-
-        // Do not publish Runnable state unless queue admission succeeds.
-        if !self.scheduler.enqueue(id) {
-            return Err(CoreError::RunQueueFull);
-        }
-        self.processes[index] = Some(candidate);
+        self.processes
+            .unblock_process(id)
+            .map_err(map_process_error)?;
         self.record_trace(id, 3, 0);
         Ok(())
     }
 
-    pub fn yield_process(&mut self, id: ProcessId) -> Result<(), CoreError> {
-        let index = self.find_index(id).ok_or(CoreError::InvalidTransition)?;
-        let mut candidate = self.processes[index].ok_or(CoreError::InvalidTransition)?;
-        if candidate.state != ProcessState::Running {
-            return Err(CoreError::InvalidTransition);
-        }
-        candidate
-            .transition(ProcessState::Runnable)
-            .map_err(|_| CoreError::InvalidTransition)?;
-
-        // Keep the old Running state if the queue cannot accept this process.
-        if !self.scheduler.enqueue(id) {
-            return Err(CoreError::RunQueueFull);
-        }
-        self.processes[index] = Some(candidate);
-        self.record_trace(id, 4, 0);
+    pub fn consume_cpu(&mut self, id: ProcessId, ticks: u64) -> Result<(), CoreError> {
+        self.processes
+            .consume_cpu(id, ticks)
+            .map_err(map_process_error)?;
+        self.record_trace(id, 5, ticks);
         Ok(())
     }
 
-    pub fn schedule(&mut self) -> DispatchAction {
-        self.scheduler.request_reschedule();
-        loop {
-            let action = self.scheduler.schedule_boundary();
-            match action {
-                DispatchAction::SwitchTo(id) => {
-                    let is_active = self
-                        .find(id)
-                        .map(|p| {
-                            p.state == ProcessState::Runnable || p.state == ProcessState::Running
-                        })
-                        .unwrap_or(false);
-                    if is_active {
-                        self.set_running(id);
-                        return action;
-                    }
-                    // Skip blocked / exited processes that remain in queue
-                }
-                DispatchAction::KeepCurrent => {
-                    let is_active = self
-                        .current()
-                        .and_then(|curr| self.find(curr))
-                        .map(|p| {
-                            p.state == ProcessState::Runnable || p.state == ProcessState::Running
-                        })
-                        .unwrap_or(false);
-                    if is_active {
-                        return action;
-                    }
-                    return DispatchAction::KeepCurrent;
-                }
-            }
-        }
-    }
-
-    pub fn consume_cpu(&mut self, id: ProcessId, ticks: u64) -> Result<(), CoreError> {
-        if let Some(process) = self.find_mut(id) {
-            if process.budget.consume_cpu(ticks) {
-                self.record_trace(id, 5, ticks);
-                Ok(())
-            } else {
-                Err(CoreError::BudgetExceeded)
-            }
-        } else {
-            Err(CoreError::InvalidTransition)
-        }
-    }
-
     pub fn exit(&mut self, id: ProcessId) -> Result<(), CoreError> {
-        let index = self.find_index(id).ok_or(CoreError::InvalidTransition)?;
-        let mut candidate = self.processes[index].ok_or(CoreError::InvalidTransition)?;
-        if candidate.state != ProcessState::Running
-            && candidate.state != ProcessState::Runnable
-            && candidate.state != ProcessState::Blocked
-        {
-            return Err(CoreError::InvalidTransition);
-        }
-        if candidate.state == ProcessState::Runnable {
-            candidate
-                .transition(ProcessState::Running)
-                .map_err(|_| CoreError::InvalidTransition)?;
-        }
-        candidate
-            .transition(ProcessState::Exited)
-            .map_err(|_| CoreError::InvalidTransition)?;
-
-        // An exited process must not remain runnable or remain the current task.
-        self.scheduler.remove(id);
-        self.processes[index] = Some(candidate);
+        self.processes.exit(id).map_err(map_process_error)?;
         self.record_trace(id, 6, 0);
         Ok(())
     }
 
-    /// Release the fixed-capacity process slot after exit and scheduler removal.
-    /// IDs are deliberately not reused when the slot is reclaimed.
-    pub fn reap(&mut self, id: ProcessId) -> Result<(), CoreError> {
-        let index = self.find_index(id).ok_or(CoreError::InvalidTransition)?;
-        let descriptor = self.processes[index].ok_or(CoreError::InvalidTransition)?;
-
-        if descriptor.state != ProcessState::Exited {
-            return Err(CoreError::NotExited);
+    /// Acknowledge a completed switch to idle for the current blocked/exited task.
+    pub fn confirm_idle(&mut self, id: ProcessId) -> Result<(), CoreError> {
+        let descriptor = self
+            .processes
+            .descriptor(id)
+            .ok_or(CoreError::InvalidTransition)?;
+        match descriptor.state {
+            ProcessState::Exited => self
+                .processes
+                .confirm_switched_to_idle(id)
+                .map_err(map_process_error),
+            ProcessState::Blocked => self
+                .processes
+                .confirm_blocked_to_idle(id)
+                .map_err(map_process_error),
+            _ => Err(CoreError::InvalidTransition),
         }
-        if self.scheduler.contains(id) {
-            return Err(CoreError::StillScheduled);
-        }
-
-        self.processes[index] = None;
-        Ok(())
     }
 
-    pub const fn current(&self) -> Option<ProcessId> {
-        self.scheduler.current()
+    pub fn reap(&mut self, id: ProcessId) -> Result<(), CoreError> {
+        self.processes.reap(id).map_err(map_process_error)
+    }
+
+    pub fn current(&self) -> Option<ProcessId> {
+        self.processes.current_process_id()
+    }
+
+    pub fn descriptor(&self, id: ProcessId) -> Option<ProcessDescriptor> {
+        self.processes.descriptor(id)
+    }
+
+    pub fn process_context(
+        &self,
+        id: ProcessId,
+    ) -> Option<crate::process::context::ProcessContext> {
+        self.processes.process_context(id)
     }
 
     pub fn trace_records(&self) -> &[Option<CoreTraceRecord>] {
@@ -242,7 +221,7 @@ impl<const N: usize> ExecutionCore<N> {
     }
 
     fn record_trace(&mut self, process: ProcessId, event_kind: u16, value: u64) {
-        if self.trace_count < 32 {
+        if self.trace_count < self.trace_records.len() {
             self.trace_records[self.trace_count] = Some(CoreTraceRecord {
                 process,
                 event_kind,
@@ -251,52 +230,29 @@ impl<const N: usize> ExecutionCore<N> {
             self.trace_count += 1;
         }
     }
+}
 
-    fn set_running(&mut self, id: ProcessId) {
-        let mut i = 0;
-        while i < N {
-            if let Some(process) = self.processes[i].as_mut() {
-                if process.id == id {
-                    let _ = process.transition(ProcessState::Running);
-                } else if process.state == ProcessState::Running {
-                    let _ = process.transition(ProcessState::Runnable);
-                }
-            }
-            i += 1;
+fn map_process_error(error: ProcessManagerError) -> CoreError {
+    match error {
+        ProcessManagerError::Full => CoreError::ProcessTableFull,
+        ProcessManagerError::InvalidContext => CoreError::InvalidContext,
+        ProcessManagerError::NotExited => CoreError::NotExited,
+        ProcessManagerError::CurrentlyRunning => CoreError::CurrentlyRunning,
+        ProcessManagerError::StillQueued => CoreError::StillScheduled,
+        ProcessManagerError::DispatchPending => CoreError::DispatchPending,
+        ProcessManagerError::NoPendingDispatch | ProcessManagerError::DispatchMismatch => {
+            CoreError::DispatchMismatch
         }
-    }
-
-    fn find(&self, id: ProcessId) -> Option<&ProcessDescriptor> {
-        let mut i = 0;
-        while i < N {
-            if self.processes[i].as_ref().map(|p| p.id) == Some(id) {
-                return self.processes[i].as_ref();
-            }
-            i += 1;
-        }
-        None
-    }
-
-    fn find_mut(&mut self, id: ProcessId) -> Option<&mut ProcessDescriptor> {
-        let mut i = 0;
-        while i < N {
-            if self.processes[i].as_ref().map(|p| p.id) == Some(id) {
-                return self.processes[i].as_mut();
-            }
-            i += 1;
-        }
-        None
-    }
-
-    fn find_index(&self, id: ProcessId) -> Option<usize> {
-        let mut i = 0;
-        while i < N {
-            if self.processes[i].as_ref().map(|p| p.id) == Some(id) {
-                return Some(i);
-            }
-            i += 1;
-        }
-        None
+        ProcessManagerError::BudgetExceeded => CoreError::BudgetExceeded,
+        ProcessManagerError::Scheduler(SchedulerError::QueueFull) => CoreError::RunQueueFull,
+        ProcessManagerError::Scheduler(SchedulerError::Empty) => CoreError::NoRunnable,
+        ProcessManagerError::Scheduler(
+            SchedulerError::InvalidContext | SchedulerError::UnknownProcess,
+        ) => CoreError::InvalidContext,
+        ProcessManagerError::Scheduler(_) => CoreError::InvalidTransition,
+        ProcessManagerError::DuplicateProcess
+        | ProcessManagerError::InvalidProcess
+        | ProcessManagerError::InvalidState => CoreError::InvalidTransition,
     }
 }
 
@@ -312,141 +268,158 @@ mod tests {
         }
     }
 
-    #[test]
-    fn lifecycle_and_preemption_are_bounded() {
-        let mut core: ExecutionCore<2> = ExecutionCore::new();
-        let first = core.create_process(budget()).unwrap();
-        let second = core.create_process(budget()).unwrap();
-        assert_eq!(core.schedule(), DispatchAction::SwitchTo(first));
-        assert_eq!(core.current(), Some(first));
-        assert_eq!(core.schedule(), DispatchAction::SwitchTo(second));
-        assert_eq!(core.current(), Some(second));
+    fn cpu(entry: u64, stack: u64) -> CpuContext {
+        CpuContext::kernel_entry(entry, stack, 0)
+    }
+
+    fn create(core: &mut ExecutionCore<3>, entry: u64, stack: u64) -> ProcessId {
+        core.create_process(budget(), cpu(entry, stack)).unwrap()
     }
 
     #[test]
-    fn process_id_exhaustion_does_not_reissue_max_id() {
-        let mut core: ExecutionCore<3> = ExecutionCore::new();
-        core.next_id = u64::MAX - 1;
-
-        let penultimate = core.create_process(budget()).unwrap();
-        let final_id = core.create_process(budget()).unwrap();
-
-        assert_eq!(penultimate, ProcessId(u64::MAX - 1));
-        assert_eq!(final_id, ProcessId(u64::MAX));
-        assert_eq!(
-            core.create_process(budget()),
-            Err(CoreError::ProcessIdExhausted)
-        );
-        assert_eq!(
-            core.create_process(budget()),
-            Err(CoreError::ProcessIdExhausted)
-        );
-        assert_eq!(core.processes.iter().flatten().count(), 2);
-    }
-
-    #[test]
-    fn capacity_and_budget_fail_closed() {
+    fn capacity_and_context_validation_fail_closed() {
         let mut core: ExecutionCore<1> = ExecutionCore::new();
-        let id = core.create_process(budget()).unwrap();
+        let id = core.create_process(budget(), cpu(0x1000, 0x2000)).unwrap();
         assert_eq!(
-            core.create_process(budget()),
+            core.create_process(budget(), cpu(0x1100, 0x3000)),
             Err(CoreError::ProcessTableFull)
         );
-        assert!(core.consume_cpu(id, 4).is_ok());
+        assert_eq!(
+            core.create_process(budget(), cpu(0x0000_8000_0000_0000, 0x3000)),
+            Err(CoreError::InvalidContext)
+        );
+        let target = core.schedule().unwrap();
+        assert_eq!(target.process, id);
+        core.confirm_dispatch(target).unwrap();
+        assert_eq!(core.consume_cpu(id, 4), Ok(()));
         assert_eq!(core.consume_cpu(id, 1), Err(CoreError::BudgetExceeded));
     }
 
     #[test]
-    fn reap_rejects_live_process_and_recovers_capacity_after_exit() {
-        let mut core: ExecutionCore<1> = ExecutionCore::new();
-        let first = core.create_process(budget()).unwrap();
+    fn current_identity_is_published_only_after_exact_dispatch_acknowledgement() {
+        let mut core: ExecutionCore<3> = ExecutionCore::new();
+        let first = create(&mut core, 0x1000, 0x2000);
+        let second = create(&mut core, 0x1100, 0x3000);
 
-        assert_eq!(core.reap(first), Err(CoreError::NotExited));
-        assert_eq!(core.schedule(), DispatchAction::SwitchTo(first));
-        core.exit(first).unwrap();
-        assert_eq!(core.reap(first), Ok(()));
+        let first_target = core.schedule().unwrap();
+        assert_eq!(first_target.process, first);
+        assert_eq!(core.current(), None);
+        assert_eq!(core.pending_dispatch(), Some(first_target));
+        assert_eq!(core.schedule(), Err(CoreError::DispatchPending));
 
-        // The registry slot is reusable, but the old process ID is not.
-        let second = core.create_process(budget()).unwrap();
-        assert_eq!(second, ProcessId(2));
-        assert_eq!(core.schedule(), DispatchAction::SwitchTo(second));
+        core.confirm_dispatch(first_target).unwrap();
+        assert_eq!(core.current(), Some(first));
+
+        let mut first_outgoing = first_target.frame;
+        first_outgoing.rip = 0x1001;
+        first_outgoing.rsp = 0x2010;
+        core.persist_outgoing_frame(first, &first_outgoing).unwrap();
+
+        let second_target = core.schedule().unwrap();
+        assert_eq!(second_target.process, second);
+        assert_eq!(core.current(), None);
+        core.confirm_dispatch(second_target).unwrap();
+        assert_eq!(core.current(), Some(second));
     }
 
     #[test]
-    fn invalid_exit_is_rejected() {
+    fn outgoing_frame_persistence_updates_the_shared_process_context() {
+        let mut core: ExecutionCore<2> = ExecutionCore::new();
+        let id = core.create_process(budget(), cpu(0x1000, 0x2000)).unwrap();
+        let target = core.schedule().unwrap();
+        core.confirm_dispatch(target).unwrap();
+
+        let mut outgoing = target.frame;
+        outgoing.rip = 0x1234;
+        outgoing.rsp = 0x2100;
+        core.persist_outgoing_frame(id, &outgoing).unwrap();
+        let saved = core.process_context(id).unwrap();
+        assert_eq!(saved.cpu.rip, 0x1234);
+        assert_eq!(saved.cpu.rsp, 0x2100);
+
+        let mut malformed = outgoing;
+        malformed.rip = 0x0000_8000_0000_0000;
+        assert_eq!(
+            core.persist_outgoing_frame(id, &malformed),
+            Err(CoreError::InvalidContext)
+        );
+        let unchanged = core.process_context(id).unwrap();
+        assert_eq!(unchanged.cpu.rip, saved.cpu.rip);
+        assert_eq!(unchanged.cpu.rsp, saved.cpu.rsp);
+    }
+
+    #[test]
+    fn block_unblock_and_round_robin_share_one_queue() {
+        let mut core: ExecutionCore<3> = ExecutionCore::new();
+        let first = create(&mut core, 0x1000, 0x2000);
+        let second = create(&mut core, 0x1100, 0x3000);
+
+        let target = core.schedule().unwrap();
+        assert_eq!(target.process, first);
+        core.confirm_dispatch(target).unwrap();
+        let mut first_outgoing = target.frame;
+        first_outgoing.rip = 0x1001;
+        first_outgoing.rsp = 0x2010;
+        core.persist_outgoing_frame(first, &first_outgoing).unwrap();
+        core.block_process(first).unwrap();
+
+        let target = core.schedule().unwrap();
+        assert_eq!(target.process, second);
+        core.confirm_dispatch(target).unwrap();
+        let mut second_outgoing = target.frame;
+        second_outgoing.rip = 0x1101;
+        second_outgoing.rsp = 0x3010;
+        core.persist_outgoing_frame(second, &second_outgoing)
+            .unwrap();
+
+        core.unblock_process(first).unwrap();
+        let target = core.schedule().unwrap();
+        assert_eq!(target.process, first);
+        core.confirm_dispatch(target).unwrap();
+        assert_eq!(core.current(), Some(first));
+    }
+
+    #[test]
+    fn exited_process_cannot_be_reaped_until_idle_or_next_dispatch_is_confirmed() {
+        let mut core: ExecutionCore<3> = ExecutionCore::new();
+        let first = create(&mut core, 0x1000, 0x2000);
+        let second = create(&mut core, 0x1100, 0x3000);
+        let target = core.schedule().unwrap();
+        core.confirm_dispatch(target).unwrap();
+        assert_eq!(target.process, first);
+
+        core.exit(first).unwrap();
+        assert_eq!(core.reap(first), Err(CoreError::CurrentlyRunning));
+
+        let next = core.schedule().unwrap();
+        assert_eq!(next.process, second);
+        core.confirm_dispatch(next).unwrap();
+        core.reap(first).unwrap();
+
+        let third = create(&mut core, 0x1200, 0x4000);
+        assert_eq!(third, ProcessId(3));
+    }
+
+    #[test]
+    fn blocked_current_can_be_released_to_idle_only_after_blocking() {
+        let mut core: ExecutionCore<3> = ExecutionCore::new();
+        let first = create(&mut core, 0x1000, 0x2000);
+        let target = core.schedule().unwrap();
+        core.confirm_dispatch(target).unwrap();
+        let mut outgoing = target.frame;
+        outgoing.rip = 0x1001;
+        outgoing.rsp = 0x2010;
+        core.persist_outgoing_frame(first, &outgoing).unwrap();
+        core.block_process(first).unwrap();
+        assert_eq!(core.confirm_idle(first), Ok(()));
+        assert_eq!(core.current(), None);
+        assert_eq!(core.unblock_process(first), Ok(()));
+    }
+
+    #[test]
+    fn invalid_exit_and_no_runnable_are_reported() {
         let mut core: ExecutionCore<1> = ExecutionCore::new();
         assert_eq!(core.exit(ProcessId(99)), Err(CoreError::InvalidTransition));
-    }
-
-    #[test]
-    fn block_and_exit_remove_processes_from_scheduler_state() {
-        let mut core: ExecutionCore<2> = ExecutionCore::new();
-        let first = core.create_process(budget()).unwrap();
-        let second = core.create_process(budget()).unwrap();
-
-        assert_eq!(core.schedule(), DispatchAction::SwitchTo(first));
-        assert!(core.block_process(first).is_ok());
-        assert_eq!(core.current(), None);
-        assert_eq!(core.schedule(), DispatchAction::SwitchTo(second));
-
-        assert!(core.exit(second).is_ok());
-        assert_eq!(core.current(), None);
-        assert_eq!(core.schedule(), DispatchAction::KeepCurrent);
-        assert_eq!(core.current(), None);
-
-        assert!(core.unblock_process(first).is_ok());
-        assert_eq!(core.schedule(), DispatchAction::SwitchTo(first));
-    }
-
-    #[test]
-    fn queue_full_does_not_publish_unblock_or_yield_state() {
-        let mut unblock_core: ExecutionCore<2> = ExecutionCore::new();
-        let blocked = unblock_core.create_process(budget()).unwrap();
-        let other = unblock_core.create_process(budget()).unwrap();
-        assert_eq!(unblock_core.schedule(), DispatchAction::SwitchTo(blocked));
-        assert!(unblock_core.block_process(blocked).is_ok());
-        assert!(unblock_core.scheduler.enqueue(ProcessId(99)));
-        assert_eq!(
-            unblock_core.unblock_process(blocked),
-            Err(CoreError::RunQueueFull)
-        );
-        assert_eq!(
-            unblock_core.find(blocked).map(|p| p.state),
-            Some(ProcessState::Blocked)
-        );
-        assert_eq!(
-            unblock_core.find(other).map(|p| p.state),
-            Some(ProcessState::Runnable)
-        );
-
-        let mut yield_core: ExecutionCore<2> = ExecutionCore::new();
-        let first = yield_core.create_process(budget()).unwrap();
-        let running = yield_core.create_process(budget()).unwrap();
-        assert_eq!(yield_core.schedule(), DispatchAction::SwitchTo(first));
-        assert_eq!(yield_core.schedule(), DispatchAction::SwitchTo(running));
-        assert!(yield_core.scheduler.enqueue(ProcessId(99)));
-        assert_eq!(
-            yield_core.yield_process(running),
-            Err(CoreError::RunQueueFull)
-        );
-        assert_eq!(
-            yield_core.find(running).map(|p| p.state),
-            Some(ProcessState::Running)
-        );
-        assert_eq!(yield_core.current(), Some(running));
-    }
-
-    #[test]
-    fn block_unblock_yield_and_tracing_work_as_expected() {
-        let mut core: ExecutionCore<2> = ExecutionCore::new();
-        let p1 = core.create_process(budget()).unwrap();
-        assert_eq!(core.schedule(), DispatchAction::SwitchTo(p1));
-        assert!(core.yield_process(p1).is_ok());
-        assert!(core.block_process(p1).is_ok());
-        assert_eq!(core.yield_process(p1), Err(CoreError::InvalidTransition));
-        assert!(core.unblock_process(p1).is_ok());
-        assert_eq!(core.schedule(), DispatchAction::SwitchTo(p1));
-        assert!(core.exit(p1).is_ok());
-        assert!(!core.trace_records().is_empty());
+        assert_eq!(core.schedule(), Err(CoreError::NoRunnable));
     }
 }

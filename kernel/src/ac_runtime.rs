@@ -2,7 +2,10 @@
 #![allow(clippy::collapsible_if)]
 
 use crate::execution_core::{CoreError, ExecutionCore};
-use crate::process::{ProcessId, ResourceBudget};
+use crate::process::{
+    ProcessId, ResourceBudget, context::CpuContext, context_switch::SwitchFrame,
+    dispatch::DispatchTarget,
+};
 
 const MAX_RANGES: usize = 16;
 const MAX_IPC: usize = 16;
@@ -80,10 +83,13 @@ pub struct TraceEvent {
     pub value: u64,
 }
 
-/// A bounded A-C runtime boundary. It connects process execution with the
-/// privileged invariants required by the master plan: user-range validation,
-/// quota-limited IPC, capability revocation, monotonic timers and structured
-/// diagnostics. All storage is fixed-capacity and fail-closed.
+/// Bounded A-C contract harness backed by the authoritative ProcessManager.
+///
+/// This is not a production userspace runtime: UserRange entries are metadata
+/// only (they do not install page tables or copy user memory), and the local
+/// FIFO IPC queue is not authenticated IPC or a capability-enforced syscall
+/// path. Keep it out of the boot/user-facing path until those mechanisms exist.
+/// All storage is fixed-capacity and fails closed on capacity errors.
 pub struct AcRuntime<const N: usize> {
     pub core: ExecutionCore<N>,
     ranges: [Option<(ProcessId, UserRange)>; MAX_RANGES],
@@ -119,8 +125,12 @@ impl<const N: usize> AcRuntime<N> {
         }
     }
 
-    pub fn create_process(&mut self, budget: ResourceBudget) -> Result<ProcessId, AcError> {
-        let id = self.core.create_process(budget)?;
+    pub fn create_process(
+        &mut self,
+        budget: ResourceBudget,
+        cpu: CpuContext,
+    ) -> Result<ProcessId, AcError> {
+        let id = self.core.create_process(budget, cpu)?;
         self.trace(id, 1, 0)?;
         Ok(id)
     }
@@ -310,8 +320,33 @@ impl<const N: usize> AcRuntime<N> {
         Ok(fired)
     }
 
-    pub fn schedule(&mut self) -> crate::scheduler::DispatchAction {
-        self.core.schedule()
+    /// Prepare a context-switch target. Persist a running process's outgoing
+    /// frame first, then pass the returned token to the architecture completion
+    /// path; selecting a target does not publish it as the current process.
+    pub fn schedule(&mut self) -> Result<DispatchTarget, AcError> {
+        self.core.schedule().map_err(AcError::Core)
+    }
+
+    pub fn persist_outgoing_frame(
+        &mut self,
+        process: ProcessId,
+        frame: &SwitchFrame,
+    ) -> Result<(), AcError> {
+        self.core
+            .persist_outgoing_frame(process, frame)
+            .map_err(AcError::Core)
+    }
+
+    pub fn confirm_dispatch(&mut self, target: DispatchTarget) -> Result<(), AcError> {
+        self.core.confirm_dispatch(target).map_err(AcError::Core)
+    }
+
+    pub fn cancel_dispatch(&mut self, target: DispatchTarget) -> Result<(), AcError> {
+        self.core.cancel_dispatch(target).map_err(AcError::Core)
+    }
+
+    pub fn current(&self) -> Option<ProcessId> {
+        self.core.current()
     }
 
     pub fn trace_len(&self) -> usize {
@@ -336,6 +371,10 @@ impl<const N: usize> AcRuntime<N> {
 mod tests {
     use super::*;
 
+    fn cpu_context() -> CpuContext {
+        CpuContext::kernel_entry(0x1000, 0x2000, 0)
+    }
+
     fn budget() -> ResourceBudget {
         ResourceBudget {
             cpu_ticks: 8,
@@ -347,7 +386,7 @@ mod tests {
     #[test]
     fn user_memory_is_bounded_and_overflow_safe() {
         let mut rt: AcRuntime<2> = AcRuntime::new();
-        let p = rt.create_process(budget()).unwrap();
+        let p = rt.create_process(budget(), cpu_context()).unwrap();
         rt.map_user_range(p, 0x1000, 0x2000).unwrap();
         assert!(rt.validate_user_buffer(p, 0x1800, 0x800).is_ok());
         assert_eq!(
@@ -363,7 +402,7 @@ mod tests {
     #[test]
     fn ipc_is_fifo_and_has_a_hard_bound() {
         let mut rt: AcRuntime<1> = AcRuntime::new();
-        let p = rt.create_process(budget()).unwrap();
+        let p = rt.create_process(budget(), cpu_context()).unwrap();
         for i in 0..MAX_IPC {
             rt.send_ipc(p, i as u32, i as u64).unwrap();
         }
@@ -375,7 +414,7 @@ mod tests {
     #[test]
     fn capability_revocation_is_fail_closed() {
         let mut rt: AcRuntime<1> = AcRuntime::new();
-        let p = rt.create_process(budget()).unwrap();
+        let p = rt.create_process(budget(), cpu_context()).unwrap();
         rt.grant_capability(p, 7, 0b11).unwrap();
         assert!(rt.check_capability(p, 7, 0b01).is_ok());
         rt.revoke_capability(p, 7).unwrap();
@@ -388,7 +427,7 @@ mod tests {
     #[test]
     fn syscall_and_timer_boundaries_reject_bad_input() {
         let mut rt: AcRuntime<1> = AcRuntime::new();
-        let p = rt.create_process(budget()).unwrap();
+        let p = rt.create_process(budget(), cpu_context()).unwrap();
         assert!(rt.validate_syscall(3, 2, 8, 4).is_ok());
         assert_eq!(
             rt.validate_syscall(9, 0, 8, 4),

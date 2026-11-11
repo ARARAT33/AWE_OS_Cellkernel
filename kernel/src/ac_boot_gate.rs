@@ -1,7 +1,7 @@
 #![no_std]
 
 use crate::ac_runtime::AcRuntime;
-use crate::process::{ProcessId, ResourceBudget};
+use crate::process::{ProcessId, ResourceBudget, context::CpuContext};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum BootStage {
@@ -18,9 +18,9 @@ pub enum AcGateError {
     InvalidMemory,
 }
 
-/// Deterministic A-C bring-up gate. The gate is deliberately small: hardware
-/// discovery remains outside the kernel, while the privileged transition into
-/// an executable runtime is explicit and fail-closed.
+/// Contract-level A-C bring-up gate. It validates supplied CPU/memory metadata
+/// only; it is not a hardware discovery, page-table setup or boot initialization
+/// sequence. Admission remains explicit and fail-closed.
 pub struct AcBootGate {
     stage: BootStage,
 }
@@ -74,12 +74,13 @@ impl AcBootGate {
         &self,
         runtime: &mut AcRuntime<N>,
         budget: ResourceBudget,
+        cpu: CpuContext,
     ) -> Result<ProcessId, AcGateError> {
         if self.stage != BootStage::KernelReady {
             return Err(AcGateError::WrongStage);
         }
         runtime
-            .create_process(budget)
+            .create_process(budget, cpu)
             .map_err(|_| AcGateError::WrongStage)
     }
 }
