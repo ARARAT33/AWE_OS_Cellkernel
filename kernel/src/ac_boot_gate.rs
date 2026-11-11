@@ -1,7 +1,7 @@
 #![no_std]
 
 use crate::ac_runtime::AcRuntime;
-use crate::process::{ProcessId, ResourceBudget};
+use crate::process::{ProcessId, ResourceBudget, context::CpuContext};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum BootStage {
@@ -74,12 +74,13 @@ impl AcBootGate {
         &self,
         runtime: &mut AcRuntime<N>,
         budget: ResourceBudget,
+        cpu: CpuContext,
     ) -> Result<ProcessId, AcGateError> {
         if self.stage != BootStage::KernelReady {
             return Err(AcGateError::WrongStage);
         }
         runtime
-            .create_process(budget)
+            .create_process(budget, cpu)
             .map_err(|_| AcGateError::WrongStage)
     }
 }

@@ -19,8 +19,7 @@ mod product_core {
     use aweos_kernel::compat::linux::{Elf64Image, LinuxSyscallDispatcher};
     use aweos_kernel::compat::windows::{NtStatus, PeImage, Win32SyscallDispatcher};
     use aweos_kernel::compat::wlin::WlinBridge;
-    use aweos_kernel::process::ResourceBudget;
-    use aweos_kernel::scheduler::DispatchAction;
+    use aweos_kernel::process::{context::CpuContext, ResourceBudget};
     use aweos_kernel::storage::{
         BLOCK_SIZE, BlockDevice, NodeKind, RamBlockDevice, RecoveryAction, Vfs,
     };
@@ -109,8 +108,12 @@ mod product_core {
         };
 
         // 2. Process Lifecycle & Admission
-        let p1 = gate.admit_process(&mut rt, budget).expect("admit p1");
-        let p2 = gate.admit_process(&mut rt, budget).expect("admit p2");
+        let p1 = gate
+            .admit_process(&mut rt, budget, CpuContext::kernel_entry(0x1000, 0x8000, 0))
+            .expect("admit p1");
+        let p2 = gate
+            .admit_process(&mut rt, budget, CpuContext::kernel_entry(0x1100, 0x9000, 0))
+            .expect("admit p2");
 
         // 3. Address Space Mapping & Buffer Validation
         rt.map_user_range(p1, 0x0040_0000, 0x0001_0000)
@@ -119,8 +122,17 @@ mod product_core {
         assert!(rt.validate_user_buffer(p1, 0x0050_0000, 0x100).is_err());
 
         // 4. Scheduling & Preemption Execution
-        assert_eq!(rt.schedule(), DispatchAction::SwitchTo(p1));
-        assert_eq!(rt.schedule(), DispatchAction::SwitchTo(p2));
+        let first_target = rt.schedule().expect("prepare p1 dispatch");
+        assert_eq!(first_target.process, p1);
+        assert_eq!(rt.current(), None);
+        rt.confirm_dispatch(first_target).expect("confirm p1 dispatch");
+        assert_eq!(rt.current(), Some(p1));
+
+        let second_target = rt.schedule().expect("prepare p2 dispatch");
+        assert_eq!(second_target.process, p2);
+        assert_eq!(rt.current(), None);
+        rt.confirm_dispatch(second_target).expect("confirm p2 dispatch");
+        assert_eq!(rt.current(), Some(p2));
 
         // 5. Syscall Validation
         assert!(rt.validate_syscall(2, 2, 8, 4).is_ok());
