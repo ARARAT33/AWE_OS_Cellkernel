@@ -83,10 +83,13 @@ pub struct TraceEvent {
     pub value: u64,
 }
 
-/// A bounded A-C runtime boundary. It connects process execution with the
-/// privileged invariants required by the master plan: user-range validation,
-/// quota-limited IPC, capability revocation, monotonic timers and structured
-/// diagnostics. All storage is fixed-capacity and fail-closed.
+/// Bounded A-C contract harness backed by the authoritative ProcessManager.
+///
+/// This is not a production userspace runtime: UserRange entries are metadata
+/// only (they do not install page tables or copy user memory), and the local
+/// FIFO IPC queue is not authenticated IPC or a capability-enforced syscall
+/// path. Keep it out of the boot/user-facing path until those mechanisms exist.
+/// All storage is fixed-capacity and fails closed on capacity errors.
 pub struct AcRuntime<const N: usize> {
     pub core: ExecutionCore<N>,
     ranges: [Option<(ProcessId, UserRange)>; MAX_RANGES],

@@ -121,7 +121,7 @@ mod product_core {
         assert!(rt.validate_user_buffer(p1, 0x0040_1000, 0x800).is_ok());
         assert!(rt.validate_user_buffer(p1, 0x0050_0000, 0x100).is_err());
 
-        // 4. Scheduling & Preemption Execution
+        // 4. Dispatch state contract (manual acknowledgement; not hardware preemption)
         let first_target = rt.schedule().expect("prepare p1 dispatch");
         assert_eq!(first_target.process, p1);
         assert_eq!(rt.current(), None);

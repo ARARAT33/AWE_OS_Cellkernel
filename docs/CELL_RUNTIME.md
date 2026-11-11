@@ -84,13 +84,19 @@ Remote cells, network discovery, authenticated peer IPC, replay protection, dist
 
 A green build is not proof of memory isolation, remote security, durable storage or physical-hardware support.
 
-## Runtime integration boundary
+## Runtime integration boundary (updated 2026-11-11)
 
-`ProcessManager::current_process_id()` is a fail-closed authority source, not proof that CellKernel has a live process-switch path. The repository audit for this change found no production call site that invokes `ProcessManager::confirm_dispatch`; the acknowledgement contract is currently exercised by unit tests and CellManager tests, not by the x86_64 switch backend. The separate `ExecutionCore` maintains its own scheduler/current-process state and is not yet unified with `ProcessManager`.
+The 2026-11-11 process-runtime refactor makes `ExecutionCore` a compatibility facade over the existing `ProcessManager`. It no longer owns a second process registry, run queue, scheduler or current-task field. Process descriptors, CPU contexts, queue membership, pending-dispatch tokens and acknowledged current-process identity are owned by `ProcessManager`.
 
-The x86_64 context-switch preparation code and the current `SyscallContext` are also not yet connected to this CellManager path. The pending-dispatch token closes arbitrary/stale acknowledgement paths inside `ProcessManager`, but it does not itself prove that a hardware switch completed. `SyscallContext` currently receives a mutable process descriptor rather than a validated current-task token/address-space context. Therefore this CellManager remains a kernel library/runtime contract with unit-test evidence, not a boot-integrated userspace cell IPC service. Until a real context-switch completion path updates one authoritative process model and the syscall entry supplies that trusted context, IPC calls without a tracked current process deliberately fail with `ProcessStateMismatch`.
+Process creation now requires an explicit validated `CpuContext`. A dispatch target remains pending until the exact `DispatchTarget` is acknowledged. `ExecutionCore` and `AcRuntime` expose the outgoing-frame persistence operation so the dispatch loop can save the switched-away registers into the same authoritative context table before that process is selected again. Yield, block, unblock and CPU-budget accounting are delegated to `ProcessManager`.
 
-Before enabling SMP, replace the single-current-process identity with per-CPU current-task state and synchronization. Before exposing cell operations to Ring 3, add per-process address spaces, user-pointer validation, and a versioned syscall contract.
+This is a software-state unification, not a claim that the normal boot path now runs a production scheduler. The `AcRuntime` type is explicitly a bounded contract harness: its `UserRange` entries are metadata only, its local FIFO IPC queue is not authenticated/capability-enforced IPC, and its product-core test manually acknowledges dispatch tokens. That test is not hardware context-switch evidence.
+
+The architecture-owned x86_64 path remains the trusted switch-completion mechanism. The feature-gated QEMU two-stack round-robin self-test exercises that path directly through `ProcessManager`, including outgoing-frame persistence and resume. No normal boot-path call site currently starts a preemptive scheduler, and no general Ring-3 process isolation is claimed.
+
+The current `SyscallContext` remains fail-closed and is not wired to CellManager. No user-facing cell syscall should be exposed until the syscall entry receives trusted current-task identity, a validated per-process address space, safe user-copy operations and capability-checked operations.
+
+Before enabling SMP, replace the single-current-process identity with per-CPU current-task state and synchronization. Before exposing cell operations to Ring 3, add per-process address spaces, user-pointer validation and a versioned syscall contract.
 
 ## General syscall dispatcher status (2026-11-07)
 
