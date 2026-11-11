@@ -212,3 +212,56 @@
 2. Add guarded page-table roots and checked kernel/user mappings before any Ring-3 entry.
 3. Continue VirtIO block I/O with real request/completion and read-after-write tests.
 4. Integrate the PS/2 controller with the kernel IRQ path or a driverd input service before any AYUI input claims.
+
+
+## 2026-11-11 — ProcessManager / ExecutionCore unification (PR #67)
+
+### Baseline and branch safety
+
+- Audited the current `main` head `312b4327f8c0f064723056aeb38d9ee1b2693500`, the workspace tree, recent commits, current status/readiness documents, CellManager integration notes, workflow runs, and open pull requests.
+- The previous log's top priority was to unify `ProcessManager` and `ExecutionCore` behind one current-task authority. Implemented the work on `feat/unified-process-runtime-2026-11-11`.
+- PR #67 is a **draft** targeting `main`. No main-branch merge, force-push, branch deletion, or change to external draft PR #64 was performed.
+
+### Implemented
+
+- `kernel/src/execution_core.rs`: replaced the duplicate process registry, run queue, scheduler and current-task field with a compatibility facade over `ProcessManager`. The facade now delegates process descriptors, contexts, queue state, pending dispatch, current identity, exit/reap, CPU accounting, and dispatch acknowledgement to the same manager.
+- Process admission now requires an explicit validated `CpuContext`; metadata-only processes without an executable context are rejected.
+- `kernel/src/process/mod.rs`: added bounded yield, block, unblock and current-task CPU-budget operations, an exact pending-dispatch accessor, and a blocked-to-idle acknowledgement. Blocking a queued process fails closed if queue removal cannot be confirmed.
+- Dispatch identity is not published as current until the exact pending `DispatchTarget` is acknowledged. Outgoing register frames can be persisted through the same manager before the process is selected again.
+- `kernel/src/ac_runtime.rs` and `kernel/src/ac_boot_gate.rs`: migrated the A-C contract path to explicit CPU contexts and the shared manager. The API documentation now states that AcRuntime's user ranges are metadata-only and its local FIFO IPC is not authenticated or capability-enforced userspace IPC; AcBootGate validates supplied metadata and is not a hardware boot sequence.
+- `tests/product-core/src/lib.rs`: updated the contract test to acknowledge dispatch explicitly and persist the outgoing frame before rescheduling.
+- `docs/CELL_RUNTIME.md`: replaced the stale statement that ExecutionCore still has an independent scheduler/current task with the new authority model and its remaining boot/Ring-3 limits.
+
+### Validation — exact PR-head evidence
+
+Validated code head: `58c2dfd596c708c0b4e3426c37c77471aa4aa67f`.
+
+- AWEOS CI Pipeline run **43053697038**, workspace job **130637395526**: success. The kernel test binary reported **347 passed, 0 failed**; the product-core suite reported **11 passed, 0 failed**. The workspace formatting check completed successfully.
+- AWEOS Quality Gate run **43053697452**: Rust workspace and UEFI loader jobs succeeded.
+- Clippy report run **43053697027**: success.
+- Cloud Security Gate run **43053697604**: both cloud-security and cloud-release-contract jobs succeeded.
+- CI Diagnostics run **43053697388**: success.
+- AOSIN installer workflow run **43053696963**: all four Linux/Windows GUI/CLI installer jobs succeeded.
+- Rustfmt automation run **43053687964**: success.
+- At the time this entry was recorded, Bootable Image Pipeline run **43053697042**, VirtIO Runtime run **43053697468**, and Multi-Architecture Images run **43053697934** were still in progress. Their QEMU/image/device results are deliberately not claimed here; the next run must inspect their final jobs and logs.
+
+### Corrections made during validation
+
+- The first PR CI attempt found a non-const accessor incorrectly declared const; corrected.
+- A subsequent test compile found an assertion requiring Debug on ProcessContext; changed the test to compare the persisted CPU fields.
+- The outgoing-frame contract tests then exposed rustfmt differences; the repository rustfmt workflow corrected them. The validated code head above passed the workspace formatting check.
+
+### Honest scope and remaining limits
+
+- This is a **software-state unification**. It does not start a production preemptive scheduler from the normal boot path.
+- The architecture-owned x86_64 switch path and QEMU two-stack round-robin self-test remain the separate hardware-switch evidence; the product-core test's acknowledgement is explicitly manual and is not a hardware context-switch test.
+- No Ring 3, per-process page-table roots, supervisor/user mapping policy, safe user-copy path, SMP scheduling, or production syscall integration is enabled.
+- AcRuntime remains a contract harness, not a production address-space or authenticated IPC implementation.
+- No filesystem durability, real VirtIO block read/write, NIC TX/RX, or physical-hardware compatibility is inferred from the workspace test pass.
+
+### Next priorities
+
+1. Add guarded per-process page-table roots, explicit kernel/user mapping permissions, and checked user-copy primitives before any Ring-3 entry.
+2. Inspect the still-running Bootable Image, VirtIO Runtime, and Multi-Architecture workflows; continue VirtIO block request/completion and read-after-write persistence only with QEMU evidence.
+3. Wire a real kernel dispatch loop and CPU-timer accounting to the single ProcessManager authority, without enabling SMP until per-CPU current-task state and synchronization exist.
+4. Integrate the polled PS/2 controller with the IRQ/driver-service path before claiming AYUI input support.
