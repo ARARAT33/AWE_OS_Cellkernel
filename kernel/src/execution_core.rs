@@ -2,7 +2,8 @@
 
 use crate::process::{
     ProcessDescriptor, ProcessId, ProcessManager, ProcessManagerError, ProcessState, ProcessTable,
-    ResourceBudget, context::CpuContext, context_switch::SwitchFrame, dispatch::DispatchTarget, scheduler::SchedulerError,
+    ResourceBudget, context::CpuContext, context_switch::SwitchFrame, dispatch::DispatchTarget,
+    scheduler::SchedulerError,
 };
 
 /// Errors exposed by the execution-core compatibility facade.

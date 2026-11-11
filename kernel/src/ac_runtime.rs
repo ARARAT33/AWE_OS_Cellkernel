@@ -3,9 +3,7 @@
 
 use crate::execution_core::{CoreError, ExecutionCore};
 use crate::process::{
-    ProcessId, ResourceBudget,
-    context::CpuContext,
-    context_switch::SwitchFrame,
+    ProcessId, ResourceBudget, context::CpuContext, context_switch::SwitchFrame,
     dispatch::DispatchTarget,
 };
 
