@@ -2,7 +2,7 @@
 
 use crate::process::{
     ProcessDescriptor, ProcessId, ProcessManager, ProcessManagerError, ProcessState, ProcessTable,
-    ResourceBudget, context::CpuContext, dispatch::DispatchTarget, scheduler::SchedulerError,
+    ResourceBudget, context::CpuContext, context_switch::SwitchFrame, dispatch::DispatchTarget, scheduler::SchedulerError,
 };
 
 /// Errors exposed by the execution-core compatibility facade.
@@ -93,7 +93,8 @@ impl<const N: usize> ExecutionCore<N> {
     }
 
     /// Select the next dispatch target. If a process is currently running,
-    /// it is first yielded into the same ProcessManager-owned run queue.
+    /// its outgoing frame must be persisted with `persist_outgoing_frame`
+    /// before this call; the process is then yielded into the shared queue.
     /// The returned token must be confirmed only by the architecture completion
     /// path after the target stack is active.
     pub fn schedule(&mut self) -> Result<DispatchTarget, CoreError> {
@@ -105,6 +106,19 @@ impl<const N: usize> ExecutionCore<N> {
         let target = self.processes.next_dispatch().map_err(map_process_error)?;
         self.record_trace(target.process, 7, 0);
         Ok(target)
+    }
+
+    /// Persist the outgoing register frame into the authoritative ProcessManager
+    /// context table. Call this after the architecture backend has saved the
+    /// outgoing registers and before selecting that process for another dispatch.
+    pub fn persist_outgoing_frame(
+        &mut self,
+        id: ProcessId,
+        frame: &SwitchFrame,
+    ) -> Result<(), CoreError> {
+        self.processes
+            .persist_outgoing_frame(id, frame)
+            .map_err(map_process_error)
     }
 
     pub fn confirm_dispatch(&mut self, target: DispatchTarget) -> Result<(), CoreError> {
@@ -300,6 +314,30 @@ mod tests {
         assert_eq!(core.current(), None);
         core.confirm_dispatch(second_target).unwrap();
         assert_eq!(core.current(), Some(second));
+    }
+
+    #[test]
+    fn outgoing_frame_persistence_updates_the_shared_process_context() {
+        let mut core: ExecutionCore<2> = ExecutionCore::new();
+        let id = core.create_process(budget(), cpu(0x1000, 0x2000)).unwrap();
+        let target = core.schedule().unwrap();
+        core.confirm_dispatch(target).unwrap();
+
+        let mut outgoing = target.frame;
+        outgoing.rip = 0x1234;
+        outgoing.rsp = 0x2100;
+        core.persist_outgoing_frame(id, &outgoing).unwrap();
+        let saved = core.process_context(id).unwrap();
+        assert_eq!(saved.cpu.rip, 0x1234);
+        assert_eq!(saved.cpu.rsp, 0x2100);
+
+        let mut malformed = outgoing;
+        malformed.rip = 0x0000_8000_0000_0000;
+        assert_eq!(
+            core.persist_outgoing_frame(id, &malformed),
+            Err(CoreError::InvalidContext)
+        );
+        assert_eq!(core.process_context(id).unwrap(), saved);
     }
 
     #[test]

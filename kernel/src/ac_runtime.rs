@@ -2,7 +2,12 @@
 #![allow(clippy::collapsible_if)]
 
 use crate::execution_core::{CoreError, ExecutionCore};
-use crate::process::{ProcessId, ResourceBudget, context::CpuContext, dispatch::DispatchTarget};
+use crate::process::{
+    ProcessId, ResourceBudget,
+    context::CpuContext,
+    context_switch::SwitchFrame,
+    dispatch::DispatchTarget,
+};
 
 const MAX_RANGES: usize = 16;
 const MAX_IPC: usize = 16;
@@ -319,6 +324,16 @@ impl<const N: usize> AcRuntime<N> {
     /// it as the current process.
     pub fn schedule(&mut self) -> Result<DispatchTarget, AcError> {
         self.core.schedule().map_err(AcError::Core)
+    }
+
+    pub fn persist_outgoing_frame(
+        &mut self,
+        process: ProcessId,
+        frame: &SwitchFrame,
+    ) -> Result<(), AcError> {
+        self.core
+            .persist_outgoing_frame(process, frame)
+            .map_err(AcError::Core)
     }
 
     pub fn confirm_dispatch(&mut self, target: DispatchTarget) -> Result<(), AcError> {
