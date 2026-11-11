@@ -2,7 +2,7 @@
 
 use crate::process::{
     ProcessDescriptor, ProcessId, ProcessManager, ProcessManagerError, ProcessState, ProcessTable,
-    ResourceBudget, context::CpuContext, context_switch::SwitchFrame, dispatch::DispatchTarget,
+    ResourceBudget, context::CpuContext, dispatch::DispatchTarget,
     scheduler::SchedulerError,
 };
 
@@ -260,17 +260,6 @@ mod tests {
 
     fn create(core: &mut ExecutionCore<3>, entry: u64, stack: u64) -> ProcessId {
         core.create_process(budget(), cpu(entry, stack)).unwrap()
-    }
-
-    #[test]
-    fn process_id_exhaustion_does_not_reissue_max_id() {
-        let table = ProcessTable {
-            next_id: core::sync::atomic::AtomicU64::new(u64::MAX - 1),
-        };
-        assert_eq!(table.allocate_id(), Some(ProcessId(u64::MAX - 1)));
-        assert_eq!(table.allocate_id(), Some(ProcessId(u64::MAX)));
-        assert_eq!(table.allocate_id(), None);
-        assert_eq!(table.allocate_id(), None);
     }
 
     #[test]

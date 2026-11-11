@@ -325,7 +325,9 @@ impl<const N: usize> ProcessManager<N> {
         match candidate.state {
             ProcessState::Running if self.current == Some(id) => {}
             ProcessState::Runnable if self.current != Some(id) => {
-                self.scheduler.remove(id);
+                if !self.scheduler.remove(id) {
+                    return Err(ProcessManagerError::InvalidState);
+                }
             }
             _ => return Err(ProcessManagerError::InvalidState),
         }
