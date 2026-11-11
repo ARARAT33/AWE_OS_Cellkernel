@@ -186,7 +186,7 @@ impl<const N: usize> ExecutionCore<N> {
         self.processes.reap(id).map_err(map_process_error)
     }
 
-    pub const fn current(&self) -> Option<ProcessId> {
+    pub fn current(&self) -> Option<ProcessId> {
         self.processes.current_process_id()
     }
 
