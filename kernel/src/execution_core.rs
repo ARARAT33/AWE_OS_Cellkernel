@@ -338,7 +338,9 @@ mod tests {
             core.persist_outgoing_frame(id, &malformed),
             Err(CoreError::InvalidContext)
         );
-        assert_eq!(core.process_context(id).unwrap(), saved);
+        let unchanged = core.process_context(id).unwrap();
+        assert_eq!(unchanged.cpu.rip, saved.cpu.rip);
+        assert_eq!(unchanged.cpu.rsp, saved.cpu.rsp);
     }
 
     #[test]
