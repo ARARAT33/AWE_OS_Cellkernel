@@ -129,7 +129,7 @@ mod product_core {
             .expect("confirm p1 dispatch");
         assert_eq!(rt.current(), Some(p1));
 
-        let mut outgoing_p1 = first_target.frame;
+        let mut outgoing_p1: SwitchFrame = first_target.frame;
         outgoing_p1.rip = 0x1001;
         outgoing_p1.rsp = 0x8010;
         rt.persist_outgoing_frame(p1, &outgoing_p1)
