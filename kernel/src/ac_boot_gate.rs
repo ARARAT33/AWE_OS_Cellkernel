@@ -18,9 +18,9 @@ pub enum AcGateError {
     InvalidMemory,
 }
 
-/// Deterministic A-C bring-up gate. The gate is deliberately small: hardware
-/// discovery remains outside the kernel, while the privileged transition into
-/// an executable runtime is explicit and fail-closed.
+/// Contract-level A-C bring-up gate. It validates supplied CPU/memory metadata
+/// only; it is not a hardware discovery, page-table setup or boot initialization
+/// sequence. Admission remains explicit and fail-closed.
 pub struct AcBootGate {
     stage: BootStage,
 }

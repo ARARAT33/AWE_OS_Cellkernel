@@ -310,6 +310,11 @@ mod tests {
         core.confirm_dispatch(first_target).unwrap();
         assert_eq!(core.current(), Some(first));
 
+        let mut first_outgoing = first_target.frame;
+        first_outgoing.rip = 0x1001;
+        first_outgoing.rsp = 0x2010;
+        core.persist_outgoing_frame(first, &first_outgoing).unwrap();
+
         let second_target = core.schedule().unwrap();
         assert_eq!(second_target.process, second);
         assert_eq!(core.current(), None);
@@ -352,11 +357,19 @@ mod tests {
         let target = core.schedule().unwrap();
         assert_eq!(target.process, first);
         core.confirm_dispatch(target).unwrap();
+        let mut first_outgoing = target.frame;
+        first_outgoing.rip = 0x1001;
+        first_outgoing.rsp = 0x2010;
+        core.persist_outgoing_frame(first, &first_outgoing).unwrap();
         core.block_process(first).unwrap();
 
         let target = core.schedule().unwrap();
         assert_eq!(target.process, second);
         core.confirm_dispatch(target).unwrap();
+        let mut second_outgoing = target.frame;
+        second_outgoing.rip = 0x1101;
+        second_outgoing.rsp = 0x3010;
+        core.persist_outgoing_frame(second, &second_outgoing).unwrap();
 
         core.unblock_process(first).unwrap();
         let target = core.schedule().unwrap();
@@ -392,6 +405,10 @@ mod tests {
         let first = create(&mut core, 0x1000, 0x2000);
         let target = core.schedule().unwrap();
         core.confirm_dispatch(target).unwrap();
+        let mut outgoing = target.frame;
+        outgoing.rip = 0x1001;
+        outgoing.rsp = 0x2010;
+        core.persist_outgoing_frame(first, &outgoing).unwrap();
         core.block_process(first).unwrap();
         assert_eq!(core.confirm_idle(first), Ok(()));
         assert_eq!(core.current(), None);

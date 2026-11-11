@@ -19,7 +19,11 @@ mod product_core {
     use aweos_kernel::compat::linux::{Elf64Image, LinuxSyscallDispatcher};
     use aweos_kernel::compat::windows::{NtStatus, PeImage, Win32SyscallDispatcher};
     use aweos_kernel::compat::wlin::WlinBridge;
-    use aweos_kernel::process::{ResourceBudget, context::CpuContext};
+    use aweos_kernel::process::{
+        ResourceBudget,
+        context::CpuContext,
+        context_switch::SwitchFrame,
+    };
     use aweos_kernel::storage::{
         BLOCK_SIZE, BlockDevice, NodeKind, RamBlockDevice, RecoveryAction, Vfs,
     };
@@ -115,7 +119,7 @@ mod product_core {
             .admit_process(&mut rt, budget, CpuContext::kernel_entry(0x1100, 0x9000, 0))
             .expect("admit p2");
 
-        // 3. Address Space Mapping & Buffer Validation
+        // 3. Range metadata validation (not page-table mapping)
         rt.map_user_range(p1, 0x0040_0000, 0x0001_0000)
             .expect("map p1 user range");
         assert!(rt.validate_user_buffer(p1, 0x0040_1000, 0x800).is_ok());
@@ -128,6 +132,12 @@ mod product_core {
         rt.confirm_dispatch(first_target)
             .expect("confirm p1 dispatch");
         assert_eq!(rt.current(), Some(p1));
+
+        let mut outgoing_p1 = first_target.frame;
+        outgoing_p1.rip = 0x1001;
+        outgoing_p1.rsp = 0x8010;
+        rt.persist_outgoing_frame(p1, &outgoing_p1)
+            .expect("persist p1 outgoing frame");
 
         let second_target = rt.schedule().expect("prepare p2 dispatch");
         assert_eq!(second_target.process, p2);

@@ -320,9 +320,9 @@ impl<const N: usize> AcRuntime<N> {
         Ok(fired)
     }
 
-    /// Prepare a context-switch target. The caller must pass the returned token
-    /// to the architecture completion path; selecting a target does not publish
-    /// it as the current process.
+    /// Prepare a context-switch target. Persist a running process's outgoing
+    /// frame first, then pass the returned token to the architecture completion
+    /// path; selecting a target does not publish it as the current process.
     pub fn schedule(&mut self) -> Result<DispatchTarget, AcError> {
         self.core.schedule().map_err(AcError::Core)
     }
