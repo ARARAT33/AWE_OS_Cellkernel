@@ -2,10 +2,7 @@
 
 use crate::process::{
     ProcessDescriptor, ProcessId, ProcessManager, ProcessManagerError, ProcessState, ProcessTable,
-    ResourceBudget,
-    context::CpuContext,
-    context_switch::SwitchFrame,
-    dispatch::DispatchTarget,
+    ResourceBudget, context::CpuContext, context_switch::SwitchFrame, dispatch::DispatchTarget,
     scheduler::SchedulerError,
 };
 
@@ -72,7 +69,10 @@ impl<const N: usize> ExecutionCore<N> {
         if !cpu.validate() {
             return Err(CoreError::InvalidContext);
         }
-        let id = self.ids.allocate_id().ok_or(CoreError::ProcessIdExhausted)?;
+        let id = self
+            .ids
+            .allocate_id()
+            .ok_or(CoreError::ProcessIdExhausted)?;
         let descriptor = ProcessDescriptor {
             id,
             state: ProcessState::Created,
@@ -103,10 +103,7 @@ impl<const N: usize> ExecutionCore<N> {
                 .yield_process(current)
                 .map_err(map_process_error)?;
         }
-        let target = self
-            .processes
-            .next_dispatch()
-            .map_err(map_process_error)?;
+        let target = self.processes.next_dispatch().map_err(map_process_error)?;
         self.record_trace(target.process, 7, 0);
         Ok(target)
     }
@@ -198,7 +195,10 @@ impl<const N: usize> ExecutionCore<N> {
         self.processes.descriptor(id)
     }
 
-    pub fn process_context(&self, id: ProcessId) -> Option<crate::process::context::ProcessContext> {
+    pub fn process_context(
+        &self,
+        id: ProcessId,
+    ) -> Option<crate::process::context::ProcessContext> {
         self.processes.process_context(id)
     }
 
@@ -232,9 +232,9 @@ fn map_process_error(error: ProcessManagerError) -> CoreError {
         ProcessManagerError::BudgetExceeded => CoreError::BudgetExceeded,
         ProcessManagerError::Scheduler(SchedulerError::QueueFull) => CoreError::RunQueueFull,
         ProcessManagerError::Scheduler(SchedulerError::Empty) => CoreError::NoRunnable,
-        ProcessManagerError::Scheduler(SchedulerError::InvalidContext | SchedulerError::UnknownProcess) => {
-            CoreError::InvalidContext
-        }
+        ProcessManagerError::Scheduler(
+            SchedulerError::InvalidContext | SchedulerError::UnknownProcess,
+        ) => CoreError::InvalidContext,
         ProcessManagerError::Scheduler(_) => CoreError::InvalidTransition,
         ProcessManagerError::DuplicateProcess
         | ProcessManagerError::InvalidProcess

@@ -19,7 +19,7 @@ mod product_core {
     use aweos_kernel::compat::linux::{Elf64Image, LinuxSyscallDispatcher};
     use aweos_kernel::compat::windows::{NtStatus, PeImage, Win32SyscallDispatcher};
     use aweos_kernel::compat::wlin::WlinBridge;
-    use aweos_kernel::process::{context::CpuContext, ResourceBudget};
+    use aweos_kernel::process::{ResourceBudget, context::CpuContext};
     use aweos_kernel::storage::{
         BLOCK_SIZE, BlockDevice, NodeKind, RamBlockDevice, RecoveryAction, Vfs,
     };
@@ -125,13 +125,15 @@ mod product_core {
         let first_target = rt.schedule().expect("prepare p1 dispatch");
         assert_eq!(first_target.process, p1);
         assert_eq!(rt.current(), None);
-        rt.confirm_dispatch(first_target).expect("confirm p1 dispatch");
+        rt.confirm_dispatch(first_target)
+            .expect("confirm p1 dispatch");
         assert_eq!(rt.current(), Some(p1));
 
         let second_target = rt.schedule().expect("prepare p2 dispatch");
         assert_eq!(second_target.process, p2);
         assert_eq!(rt.current(), None);
-        rt.confirm_dispatch(second_target).expect("confirm p2 dispatch");
+        rt.confirm_dispatch(second_target)
+            .expect("confirm p2 dispatch");
         assert_eq!(rt.current(), Some(p2));
 
         // 5. Syscall Validation

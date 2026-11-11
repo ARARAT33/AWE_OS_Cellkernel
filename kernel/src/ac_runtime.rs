@@ -2,11 +2,7 @@
 #![allow(clippy::collapsible_if)]
 
 use crate::execution_core::{CoreError, ExecutionCore};
-use crate::process::{
-    ProcessId, ResourceBudget,
-    context::CpuContext,
-    dispatch::DispatchTarget,
-};
+use crate::process::{ProcessId, ResourceBudget, context::CpuContext, dispatch::DispatchTarget};
 
 const MAX_RANGES: usize = 16;
 const MAX_IPC: usize = 16;
