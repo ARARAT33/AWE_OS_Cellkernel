@@ -1,6 +1,38 @@
 
 ---
 
+## 2026-11-12 — CellNet capability-token enforcement (ABI 0.2)
+
+### Continuation point
+
+- Continued from the CellNet trust-boundary hardening session on branch `feature/cellnetd-fabric` (PR #68, draft). That session's recorded blocker was: "Per-caller capability authorization is not implemented inside cellnetd; `required_caps` is metadata until a trusted capability token is supplied by the service boundary." This session closes exactly that blocker.
+- No force-push, no branch deletion, no main-branch changes; external draft PR #64 remains untouched.
+
+### Implemented (commits on `feature/cellnetd-fabric`)
+
+- `services/cellnetd/src/caps.rs` (new, `d61c1a8`): `CapabilityGrant` — a 49-byte signed payload (version, grantee node, cell id, capability mask, validity window, sequence) plus a 64-byte Ed25519 signature, 113 bytes on the wire; `CapabilityAuthority` with a bounded, fail-closed 64-slot single-use replay table. Signing/verification reuse `awe-securityd`'s Ed25519; no new cryptography.
+- `services/cellnetd/src/wire.rs` (`ea9689a`): `MAX_ENVELOPE_PAYLOAD` 576 → 704 with a compile-time assertion, so a CellIpc frame fits the 24-byte header + 113-byte token + 512-byte body budget.
+- `services/cellnetd/src/lib.rs` (`a76f748`): caps module registered and re-exported; four new `CellNetError` variants (`CapabilityDenied`, `CapabilityExpired`, `CapabilityReplayRejected`, `CapabilityTableFull`); crate ABI 0.1 → 0.2.
+- `services/cellnetd/src/fabric.rs` (`2dc502e`): CellIpc payload is now `24 B header ‖ 113 B token ‖ body`; `FabricConfig::capability_enforced()` (`require_ipc_caps = true`) and `capability_enforced()`; `set_capability_authority()` pins the issuer key; `send_cell_ipc_authorized()` verifies the grant (node, cell, caps ⊇ destination `required_caps`, validity window) and spends its sequence before sealing; the grant-free `send_cell_ipc` returns `CapabilityDenied` in enforced mode; the receiver independently re-verifies the token against its own authority pin, the destination's published `required_caps` and its replay table, dropping forged/expired/replayed tokens and counting `ipc_dropped`. Development mode keeps the old grant-free behaviour for compatibility.
+- `services/cellnetd/src/fabric/tests.rs` (`0b233e1`): the unpublished-source raw-frame test now seals a full header-plus-token payload; seven new two-node loopback tests — authorized end-to-end delivery, fail-closed refusal of the grant-free API, insufficient caps, expired grant, single-use sequence replay, foreign-issuer signature failure, receiver-side drop of a forged all-zero token.
+- `docs/CELLNET_ARCHITECTURE.md` (`ac77553`): ABI 0.2; rule 5 rewritten (capability-gated access); CellIpc wire row updated to ≤649 B payload; new "Capability authorization" section; integration contract now shows `send_cell_ipc_authorized` and lists delegation/attenuation as deliberate future work.
+
+### Honest limits
+
+- The remaining CellNet blocker from the previous session is unchanged: the `Transport` trait is still loopback-only; no NIC/UDP wiring and no two-instance mesh test exist yet.
+- Grants are minted directly by the pinned authority; delegation and attenuation chains are not implemented.
+- No kernel-crate changes; the trusted computing base is untouched.
+
+### Validation status
+
+- No local toolchain is available in this environment; validation is deferred to the GitHub Actions suite on this PR head. **No green result is claimed yet.** If CI fails, the diagnostics-bot comment will be read and the defect fixed before any merge decision; PR #68 stays a draft until a full green suite (including the QEMU jobs) exists on the final head.
+
+### Next priorities
+
+1. Watch the fresh CI suite on this head; fix any clippy/rustfmt/test failures from the diagnostics output.
+2. On a full green 16/16 suite: decide draft vs ready for PR #68. The previous session held it draft pending "tokens + real transport"; tokens now exist, the real transport does not — record the decision explicitly either way, and merge only with an expected-head-SHA compare-and-swap.
+3. Then continue the audit queue: per-process page-table roots + checked user copy, timer-driven dispatch, VirtIO block read-after-write in QEMU, netd UDP wiring and the two-instance CellNet mesh.
+
 ## Session 2026-11-08 (post-merge CI verification and stale-PR triage)
 
 ### Repository audit performed first
