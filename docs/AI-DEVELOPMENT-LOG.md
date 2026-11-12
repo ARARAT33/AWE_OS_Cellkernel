@@ -308,3 +308,27 @@ Validated code head: `58c2dfd596c708c0b4e3426c37c77471aa4aa67f`.
 3. Continue VirtIO block I/O with real request/completion and read-after-write persistence tests, with QEMU evidence.
 4. Re-evaluate external draft PR #64 (initd restart policies) against current main: rebase or ask for a rebase; it conflicts and must not be merged as-is.
 5. Integrate the polled PS/2 controller with the IRQ/driver-service path before claiming AYUI input support.
+
+---
+
+## 2026-11-12 — CellNet: first executable distributed-cell fabric (directive §V)
+
+### What was done
+
+- Full-tree audit (`docs/ARCHITECTURE_AUDIT_2026-11-12.md`): local builds and tests executed on the pinned nightly; no readiness claims taken from documents. Baseline before this session: 481 workspace tests green, bare-metal `x86_64-unknown-none` kernel build green, UEFI loader check green, Clippy gate clean.
+- `awe-securityd::crypto`: added X25519 key agreement (with contributory / low-order rejection), HKDF-SHA256, and ChaCha20-Poly1305 AEAD wrappers. Validated against RFC 7748 (DH vector + low-order rejection), RFC 5869 (HKDF case 1) and RFC 8439 (AEAD vector + tamper rejection).
+- New service crate `awe-cellnetd` (`services/cellnetd`): bounded, allocation-free distributed cell fabric per `docs/CELLNET_ARCHITECTURE.md` — signed discovery announcements, Open/Pinned trust, mutually authenticated 4-flight handshake (Ed25519 identity, X25519 ephemeral, HKDF-SHA256 schedule, HMAC transcript confirmation), ChaCha20-Poly1305 session envelopes with a 64-bit anti-replay window, publish-policy-gated remote cell IPC, suspect/offline liveness, exponential-backoff reconnect hints, and DirectorySync anti-entropy for partition recovery. Key material is scrubbed on session teardown; no hidden RNG (caller-supplied nonces/secrets).
+- 22 new tests in `awe-cellnetd` + 4 new crypto tests: handshake roundtrip, encrypted IPC both directions, ciphertext tamper, frame replay, signature forgery, node-id spoofing, pinned-trust rejection, low-order key rejection, publish-policy filtering, unpublished-cell drop + stale-entry repair via snapshot, suspect→offline→backoff→reconnect→partition-heal, and offer TTL expiry.
+- Validation after the change: `cargo test --workspace --no-fail-fast` **507 passed, 0 failed**; `cargo fmt --all --check` clean; Clippy CI gate flags clean; `cargo build --release -p aweos-kernel-bin --target x86_64-unknown-none` clean; aweloader UEFI check clean.
+
+### Honest limits
+
+- The fabric's `Transport` trait is loopback-tested only; no NIC/UDP wiring yet (needs the netd QEMU path first). No CellIpc retransmission/ordering (at-most-once), no multicast discovery, no ratchet.
+- No changes to the kernel crate; the trusted computing base is untouched.
+
+### Next priorities (unchanged order, see audit doc)
+
+1. Per-process page-table roots + checked user copy before any Ring-3 entry.
+2. Timer-driven dispatch loop on the unified ProcessManager.
+3. VirtIO block request/completion with read-after-write persistence in QEMU.
+4. netd UDP path in QEMU; then bind cellnetd to it and run a two-instance mesh.
