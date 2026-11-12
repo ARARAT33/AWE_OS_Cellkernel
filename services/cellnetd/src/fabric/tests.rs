@@ -221,7 +221,9 @@ fn accept_hello_requires_the_exact_inspected_signed_frame() {
     hello.signature = pair.a.identity.sign(&hello_wire[..HELLO_SIGNED_LEN]);
     encode_hello(&hello, &mut hello_wire);
 
-    pair.b.inspect_hello(ADDR_A, &hello_wire, pair.now).expect("inspect");
+    pair.b
+        .inspect_hello(ADDR_A, &hello_wire, pair.now)
+        .expect("inspect");
 
     let (other_nonce, other_secret) = pair.fresh_nonce();
     let mut other = HelloFrame {
@@ -239,7 +241,8 @@ fn accept_hello_requires_the_exact_inspected_signed_frame() {
     encode_hello(&other, &mut other_wire);
 
     assert_eq!(
-        pair.b.accept_hello(&other_wire, [0x55; 32], [0x66; 32], pair.now, &mut pair.tb),
+        pair.b
+            .accept_hello(&other_wire, [0x55; 32], [0x66; 32], pair.now, &mut pair.tb),
         Err(CellNetError::Malformed)
     );
     pair.b
@@ -395,8 +398,11 @@ fn receiver_rejects_unpublished_remote_source_cell() {
     body[16..24].copy_from_slice(&999u64.to_le_bytes());
     let mut wire = [0u8; MAX_ENVELOPE_WIRE];
     let len = pair.a.peers[peer_index]
-        .as_mut().expect("peer")
-        .session.as_mut().expect("session")
+        .as_mut()
+        .expect("peer")
+        .session
+        .as_mut()
+        .expect("session")
         .seal(MessageType::CellIpc, &body[..IPC_HEADER_LEN], &mut wire)
         .expect("seal");
     pair.ta.send_to(ADDR_B, &wire[..len]).expect("send");
@@ -417,8 +423,14 @@ fn tampered_ciphertext_is_rejected_and_counted() {
     publish_a_source(&mut pair);
 
     let a_id = pair.a.node_id();
-    let last_rx = pair.b.peers.iter().flatten()
-        .find(|peer| peer.node_id == a_id).expect("peer").last_rx_tick;
+    let last_rx = pair
+        .b
+        .peers
+        .iter()
+        .flatten()
+        .find(|peer| peer.node_id == a_id)
+        .expect("peer")
+        .last_rx_tick;
     pair.advance(1);
 
     let b_id = pair.b.node_id();
@@ -451,9 +463,18 @@ fn tampered_ciphertext_is_rejected_and_counted() {
 
     assert!(pair.b.next_incoming().is_none());
     assert_eq!(pair.b.stats().frames_decrypt_failed, 1);
-    let current_rx = pair.b.peers.iter().flatten()
-        .find(|peer| peer.node_id == a_id).expect("peer").last_rx_tick;
-    assert_eq!(current_rx, last_rx, "bad-tag traffic must not refresh liveness");
+    let current_rx = pair
+        .b
+        .peers
+        .iter()
+        .flatten()
+        .find(|peer| peer.node_id == a_id)
+        .expect("peer")
+        .last_rx_tick;
+    assert_eq!(
+        current_rx, last_rx,
+        "bad-tag traffic must not refresh liveness"
+    );
 }
 
 #[test]
