@@ -267,8 +267,7 @@ mod tests {
         );
 
         // Signature from a different issuer key.
-        let (_other_public, other_secret) =
-            awe_securityd::ed25519_keypair_from_seed(&[0x6F; 32]);
+        let (_other_public, other_secret) = awe_securityd::ed25519_keypair_from_seed(&[0x6F; 32]);
         let mut forged = CapabilityGrant {
             version: 0,
             grantee_node: 0xAAAA,
