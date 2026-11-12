@@ -1,4 +1,4 @@
-# AWE_OS CellNet — Network Cell Architecture (ABI 0.1)
+# AWE_OS CellNet — Network Cell Architecture (ABI 0.2)
 
 **Status:** first executable, bounded distributed-cell fabric merged as
 `services/cellnetd` (`awe-cellnetd`), with host-side loopback integration
@@ -16,24 +16,27 @@ across machines.
 
 1. **Bounded and allocation-free**, like every other service crate: fixed
    peer table (8), node table (16), remote directory (32 cells), local
-   offer table (8), incoming queue (16).
+   offer table (8), incoming queue (16), replay table (64 single-use
+   capability grants).
 2. **No invented cryptography.** All primitives live in `awe-securityd`
-   (the Security Cell): Ed25519 (identity/signatures), X25519 (key
-   agreement), HKDF-SHA256 (key schedule), ChaCha20-Poly1305 (AEAD),
-   SHA-256/HMAC-SHA256 (transcript/confirmation).
+   (the Security Cell): Ed25519 (identity/signatures and capability-token
+   signatures), X25519 (key agreement), HKDF-SHA256 (key schedule),
+   ChaCha20-Poly1305 (AEAD), SHA-256/HMAC-SHA256 (transcript/confirmation).
 3. **No trusted network.** Every control-plane frame is signed; every
    data-plane frame is encrypted and authenticated; a 64-bit sliding
    anti-replay window rejects duplicates.
-4. **No hidden RNG.** Handshake nonces and ephemeral X25519 secrets are
-   supplied by the caller (`connect` / `accept_hello`), keeping the crate
+4. **No hidden RNG.** Handshake nonces, ephemeral X25519 secrets, and
+   capability-grant sequences are supplied by the caller, keeping the crate
    deterministic, testable, and free of a `getrandom` dependency on
    `no_std`.
-5. **Publish-only visibility.** A node advertises exactly the cells its
-   `PublishPolicy` permits (kind mask + capability mask, deny-all by
-   default). Remote peers can send IPC only to cells that are currently
-   published. The advertised required-capability mask is metadata for the
-   upstream authorization boundary; the fabric API does not yet accept a
-   trusted per-caller capability token.
+5. **Publish-only visibility, capability-gated access.** A node advertises
+   exactly the cells its `PublishPolicy` permits (kind mask + capability
+   mask, deny-all by default). Remote peers can send IPC only to cells that
+   are currently published. When `FabricConfig::require_ipc_caps` is set
+   (enforced mode), every `CellIpc` must additionally carry a valid,
+   unexpired, single-use Ed25519 capability token whose mask covers the
+   destination cell's advertised `required_caps`; the grant-free API fails
+   closed and forged tokens are dropped by the receiver.
 
 ## Identity and node binding
 
@@ -57,7 +60,7 @@ Magic `AWCN` (`0x414E_4357` LE), `u16` version, `u8` type.
 | 3 | Finished | AEAD (session) | 32 B hdr + 32 B payload + 16 B tag |
 | 4 | Announce | Ed25519 signature | 520 B |
 | 5 | Heartbeat | AEAD (session) | 32 B hdr + 8 B payload + 16 B tag |
-| 7 | CellIpc | AEAD (session) | 32 B hdr + ≤536 B payload + 16 B tag |
+| 7 | CellIpc | AEAD (session) | 32 B hdr + ≤649 B payload + 16 B tag |
 | 9 | DirectorySync | AEAD (session) | 32 B hdr + ≤400 B payload + 16 B tag |
 
 Signatures are always verified over the exact received byte range; frames
@@ -126,13 +129,51 @@ marked `Unreachable`, and an exponential backoff (`base << attempts`,
 capped) gates reconnection. Supervisors poll `reconnect_due(now)` and
 re-dial with fresh randomness.
 
+## Capability authorization (ABI 0.2)
+
+Remote `CellIpc` calls can be gated by signed capability tokens issued by
+a **CapabilityAuthority** (in practice: `securityd`'s Ed25519 authority).
+The token is a 49-byte signed payload plus a 64-byte Ed25519 signature
+(113 bytes on the wire):
+
+```text
+version(1) ‖ grantee_node(8) ‖ cell_id(8) ‖ caps(8)
+        ‖ not_before(8) ‖ not_after(8) ‖ sequence(8) ‖ signature(64)
+```
+
+Semantics:
+
+- The grant names the **grantee node** and the **source cell**; a token
+  minted for another node or cell is worthless.
+- `caps` is the capability mask granted to that cell; the receiving
+  fabric verifies `grant.caps ⊇ destination.required_caps` against the
+  destination's currently published offer.
+- The validity window (`not_before`/`not_after`) is checked against the
+  sender's clock at send time; expired grants are refused before sealing.
+- `sequence` is single-use: the receiver keeps a bounded, fail-closed
+  64-slot replay table; a replayed or exhausted-table sequence drops the
+  call and counts `ipc_dropped`.
+- Issuer keys are pinned per fabric (`set_capability_authority`); tokens
+  from any other issuer fail signature verification.
+
+Enforcement is bidirectional and fail-closed: the sender API
+(`send_cell_ipc_authorized`) verifies the grant before spending it, the
+legacy grant-free `send_cell_ipc` returns `CapabilityDenied` in enforced
+mode, and the receiver independently re-verifies the token against its own
+authority pin, the destination's `required_caps`, and its replay table.
+A compromised sender cannot smuggle an IPC call through with a zero or
+forged token. In development mode (`FabricConfig::development()`),
+enforcement is off and the token slot is ignored for compatibility.
+
 ## Remote cell IPC
 
-`CellIpc` payload: `to_cell ‖ channel ‖ from_cell ‖ body` (body ≤
-512 B). The sender must hold the destination in its directory; the
-receiver delivers only to locally published cells, otherwise counts a
-drop. Delivery is at-most-once (no retransmission in v1); reliability
-above this layer is a documented future step.
+`CellIpc` payload: `24 B header (to_cell ‖ channel ‖ from_cell) ‖
+113 B capability token ‖ body` (body ≤ 512 B, total payload ≤ 649 B).
+The sender must hold the destination in its directory; the receiver
+delivers only to locally published cells and only with a valid token in
+enforced mode, otherwise counts a drop. Delivery is at-most-once (no
+retransmission in v1); reliability above this layer is a documented future
+step.
 
 ## What v1 deliberately does not do
 
@@ -145,12 +186,15 @@ above this layer is a documented future step.
 - No post-compromise security (per-session ephemeral keys only; no
   ratchet).
 - No group cells or anycast routing.
+- No distributed capability-delegation chains yet: grants are minted
+  directly by the pinned authority; delegation/attenuation is future work.
 
 ## Integration contract
 
 ```rust
 let mut fabric = CellFabric::new(identity_seed, config);
 fabric.add_trusted_key(peer_key)?;           // Pinned mode
+fabric.set_capability_authority(securityd_public_key);
 fabric.publish_offer(offer)?;                // subject to PublishPolicy
 let announce = fabric.make_announcement(now);// broadcast via transport
 fabric.connect(node_id, nonce, x25519_secret, now, &mut transport)?;
@@ -160,7 +204,8 @@ match fabric.process_datagram(source, &mut bytes, now, &mut transport)? {
     false => {}
 }
 fabric.tick(now, &mut transport);            // heartbeats, timeouts, sync
-fabric.send_cell_ipc(request, payload, now, &mut transport)?;
+// capability-gated remote IPC (enforced mode):
+fabric.send_cell_ipc_authorized(request, &grant, payload, now, &mut transport)?;
 while let Some(ipc) = fabric.next_incoming() { /* deliver to local cell */ }
 while let Some(event) = fabric.next_event()  { /* supervise */ }
 ```
