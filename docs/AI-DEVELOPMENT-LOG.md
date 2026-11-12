@@ -343,10 +343,23 @@ Validated code head: `58c2dfd596c708c0b4e3426c37c77471aa4aa67f`.
 - Clarified that required_caps is advertised metadata until a trusted caller-capability token is integrated at the service boundary; it is not represented as an enforced per-caller ACL.
 - Added regression coverage for substituted Hello frames, bad-tag liveness refresh, and local/remote source-cell spoofing.
 
-### Validation
+### Validation — code head `6c280ff4c67c27dab634f002cd1c5f4fcac965fa`
 
-- Pending CI on the updated PR head. No QEMU/NIC transport claim is added; the fabric remains loopback-tested only.
+- Workspace tests: **521 passed, 0 failed** (all test binaries in the AWEOS CI workspace job).
+- Workspace compilation, formatting, Clippy, UEFI loader check, and security gate: **passed**.
+- QEMU exception-injection self-test: **passed**.
+- Bootable-image smoke test: x86_64 Multiboot2 ISO booted in QEMU and reached the kernel-alive marker.
+- VirtIO runtime check: QEMU exposed a `virtio-blk-pci` device and the kernel booted with it attached; storage/driver contract tests passed. **No actual VirtIO block read/write or persistence test is claimed.**
+- Multi-architecture workflow: x86_64 bare-metal kernel and x86_64 UEFI loader artifacts built. **ARM64 and RISC-V were not built or runtime-tested by this workflow.**
+- Cross-platform AOSIN CLI/GUI installer jobs: Ubuntu and Windows jobs passed.
+- All nine substantive CI workflows on this code head completed successfully. The rustfmt bot's intermediate commit had `action_required` runs, so validation was re-triggered on a maintainer-authored documentation commit after formatting.
+- This log update is documentation-only; the validated Rust source tree is unchanged from code head `6c280ff`.
 
-### CI re-trigger note
+### Remaining blockers and next priorities
 
-- The rustfmt automation formatted the changed Rust files and committed `c162ae3`. GitHub marked the bot-authored workflow runs `action_required` before any validation jobs ran. A follow-up documentation commit is being used to trigger the complete suite on the formatted source; no code is being treated as validated until those runs finish.
+- Per-caller capability authorization is not implemented inside cellnetd. `required_caps` is explicitly documented as metadata until a trusted capability token is supplied by the service boundary.
+- The fabric still uses a loopback-only Transport; no NIC/UDP integration or two-instance network test exists.
+- No real VirtIO block request/completion, read-after-write persistence, or power-loss recovery evidence exists.
+- No per-process page-table roots or checked user-copy path; Ring 3 remains deferred.
+- Next order: (1) per-process address-space roots + checked user copy, (2) timer-driven dispatch, (3) actual VirtIO block I/O and persistence in QEMU, (4) netd UDP wiring and two-instance CellNet mesh.
+- Main remains unchanged. PR #68 is open and draft; external draft PR #64 remains untouched.
