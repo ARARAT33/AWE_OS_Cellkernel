@@ -2,7 +2,7 @@
 //! IPC and failure recovery, driven by explicit ticks and a caller-owned
 //! transport.
 
-use crate::caps::{CapabilityAuthority, CapabilityGrant, CAP_TOKEN_LEN};
+use crate::caps::{CAP_TOKEN_LEN, CapabilityAuthority, CapabilityGrant};
 use crate::directory::{CellOffer, Directory, RemoteCell, RemoteHealth};
 use crate::session::{NodeIdentity, NodeRecord, Session, finished_payload};
 use crate::wire::{
@@ -1044,9 +1044,7 @@ impl CellFabric {
             payload_len: body_len,
             payload: [0u8; MAX_IPC_PAYLOAD],
         };
-        message
-            .payload[..body_len]
-            .copy_from_slice(&payload[IPC_HEADER_LEN + CAP_TOKEN_LEN..]);
+        message.payload[..body_len].copy_from_slice(&payload[IPC_HEADER_LEN + CAP_TOKEN_LEN..]);
         let slot = self
             .incoming
             .iter_mut()
