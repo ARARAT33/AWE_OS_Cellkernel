@@ -403,7 +403,11 @@ fn receiver_rejects_unpublished_remote_source_cell() {
         .session
         .as_mut()
         .expect("session")
-        .seal(MessageType::CellIpc, &body[..IPC_HEADER_LEN + CAP_TOKEN_LEN], &mut wire)
+        .seal(
+            MessageType::CellIpc,
+            &body[..IPC_HEADER_LEN + CAP_TOKEN_LEN],
+            &mut wire,
+        )
         .expect("seal");
     pair.ta.send_to(ADDR_B, &wire[..len]).expect("send");
     pair.pump();
