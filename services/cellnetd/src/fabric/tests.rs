@@ -392,7 +392,7 @@ fn receiver_rejects_unpublished_remote_source_cell() {
     // Bypass the sender API to model a compromised peer claiming an
     // unpublished source cell. The receiving fabric must reject it too.
     let peer_index = pair.a.peer_index(pair.b.node_id()).expect("peer");
-    let mut body = [0u8; IPC_HEADER_LEN + MAX_IPC_PAYLOAD];
+    let mut body = [0u8; IPC_HEADER_LEN + CAP_TOKEN_LEN + MAX_IPC_PAYLOAD];
     body[0..8].copy_from_slice(&42u64.to_le_bytes());
     body[8..16].copy_from_slice(&1u64.to_le_bytes());
     body[16..24].copy_from_slice(&999u64.to_le_bytes());
@@ -403,7 +403,7 @@ fn receiver_rejects_unpublished_remote_source_cell() {
         .session
         .as_mut()
         .expect("session")
-        .seal(MessageType::CellIpc, &body[..IPC_HEADER_LEN], &mut wire)
+        .seal(MessageType::CellIpc, &body[..IPC_HEADER_LEN + CAP_TOKEN_LEN], &mut wire)
         .expect("seal");
     pair.ta.send_to(ADDR_B, &wire[..len]).expect("send");
     pair.pump();
@@ -748,4 +748,304 @@ fn directory_ttl_expires_without_heartbeats() {
     pair.advance(3100);
     pair.a.tick(pair.now, &mut pair.ta);
     assert!(pair.a.directory().get(b_id, 42).is_none());
+}
+
+// ---------------------------------------------------------------------
+// Capability-authorized remote cell IPC (require_ipc_caps = true)
+// ---------------------------------------------------------------------
+
+fn issuer_keypair() -> ([u8; 32], [u8; 64]) {
+    awe_securityd::ed25519_keypair_from_seed(&[0x5E; 32])
+}
+
+fn enforced_pair() -> Pair {
+    Pair::with_config(FabricConfig {
+        publish_policy: permissive_policy(),
+        ..FabricConfig::capability_enforced()
+    })
+}
+
+fn grant_for(
+    issuer_secret: &[u8; 64],
+    node: u64,
+    cell: u64,
+    caps: u64,
+    sequence: u64,
+    now: u64,
+) -> CapabilityGrant {
+    let mut grant = CapabilityGrant {
+        version: 0,
+        grantee_node: node,
+        cell_id: cell,
+        caps,
+        not_before: now.saturating_sub(10),
+        not_after: now.saturating_add(1000),
+        sequence,
+        signature: [0u8; 64],
+    };
+    grant.sign_with(issuer_secret);
+    grant
+}
+
+#[test]
+fn authorized_ipc_flows_in_enforced_mode() {
+    let (issuer_public, issuer_secret) = issuer_keypair();
+    let mut pair = enforced_pair();
+    pair.b
+        .publish_offer(offer(42, cell_kind::SERVICE, 0x3, 0xBEEF))
+        .expect("publish");
+    pair.establish();
+    publish_a_source(&mut pair);
+    pair.tick_both();
+    pair.a.set_capability_authority(issuer_public);
+    pair.b.set_capability_authority(issuer_public);
+
+    let b_id = pair.b.node_id();
+    let a_id = pair.a.node_id();
+    let grant = grant_for(&issuer_secret, a_id, 1001, 0x3, 1, pair.now);
+    pair.a
+        .send_cell_ipc_authorized(
+            crate::CellIpcRequest {
+                to_node: b_id,
+                to_cell: 42,
+                channel: 7,
+                from_cell: 1001,
+            },
+            &grant,
+            b"authorized call",
+            pair.now,
+            &mut pair.ta,
+        )
+        .expect("authorized send");
+    pair.pump();
+
+    let incoming = pair.b.next_incoming().expect("delivered");
+    assert_eq!(incoming.from_node, a_id);
+    assert_eq!(incoming.from_cell, 1001);
+    assert_eq!(incoming.to_cell, 42);
+    assert_eq!(
+        &incoming.payload[..incoming.payload_len],
+        b"authorized call"
+    );
+    assert_eq!(pair.b.stats().ipc_delivered, 1);
+    assert_eq!(pair.b.stats().ipc_dropped, 0);
+}
+
+#[test]
+fn enforced_mode_fails_closed_without_a_grant() {
+    let (issuer_public, _issuer_secret) = issuer_keypair();
+    let mut pair = enforced_pair();
+    pair.b
+        .publish_offer(offer(42, cell_kind::SERVICE, 0x3, 0xBEEF))
+        .expect("publish");
+    pair.establish();
+    publish_a_source(&mut pair);
+    pair.tick_both();
+    pair.a.set_capability_authority(issuer_public);
+    pair.b.set_capability_authority(issuer_public);
+
+    let b_id = pair.b.node_id();
+    // The legacy, grant-free API must be refused in enforced mode.
+    assert_eq!(
+        pair.a.send_cell_ipc(
+            crate::CellIpcRequest {
+                to_node: b_id,
+                to_cell: 42,
+                channel: 1,
+                from_cell: 1001,
+            },
+            b"no token",
+            pair.now,
+            &mut pair.ta,
+        ),
+        Err(CellNetError::CapabilityDenied)
+    );
+    assert!(pair.b.next_incoming().is_none());
+}
+
+#[test]
+fn insufficient_grant_caps_are_denied_on_send() {
+    let (issuer_public, issuer_secret) = issuer_keypair();
+    let mut pair = enforced_pair();
+    pair.b
+        .publish_offer(offer(42, cell_kind::SERVICE, 0x3, 0xBEEF))
+        .expect("publish");
+    pair.establish();
+    publish_a_source(&mut pair);
+    pair.tick_both();
+    pair.a.set_capability_authority(issuer_public);
+
+    let b_id = pair.b.node_id();
+    let a_id = pair.a.node_id();
+    // Grant covers only 0x1; the destination cell requires 0x3.
+    let grant = grant_for(&issuer_secret, a_id, 1001, 0x1, 1, pair.now);
+    assert_eq!(
+        pair.a.send_cell_ipc_authorized(
+            crate::CellIpcRequest {
+                to_node: b_id,
+                to_cell: 42,
+                channel: 1,
+                from_cell: 1001,
+            },
+            &grant,
+            b"under-caps",
+            pair.now,
+            &mut pair.ta,
+        ),
+        Err(CellNetError::CapabilityDenied)
+    );
+}
+
+#[test]
+fn expired_grant_is_rejected_on_send() {
+    let (issuer_public, issuer_secret) = issuer_keypair();
+    let mut pair = enforced_pair();
+    pair.b
+        .publish_offer(offer(42, cell_kind::SERVICE, 0x3, 0xBEEF))
+        .expect("publish");
+    pair.establish();
+    publish_a_source(&mut pair);
+    pair.tick_both();
+    pair.a.set_capability_authority(issuer_public);
+
+    let b_id = pair.b.node_id();
+    let a_id = pair.a.node_id();
+    let mut grant = grant_for(&issuer_secret, a_id, 1001, 0x3, 1, pair.now);
+    grant.not_after = pair.now.saturating_sub(1);
+    grant.sign_with(&issuer_secret);
+    assert_eq!(
+        pair.a.send_cell_ipc_authorized(
+            crate::CellIpcRequest {
+                to_node: b_id,
+                to_cell: 42,
+                channel: 1,
+                from_cell: 1001,
+            },
+            &grant,
+            b"expired",
+            pair.now,
+            &mut pair.ta,
+        ),
+        Err(CellNetError::CapabilityExpired)
+    );
+}
+
+#[test]
+fn grant_sequence_is_single_use_on_send() {
+    let (issuer_public, issuer_secret) = issuer_keypair();
+    let mut pair = enforced_pair();
+    pair.b
+        .publish_offer(offer(42, cell_kind::SERVICE, 0x3, 0xBEEF))
+        .expect("publish");
+    pair.establish();
+    publish_a_source(&mut pair);
+    pair.tick_both();
+    pair.a.set_capability_authority(issuer_public);
+    pair.b.set_capability_authority(issuer_public);
+
+    let b_id = pair.b.node_id();
+    let a_id = pair.a.node_id();
+    let grant = grant_for(&issuer_secret, a_id, 1001, 0x3, 1, pair.now);
+    pair.a
+        .send_cell_ipc_authorized(
+            crate::CellIpcRequest {
+                to_node: b_id,
+                to_cell: 42,
+                channel: 1,
+                from_cell: 1001,
+            },
+            &grant,
+            b"first",
+            pair.now,
+            &mut pair.ta,
+        )
+        .expect("first send");
+    assert_eq!(
+        pair.a.send_cell_ipc_authorized(
+            crate::CellIpcRequest {
+                to_node: b_id,
+                to_cell: 42,
+                channel: 1,
+                from_cell: 1001,
+            },
+            &grant,
+            b"second",
+            pair.now,
+            &mut pair.ta,
+        ),
+        Err(CellNetError::CapabilityReplayRejected)
+    );
+}
+
+#[test]
+fn grant_from_a_foreign_issuer_fails_verification() {
+    let (issuer_public, _issuer_secret) = issuer_keypair();
+    let (_other_public, other_secret) = awe_securityd::ed25519_keypair_from_seed(&[0x6F; 32]);
+    let mut pair = enforced_pair();
+    pair.b
+        .publish_offer(offer(42, cell_kind::SERVICE, 0x3, 0xBEEF))
+        .expect("publish");
+    pair.establish();
+    publish_a_source(&mut pair);
+    pair.tick_both();
+    pair.a.set_capability_authority(issuer_public);
+
+    let b_id = pair.b.node_id();
+    let a_id = pair.a.node_id();
+    let grant = grant_for(&other_secret, a_id, 1001, 0x3, 1, pair.now);
+    assert_eq!(
+        pair.a.send_cell_ipc_authorized(
+            crate::CellIpcRequest {
+                to_node: b_id,
+                to_cell: 42,
+                channel: 1,
+                from_cell: 1001,
+            },
+            &grant,
+            b"forged",
+            pair.now,
+            &mut pair.ta,
+        ),
+        Err(CellNetError::BadSignature)
+    );
+}
+
+#[test]
+fn receiver_drops_a_forged_capability_token() {
+    let (issuer_public, _issuer_secret) = issuer_keypair();
+    let mut pair = enforced_pair();
+    pair.b
+        .publish_offer(offer(42, cell_kind::SERVICE, 0x3, 0xBEEF))
+        .expect("publish");
+    pair.establish();
+    publish_a_source(&mut pair);
+    pair.tick_both();
+    pair.b.set_capability_authority(issuer_public);
+
+    // A compromised sender seals a valid-looking IPC payload whose
+    // capability token is all zeros: the receiver must drop it.
+    let peer_index = pair.a.peer_index(pair.b.node_id()).expect("peer");
+    let mut body = [0u8; IPC_HEADER_LEN + CAP_TOKEN_LEN + MAX_IPC_PAYLOAD];
+    body[0..8].copy_from_slice(&42u64.to_le_bytes());
+    body[8..16].copy_from_slice(&1u64.to_le_bytes());
+    body[16..24].copy_from_slice(&1001u64.to_le_bytes());
+    let mut wire = [0u8; MAX_ENVELOPE_WIRE];
+    let len = pair.a.peers[peer_index]
+        .as_mut()
+        .expect("peer")
+        .session
+        .as_mut()
+        .expect("session")
+        .seal(
+            MessageType::CellIpc,
+            &body[..IPC_HEADER_LEN + CAP_TOKEN_LEN],
+            &mut wire,
+        )
+        .expect("seal");
+    pair.ta.send_to(ADDR_B, &wire[..len]).expect("send");
+    pair.pump();
+
+    assert!(pair.b.next_incoming().is_none());
+    assert_eq!(pair.b.stats().ipc_dropped, 1);
+    assert_eq!(pair.b.stats().ipc_delivered, 0);
 }
