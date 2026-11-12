@@ -298,7 +298,7 @@ mod tests {
 
     #[test]
     fn replay_table_is_bounded_and_fails_closed() {
-        let (_, public) = issuer();
+        let (public, _) = issuer();
         let mut authority = CapabilityAuthority::new(public);
         for sequence in 0..MAX_USED_GRANTS as u64 {
             let (grant, _) = signed_grant(sequence, 0xFF);
