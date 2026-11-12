@@ -346,3 +346,7 @@ Validated code head: `58c2dfd596c708c0b4e3426c37c77471aa4aa67f`.
 ### Validation
 
 - Pending CI on the updated PR head. No QEMU/NIC transport claim is added; the fabric remains loopback-tested only.
+
+### CI re-trigger note
+
+- The rustfmt automation formatted the changed Rust files and committed `c162ae3`. GitHub marked the bot-authored workflow runs `action_required` before any validation jobs ran. A follow-up documentation commit is being used to trigger the complete suite on the formatted source; no code is being treated as validated until those runs finish.
