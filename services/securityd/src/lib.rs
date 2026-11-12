@@ -7,7 +7,9 @@
 
 pub mod crypto;
 pub use crypto::{
-    ed25519_keypair_from_seed, ed25519_sign, ed25519_verify, hmac_sha256, sha256, sha512,
+    chacha20poly1305_decrypt, chacha20poly1305_encrypt, ed25519_keypair_from_seed, ed25519_sign,
+    ed25519_verify, hkdf_sha256, hmac_sha256, sha256, sha512, x25519_public_from_secret,
+    x25519_shared,
 };
 
 pub const MAX_PCR_REGISTERS: usize = 24;

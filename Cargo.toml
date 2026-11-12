@@ -8,6 +8,7 @@ members = [
     "kernel-bin",
     "services/nexus",
     "services/netd",
+    "services/cellnetd",
     "services/storaged",
     "services/securityd",
     "services/driverd",
