@@ -2,6 +2,7 @@
 //! IPC and failure recovery, driven by explicit ticks and a caller-owned
 //! transport.
 
+use crate::caps::{CapabilityAuthority, CapabilityGrant, CAP_TOKEN_LEN};
 use crate::directory::{CellOffer, Directory, RemoteCell, RemoteHealth};
 use crate::session::{NodeIdentity, NodeRecord, Session, finished_payload};
 use crate::wire::{
@@ -111,6 +112,11 @@ pub struct FabricConfig {
     pub publish_policy: PublishPolicy,
     /// Whether `reconnect_due` reports persistent peers after backoff.
     pub auto_reconnect: bool,
+    /// Require a valid, single-use `CapabilityGrant` on every remote cell
+    /// IPC call, verified against the installed capability authority, on
+    /// both the send and the receive path. When set, the unauthorized
+    /// `send_cell_ipc` API fails closed with `CapabilityDenied`.
+    pub require_ipc_caps: bool,
 }
 
 impl FabricConfig {
@@ -126,6 +132,27 @@ impl FabricConfig {
             trust: TrustPolicy::Open,
             publish_policy: PublishPolicy::deny_all(),
             auto_reconnect: true,
+            require_ipc_caps: false,
+        }
+    }
+
+    /// Development timings with mandatory per-call capability grants.
+    /// This is the production IPC posture; use it unless a test
+    /// explicitly exercises the legacy unauthenticated compatibility
+    /// path.
+    pub const fn capability_enforced() -> Self {
+        Self {
+            heartbeat_interval: 100,
+            suspect_after: 350,
+            offline_after: 800,
+            handshake_timeout: 200,
+            backoff_base: 100,
+            backoff_max: 1600,
+            offer_ttl: 3000,
+            trust: TrustPolicy::Open,
+            publish_policy: PublishPolicy::deny_all(),
+            auto_reconnect: true,
+            require_ipc_caps: true,
         }
     }
 }
@@ -206,6 +233,8 @@ pub struct CellFabric {
     local_offers: [Option<CellOffer>; MAX_LOCAL_OFFERS],
     announce_sequence: u64,
     trusted_keys: [Option<[u8; 32]>; MAX_TRUSTED_KEYS],
+    /// Capability issuer used to verify per-call IPC grants.
+    cap_authority: Option<CapabilityAuthority>,
     incoming: [Option<IncomingIpc>; INCOMING_QUEUE],
     events: [Option<FabricEvent>; EVENT_QUEUE],
     stats: FabricStats,
@@ -222,6 +251,7 @@ impl CellFabric {
             local_offers: [None; MAX_LOCAL_OFFERS],
             announce_sequence: 0,
             trusted_keys: [None; MAX_TRUSTED_KEYS],
+            cap_authority: None,
             incoming: [None; INCOMING_QUEUE],
             events: [None; EVENT_QUEUE],
             stats: FabricStats::default(),
@@ -277,6 +307,15 @@ impl CellFabric {
             .ok_or(CellNetError::NodeTableFull)?;
         *slot = Some(public_key);
         Ok(())
+    }
+
+    /// Install the capability authority: the Ed25519 public key of the
+    /// issuer whose `CapabilityGrant` tokens this fabric accepts. Required
+    /// before any remote cell IPC is possible while
+    /// `FabricConfig::require_ipc_caps` is set; without an authority every
+    /// capability-verified call fails closed with `CapabilityDenied`.
+    pub fn set_capability_authority(&mut self, issuer_key: [u8; 32]) {
+        self.cap_authority = Some(CapabilityAuthority::new(issuer_key));
     }
 
     fn is_trusted(&self, public_key: &[u8; 32]) -> bool {
@@ -407,6 +446,15 @@ impl CellFabric {
             .iter()
             .flatten()
             .any(|o| o.cell_id == cell_id)
+    }
+
+    fn published_required_caps(&self, cell_id: u64) -> u64 {
+        self.local_offers
+            .iter()
+            .flatten()
+            .find(|o| o.cell_id == cell_id)
+            .map(|o| o.required_caps)
+            .unwrap_or(0)
     }
 
     /// Build a signed discovery announcement for broadcast.
@@ -891,7 +939,7 @@ impl CellFabric {
                 }
                 Ok(())
             }
-            MessageType::CellIpc => self.handle_cell_ipc(index, &buffer[range]),
+            MessageType::CellIpc => self.handle_cell_ipc(index, &buffer[range], now),
             MessageType::DirectorySync => self.handle_directory_sync(index, &buffer[range], now),
             _ => {
                 self.stats.frames_malformed += 1;
@@ -938,8 +986,15 @@ impl CellFabric {
         Ok(())
     }
 
-    fn handle_cell_ipc(&mut self, index: usize, payload: &[u8]) -> Result<(), CellNetError> {
-        if payload.len() < IPC_HEADER_LEN || payload.len() > IPC_HEADER_LEN + MAX_IPC_PAYLOAD {
+    fn handle_cell_ipc(
+        &mut self,
+        index: usize,
+        payload: &[u8],
+        now: u64,
+    ) -> Result<(), CellNetError> {
+        if payload.len() < IPC_HEADER_LEN + CAP_TOKEN_LEN
+            || payload.len() > IPC_HEADER_LEN + CAP_TOKEN_LEN + MAX_IPC_PAYLOAD
+        {
             self.stats.ipc_dropped += 1;
             return Err(CellNetError::Malformed);
         }
@@ -959,7 +1014,28 @@ impl CellFabric {
             self.stats.ipc_dropped += 1;
             return Err(CellNetError::DestinationNotPublished);
         }
-        let body_len = payload.len() - IPC_HEADER_LEN;
+
+        // Per-caller capability authorization. The token is carried in the
+        // authenticated (encrypted) payload and must be a valid, single-use
+        // grant issued by this node's capability authority for the
+        // authenticated peer's cell, covering the destination cell's
+        // advertised requirements.
+        if self.config.require_ipc_caps {
+            let mut token = [0u8; CAP_TOKEN_LEN];
+            token.copy_from_slice(&payload[IPC_HEADER_LEN..IPC_HEADER_LEN + CAP_TOKEN_LEN]);
+            let grant = CapabilityGrant::decode_token(&token);
+            let required_caps = self.published_required_caps(to_cell);
+            let authority = self
+                .cap_authority
+                .as_mut()
+                .ok_or(CellNetError::CapabilityDenied)?;
+            if let Err(error) = authority.verify(&grant, now, from_node, from_cell, required_caps) {
+                self.stats.ipc_dropped += 1;
+                return Err(error);
+            }
+        }
+
+        let body_len = payload.len() - IPC_HEADER_LEN - CAP_TOKEN_LEN;
         let mut message = IncomingIpc {
             from_node,
             from_cell,
@@ -968,7 +1044,9 @@ impl CellFabric {
             payload_len: body_len,
             payload: [0u8; MAX_IPC_PAYLOAD],
         };
-        message.payload[..body_len].copy_from_slice(&payload[IPC_HEADER_LEN..]);
+        message
+            .payload[..body_len]
+            .copy_from_slice(&payload[IPC_HEADER_LEN + CAP_TOKEN_LEN..]);
         let slot = self
             .incoming
             .iter_mut()
@@ -1073,12 +1151,45 @@ impl CellFabric {
     /// Send an encrypted, authenticated IPC message to a discovered remote
     /// cell. The source must be a currently published local cell, the
     /// destination must exist in the directory, and the session must be
-    /// established. Caller capability authorization remains an upstream
-    /// service-boundary responsibility; this transport API does not accept
-    /// or validate caller capability tokens.
+    /// established.
+    ///
+    /// This API carries **no capability grant**: when
+    /// `FabricConfig::require_ipc_caps` is set it fails closed with
+    /// `CapabilityDenied`. Use `send_cell_ipc_authorized` in that mode.
     pub fn send_cell_ipc(
         &mut self,
         request: CellIpcRequest,
+        payload: &[u8],
+        now: u64,
+        transport: &mut impl Transport,
+    ) -> Result<(), CellNetError> {
+        self.send_cell_ipc_inner(request, None, payload, now, transport)
+    }
+
+    /// Send an encrypted, authenticated, capability-authorized IPC message
+    /// to a discovered remote cell.
+    ///
+    /// `grant` must be a valid, single-use `CapabilityGrant` issued by this
+    /// node's capability authority (see `set_capability_authority`) for the
+    /// local caller cell `from_cell`, whose capability set covers the
+    /// destination cell's advertised `required_caps`. The grant is consumed
+    /// on this node before the message is sealed, so replaying the same
+    /// grant sequence fails with `CapabilityReplayRejected`.
+    pub fn send_cell_ipc_authorized(
+        &mut self,
+        request: CellIpcRequest,
+        grant: &CapabilityGrant,
+        payload: &[u8],
+        now: u64,
+        transport: &mut impl Transport,
+    ) -> Result<(), CellNetError> {
+        self.send_cell_ipc_inner(request, Some(*grant), payload, now, transport)
+    }
+
+    fn send_cell_ipc_inner(
+        &mut self,
+        request: CellIpcRequest,
+        grant: Option<CapabilityGrant>,
         payload: &[u8],
         now: u64,
         transport: &mut impl Transport,
@@ -1095,27 +1206,48 @@ impl CellFabric {
         if !self.is_published(from_cell) {
             return Err(CellNetError::SourceNotPublished);
         }
-        if self.directory.get(to_node, to_cell).is_none() {
-            return Err(CellNetError::UnknownRemoteCell);
-        }
+        let destination = self
+            .directory
+            .get(to_node, to_cell)
+            .ok_or(CellNetError::UnknownRemoteCell)?;
         let index = self.peer_index(to_node).ok_or(CellNetError::UnknownNode)?;
         let peer = self.peers[index].as_mut().expect("peer");
         if peer.phase != PeerPhase::Secured {
             return Err(CellNetError::NotSecured);
         }
 
-        let mut body = [0u8; IPC_HEADER_LEN + MAX_IPC_PAYLOAD];
+        // Capability authorization (fail-closed when enforced).
+        let mut token = [0u8; CAP_TOKEN_LEN];
+        if self.config.require_ipc_caps {
+            let authority = self
+                .cap_authority
+                .as_mut()
+                .ok_or(CellNetError::CapabilityDenied)?;
+            let grant = grant.ok_or(CellNetError::CapabilityDenied)?;
+            authority.verify(
+                &grant,
+                now,
+                self.identity.node_id,
+                from_cell,
+                destination.offer.required_caps,
+            )?;
+            grant.encode_token(&mut token);
+        }
+
+        let mut body = [0u8; IPC_HEADER_LEN + CAP_TOKEN_LEN + MAX_IPC_PAYLOAD];
         body[0..8].copy_from_slice(&to_cell.to_le_bytes());
         body[8..16].copy_from_slice(&channel.to_le_bytes());
         body[16..24].copy_from_slice(&from_cell.to_le_bytes());
-        body[IPC_HEADER_LEN..IPC_HEADER_LEN + payload.len()].copy_from_slice(payload);
+        body[IPC_HEADER_LEN..IPC_HEADER_LEN + CAP_TOKEN_LEN].copy_from_slice(&token);
+        body[IPC_HEADER_LEN + CAP_TOKEN_LEN..IPC_HEADER_LEN + CAP_TOKEN_LEN + payload.len()]
+            .copy_from_slice(payload);
 
         let session = peer.session.as_mut().ok_or(CellNetError::NotSecured)?;
         let mut wire = [0u8; MAX_ENVELOPE_WIRE];
         let len = session
             .seal(
                 MessageType::CellIpc,
-                &body[..IPC_HEADER_LEN + payload.len()],
+                &body[..IPC_HEADER_LEN + CAP_TOKEN_LEN + payload.len()],
                 &mut wire,
             )
             .map_err(|_| CellNetError::Malformed)?;
