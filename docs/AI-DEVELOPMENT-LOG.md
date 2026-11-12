@@ -332,3 +332,17 @@ Validated code head: `58c2dfd596c708c0b4e3426c37c77471aa4aa67f`.
 2. Timer-driven dispatch loop on the unified ProcessManager.
 3. VirtIO block request/completion with read-after-write persistence in QEMU.
 4. netd UDP path in QEMU; then bind cellnetd to it and run a two-instance mesh.
+
+## 2026-11-12 — CellNet trust-boundary hardening follow-up
+
+### Changes
+
+- accept_hello now rechecks node-id/public-key binding, trust policy and Ed25519 signature, and accepts only the exact Hello frame previously validated by inspect_hello.
+- Peer liveness is refreshed only after the AEAD envelope and anti-replay checks succeed; bad-tag traffic can no longer keep a peer alive.
+- Remote IPC now requires the claimed source cell to exist in that authenticated peer's directory; outbound IPC requires a currently published local source cell.
+- Clarified that required_caps is advertised metadata until a trusted caller-capability token is integrated at the service boundary; it is not represented as an enforced per-caller ACL.
+- Added regression coverage for substituted Hello frames, bad-tag liveness refresh, and local/remote source-cell spoofing.
+
+### Validation
+
+- Pending CI on the updated PR head. No QEMU/NIC transport claim is added; the fabric remains loopback-tested only.

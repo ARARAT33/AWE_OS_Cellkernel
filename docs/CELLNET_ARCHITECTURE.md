@@ -31,7 +31,9 @@ across machines.
 5. **Publish-only visibility.** A node advertises exactly the cells its
    `PublishPolicy` permits (kind mask + capability mask, deny-all by
    default). Remote peers can send IPC only to cells that are currently
-   published.
+   published. The advertised required-capability mask is metadata for the
+   upstream authorization boundary; the fabric API does not yet accept a
+   trusted per-caller capability token.
 
 ## Identity and node binding
 

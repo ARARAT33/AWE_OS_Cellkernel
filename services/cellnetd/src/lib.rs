@@ -125,6 +125,8 @@ pub enum CellNetError {
     UnknownRemoteCell,
     /// Destination cell is not published by this node.
     DestinationNotPublished,
+    /// Claimed source cell is not in the authenticated publisher's directory.
+    SourceNotPublished,
     /// Directory cannot hold more remote cells.
     DirectoryFull,
     /// Local offer table is full.

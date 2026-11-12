@@ -21,7 +21,8 @@ pub struct CellOffer {
     pub state: u8,
     pub abi_major: u16,
     pub abi_minor: u16,
-    /// Kernel capabilities a caller must present to use this cell.
+    /// Capability requirements advertised to the upstream authorization layer.
+    /// The transport-neutral fabric does not validate a caller's capability set.
     pub required_caps: u64,
     /// First 8 bytes of the SHA-256 of the versioned interface name.
     pub interface_hash: u64,

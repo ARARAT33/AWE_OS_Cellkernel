@@ -196,6 +196,57 @@ impl Pair {
     }
 }
 
+fn publish_a_source(pair: &mut Pair) {
+    pair.a
+        .publish_offer(offer(1001, cell_kind::APPLICATION, 0, 0xA001))
+        .expect("publish A source cell");
+    pair.exchange_announcements();
+}
+
+#[test]
+fn accept_hello_requires_the_exact_inspected_signed_frame() {
+    let mut pair = Pair::new();
+    let (hello_nonce, hello_secret) = pair.fresh_nonce();
+    let mut hello = HelloFrame {
+        node_pubkey: pair.a.public_key(),
+        node_id: pair.a.node_id(),
+        x25519_public: awe_securityd::x25519_public_from_secret(&hello_secret),
+        nonce: hello_nonce,
+        endpoint: ADDR_A,
+        tick: pair.now,
+        signature: [0; 64],
+    };
+    let mut hello_wire = [0u8; HELLO_LEN];
+    encode_hello(&hello, &mut hello_wire);
+    hello.signature = pair.a.identity.sign(&hello_wire[..HELLO_SIGNED_LEN]);
+    encode_hello(&hello, &mut hello_wire);
+
+    pair.b.inspect_hello(ADDR_A, &hello_wire, pair.now).expect("inspect");
+
+    let (other_nonce, other_secret) = pair.fresh_nonce();
+    let mut other = HelloFrame {
+        node_pubkey: pair.a.public_key(),
+        node_id: pair.a.node_id(),
+        x25519_public: awe_securityd::x25519_public_from_secret(&other_secret),
+        nonce: other_nonce,
+        endpoint: ADDR_A,
+        tick: pair.now + 1,
+        signature: [0; 64],
+    };
+    let mut other_wire = [0u8; HELLO_LEN];
+    encode_hello(&other, &mut other_wire);
+    other.signature = pair.a.identity.sign(&other_wire[..HELLO_SIGNED_LEN]);
+    encode_hello(&other, &mut other_wire);
+
+    assert_eq!(
+        pair.b.accept_hello(&other_wire, [0x55; 32], [0x66; 32], pair.now, &mut pair.tb),
+        Err(CellNetError::Malformed)
+    );
+    pair.b
+        .accept_hello(&hello_wire, [0x77; 32], [0x88; 32], pair.now, &mut pair.tb)
+        .expect("accept exact inspected Hello");
+}
+
 #[test]
 fn announcement_discovers_node_and_cells() {
     let mut pair = Pair::new();
@@ -245,6 +296,7 @@ fn handshake_establishes_session_and_encrypted_ipc_flows() {
         .publish_offer(offer(42, cell_kind::SERVICE, 0x0, 0xBEEF))
         .expect("publish");
     pair.establish();
+    publish_a_source(&mut pair);
 
     let b_id = pair.b.node_id();
     let a_id = pair.a.node_id();
@@ -276,7 +328,7 @@ fn handshake_establishes_session_and_encrypted_ipc_flows() {
     assert_eq!(incoming.from_cell, 1001);
     assert_eq!(&incoming.payload[..incoming.payload_len], b"read sector 0");
 
-    // Reply path B -> A: A must publish a cell first and re-announce.
+    // Refresh A's published offer and re-announce before the reply path.
     pair.a
         .publish_offer(offer(1001, cell_kind::APPLICATION, 0x0, 0xF00D))
         .expect("publish a");
@@ -305,12 +357,69 @@ fn handshake_establishes_session_and_encrypted_ipc_flows() {
 }
 
 #[test]
+fn send_rejects_unpublished_local_source_cell() {
+    let mut pair = Pair::new();
+    pair.b
+        .publish_offer(offer(42, cell_kind::SERVICE, 0, 0xBEEF))
+        .expect("publish destination");
+    pair.establish();
+
+    let result = pair.a.send_cell_ipc(
+        crate::CellIpcRequest {
+            to_node: pair.b.node_id(),
+            to_cell: 42,
+            channel: 1,
+            from_cell: 999,
+        },
+        b"must be denied",
+        pair.now,
+        &mut pair.ta,
+    );
+    assert_eq!(result, Err(CellNetError::SourceNotPublished));
+}
+
+#[test]
+fn receiver_rejects_unpublished_remote_source_cell() {
+    let mut pair = Pair::new();
+    pair.b
+        .publish_offer(offer(42, cell_kind::SERVICE, 0, 0xBEEF))
+        .expect("publish destination");
+    pair.establish();
+
+    // Bypass the sender API to model a compromised peer claiming an
+    // unpublished source cell. The receiving fabric must reject it too.
+    let peer_index = pair.a.peer_index(pair.b.node_id()).expect("peer");
+    let mut body = [0u8; IPC_HEADER_LEN + MAX_IPC_PAYLOAD];
+    body[0..8].copy_from_slice(&42u64.to_le_bytes());
+    body[8..16].copy_from_slice(&1u64.to_le_bytes());
+    body[16..24].copy_from_slice(&999u64.to_le_bytes());
+    let mut wire = [0u8; MAX_ENVELOPE_WIRE];
+    let len = pair.a.peers[peer_index]
+        .as_mut().expect("peer")
+        .session.as_mut().expect("session")
+        .seal(MessageType::CellIpc, &body[..IPC_HEADER_LEN], &mut wire)
+        .expect("seal");
+    pair.ta.send_to(ADDR_B, &wire[..len]).expect("send");
+    pair.pump();
+
+    assert!(pair.b.next_incoming().is_none());
+    assert_eq!(pair.b.stats().ipc_dropped, 1);
+    assert_eq!(pair.b.stats().ipc_delivered, 0);
+}
+
+#[test]
 fn tampered_ciphertext_is_rejected_and_counted() {
     let mut pair = Pair::new();
     pair.b
         .publish_offer(offer(42, cell_kind::SERVICE, 0x0, 0xBEEF))
         .expect("publish");
     pair.establish();
+    publish_a_source(&mut pair);
+
+    let a_id = pair.a.node_id();
+    let last_rx = pair.b.peers.iter().flatten()
+        .find(|peer| peer.node_id == a_id).expect("peer").last_rx_tick;
+    pair.advance(1);
 
     let b_id = pair.b.node_id();
     pair.a
@@ -342,6 +451,9 @@ fn tampered_ciphertext_is_rejected_and_counted() {
 
     assert!(pair.b.next_incoming().is_none());
     assert_eq!(pair.b.stats().frames_decrypt_failed, 1);
+    let current_rx = pair.b.peers.iter().flatten()
+        .find(|peer| peer.node_id == a_id).expect("peer").last_rx_tick;
+    assert_eq!(current_rx, last_rx, "bad-tag traffic must not refresh liveness");
 }
 
 #[test]
@@ -351,6 +463,7 @@ fn replayed_frame_is_rejected_and_counted() {
         .publish_offer(offer(42, cell_kind::SERVICE, 0x0, 0xBEEF))
         .expect("publish");
     pair.establish();
+    publish_a_source(&mut pair);
 
     let b_id = pair.b.node_id();
     pair.a
@@ -408,6 +521,7 @@ fn ipc_to_unpublished_cell_is_dropped() {
         .publish_offer(offer(42, cell_kind::SERVICE, 0x0, 0xBEEF))
         .expect("publish");
     pair.establish();
+    publish_a_source(&mut pair);
     pair.tick_both();
 
     // B withdraws the cell but A still holds a stale directory entry.

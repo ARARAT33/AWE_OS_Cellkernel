@@ -5,7 +5,7 @@
 use crate::directory::{CellOffer, Directory, RemoteCell, RemoteHealth};
 use crate::session::{NodeIdentity, NodeRecord, Session, finished_payload};
 use crate::wire::{
-    ANNOUNCE_SIGNED_LEN, AnnounceFrame, HELLO_ACK_SIGNED_LEN, HELLO_SIGNED_LEN, HelloAckFrame,
+    ANNOUNCE_SIGNED_LEN, AnnounceFrame, HELLO_ACK_SIGNED_LEN, HELLO_LEN, HELLO_SIGNED_LEN, HelloAckFrame,
     HelloFrame, IPC_HEADER_LEN, MAX_ENVELOPE_PAYLOAD, MessageType, decode_announce, decode_hello,
     decode_hello_ack, encode_announce, encode_hello, encode_hello_ack,
 };
@@ -154,6 +154,8 @@ struct Peer {
     persistent: bool,
     session: Option<Session>,
     handshake: Option<PendingHandshake>,
+    /// Exact Hello bytes accepted by inspect_hello and awaiting supervisor approval.
+    pending_hello: Option<[u8; HELLO_LEN]>,
     /// Transcript hash of the completed handshake, kept until the peer's
     /// Finished message has been verified.
     pending_transcript: Option<[u8; 32]>,
@@ -174,6 +176,7 @@ impl Peer {
             persistent,
             session: None,
             handshake: None,
+            pending_hello: None,
             pending_transcript: None,
             needs_sync: false,
             last_rx_tick: 0,
@@ -626,6 +629,9 @@ impl CellFabric {
             .expect("peer");
         peer.address = source;
         peer.last_rx_tick = now;
+        let mut validated_hello = [0u8; HELLO_LEN];
+        validated_hello.copy_from_slice(bytes);
+        peer.pending_hello = Some(validated_hello);
         Ok(frame)
     }
 
@@ -641,9 +647,39 @@ impl CellFabric {
         transport: &mut impl Transport,
     ) -> Result<(), CellNetError> {
         let frame = decode_hello(hello_bytes)?;
+        if frame.node_id == self.identity.node_id
+            || frame.node_id != node_id_for_pubkey(&frame.node_pubkey)
+        {
+            self.stats.frames_bad_signature += 1;
+            return Err(CellNetError::BadNodeBinding);
+        }
+        if !self.is_trusted(&frame.node_pubkey) {
+            self.stats.frames_untrusted += 1;
+            return Err(CellNetError::Untrusted);
+        }
+        if !awe_securityd::ed25519_verify(
+            &frame.node_pubkey,
+            &hello_bytes[..HELLO_SIGNED_LEN],
+            &frame.signature,
+        ) {
+            self.stats.frames_bad_signature += 1;
+            return Err(CellNetError::BadSignature);
+        }
+        let record = self.node(frame.node_id).ok_or(CellNetError::UnknownNode)?;
+        if record.public_key != frame.node_pubkey {
+            self.stats.frames_bad_signature += 1;
+            return Err(CellNetError::BadNodeBinding);
+        }
         let index = self
             .peer_index(frame.node_id)
             .ok_or(CellNetError::UnknownNode)?;
+        let pending = self.peers[index]
+            .as_ref()
+            .and_then(|peer| peer.pending_hello.as_ref())
+            .ok_or(CellNetError::Malformed)?;
+        if &pending[..] != hello_bytes {
+            return Err(CellNetError::Malformed);
+        }
 
         let x25519_public = awe_securityd::x25519_public_from_secret(&x25519_secret);
         let mut ack = HelloAckFrame {
@@ -688,6 +724,7 @@ impl CellFabric {
             hello_ack_signed,
             last_attempt_tick: now,
         });
+        peer.pending_hello = None;
         peer.session = Some(session);
         peer.pending_transcript = Some(transcript);
         peer.phase = PeerPhase::AwaitingConfirm;
@@ -826,7 +863,6 @@ impl CellFabric {
 
         let (message_type, range) = {
             let peer = self.peers[index].as_mut().expect("peer");
-            peer.last_rx_tick = now;
             let session = peer.session.as_mut().ok_or(CellNetError::NotSecured)?;
             match session.open(buffer) {
                 Ok(ok) => ok,
@@ -840,6 +876,9 @@ impl CellFabric {
                 }
             }
         };
+
+        // Only an authenticated, non-replayed envelope counts as peer activity.
+        self.peers[index].as_mut().expect("peer").last_rx_tick = now;
 
         match message_type {
             MessageType::Finished => self.handle_finished(index, &buffer[range], now),
@@ -907,6 +946,13 @@ impl CellFabric {
         let to_cell = u64::from_le_bytes(payload[0..8].try_into().expect("8 bytes"));
         let channel = u64::from_le_bytes(payload[8..16].try_into().expect("8 bytes"));
         let from_cell = u64::from_le_bytes(payload[16..24].try_into().expect("8 bytes"));
+        let from_node = self.peers[index].as_ref().expect("peer").node_id;
+
+        // A peer may identify only cells that it currently publishes.
+        if self.directory.get(from_node, from_cell).is_none() {
+            self.stats.ipc_dropped += 1;
+            return Err(CellNetError::SourceNotPublished);
+        }
 
         // Remote peers may only address cells this node actually publishes.
         if !self.is_published(to_cell) {
@@ -914,7 +960,6 @@ impl CellFabric {
             return Err(CellNetError::DestinationNotPublished);
         }
         let body_len = payload.len() - IPC_HEADER_LEN;
-        let from_node = self.peers[index].as_ref().expect("peer").node_id;
         let mut message = IncomingIpc {
             from_node,
             from_cell,
@@ -1026,8 +1071,11 @@ impl CellFabric {
     // ------------------------------------------------------------------
 
     /// Send an encrypted, authenticated IPC message to a discovered remote
-    /// cell. The destination must exist in the directory and the session
-    /// must be established.
+    /// cell. The source must be a currently published local cell, the
+    /// destination must exist in the directory, and the session must be
+    /// established. Caller capability authorization remains an upstream
+    /// service-boundary responsibility; this transport API does not accept
+    /// or validate caller capability tokens.
     pub fn send_cell_ipc(
         &mut self,
         request: CellIpcRequest,
@@ -1043,6 +1091,9 @@ impl CellFabric {
         } = request;
         if payload.len() > MAX_IPC_PAYLOAD {
             return Err(CellNetError::Malformed);
+        }
+        if !self.is_published(from_cell) {
+            return Err(CellNetError::SourceNotPublished);
         }
         if self.directory.get(to_node, to_cell).is_none() {
             return Err(CellNetError::UnknownRemoteCell);
