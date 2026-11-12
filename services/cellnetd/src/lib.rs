@@ -8,6 +8,8 @@
 //!   X25519 key agreement, HKDF-SHA256 key schedule),
 //! - AEAD-protected remote cell IPC envelopes (ChaCha20-Poly1305) with a
 //!   sliding anti-replay window,
+//! - Ed25519 capability grants authorizing every remote cell IPC call
+//!   against the destination cell's advertised capability requirements,
 //! - heartbeat-based health tracking, exponential-backoff reconnect and
 //!   snapshot directory synchronization for network-partition recovery.
 //!
@@ -25,11 +27,16 @@
 #[cfg(test)]
 extern crate std;
 
+mod caps;
 mod directory;
 mod fabric;
 mod session;
 mod wire;
 
+pub use caps::{
+    CAP_GRANT_VERSION, CAP_SIG_LEN, CAP_SIGNED_LEN, CAP_TOKEN_LEN, CapabilityAuthority,
+    CapabilityGrant, MAX_USED_GRANTS,
+};
 pub use directory::{CellOffer, Directory, RemoteCell, RemoteHealth};
 pub use fabric::{
     CellFabric, CellIpcRequest, FabricConfig, FabricEvent, FabricStats, IncomingIpc, PeerPhase,
@@ -44,7 +51,7 @@ pub use wire::{
 
 /// ABI version of the cellnet fabric contract.
 pub const CELLNET_ABI_MAJOR: u16 = 0;
-pub const CELLNET_ABI_MINOR: u16 = 1;
+pub const CELLNET_ABI_MINOR: u16 = 2;
 
 /// Wire protocol version. Decoders reject anything newer.
 pub const WIRE_VERSION: u16 = 1;
@@ -127,6 +134,14 @@ pub enum CellNetError {
     DestinationNotPublished,
     /// Claimed source cell is not in the authenticated publisher's directory.
     SourceNotPublished,
+    /// Capability grant missing, invalid, wrong-bound or insufficient.
+    CapabilityDenied,
+    /// Capability grant is outside its validity window.
+    CapabilityExpired,
+    /// Capability grant sequence was already consumed (replay).
+    CapabilityReplayRejected,
+    /// Capability replay table is full; verification fails closed.
+    CapabilityTableFull,
     /// Directory cannot hold more remote cells.
     DirectoryFull,
     /// Local offer table is full.
