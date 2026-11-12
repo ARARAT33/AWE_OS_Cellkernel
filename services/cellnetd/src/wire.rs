@@ -59,7 +59,10 @@ pub const OFFER_WIRE_LEN: usize = 48;
 /// Length of the authenticated envelope header (also the AEAD AAD).
 pub const ENVELOPE_HEADER_LEN: usize = 32;
 /// Maximum payload carried by an encrypted envelope.
-pub const MAX_ENVELOPE_PAYLOAD: usize = 576;
+///
+/// Sized for the largest data-plane message: the 24-byte remote cell IPC
+/// header, the 113-byte capability token and the 512-byte IPC body.
+pub const MAX_ENVELOPE_PAYLOAD: usize = 704;
 /// Maximum total envelope wire size: header + payload + tag.
 pub const MAX_ENVELOPE_WIRE: usize = ENVELOPE_HEADER_LEN + MAX_ENVELOPE_PAYLOAD + 16;
 /// Payload length of a Finished message (HMAC-SHA256 transcript confirmation).
@@ -276,6 +279,7 @@ const _: () = {
     assert!(ANNOUNCE_LEN == 520);
     assert!(HELLO_LEN == 192);
     assert!(HELLO_ACK_LEN == 216);
+    assert!(MAX_ENVELOPE_PAYLOAD == 704);
 };
 
 /// Parsed envelope header. The payload and tag follow in the same buffer.
