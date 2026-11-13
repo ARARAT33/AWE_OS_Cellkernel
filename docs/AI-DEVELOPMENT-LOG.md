@@ -1,3 +1,13 @@
+### Final validation on the formatted CellNet head — 2026-11-13
+
+- The final source+documentation head at this validation point was
+  `6b74be812a15b83fe571d92b0b877d95164fb40e`; all nine PR workflows passed.
+- The replay-window change's regression coverage passed as part of the
+  workspace suites. The compatibility re-export fix also passed Clippy.
+- The PR remains draft: loopback-only transport, volatile replay state,
+  caller-supplied validity clock and development TOFU default are still
+  explicit production blockers. No merge was attempted.
+
 ### Second rustfmt correction and final-head CI retry — 2026-11-13
 
 - The next authored head `00644f0` reached the full PR workflow set, but
@@ -83,11 +93,24 @@
 
 ### Validation
 
-- Source changes are committed on this branch; the new-head CI result will
-  be recorded separately. No local Cargo/Rust toolchain was available in
-  this automation environment, so no local test result is claimed.
-- Pre-change evidence is only for `864b616` (9/9 workflow runs successful);
-  it does not validate this new replay-window implementation.
+- Final formatted PR head `6b74be812a15b83fe571d92b0b877d95164fb40e`:
+  **9/9 pull-request workflow runs succeeded** (Quality Gate, Workspace CI,
+  Cloud Security Gate, bootable-image/QEMU, VirtIO/QEMU, multi-architecture
+  image build, AOSIN installer matrix, Clippy diagnostics and CI diagnostics).
+- Quality Gate: **540 passed / 0 failed** across 30 test binaries.
+  Workspace Build & Validation: **529 passed / 0 failed** across 29 binaries.
+  Cloud Security Gate: **559 passed / 0 failed** across 36 binaries. These
+  suites overlap and must not be added together.
+- Formatting, workspace compilation, Clippy and UEFI loader checks passed.
+  QEMU bootable ISO smoke reached `AWEOS: kernel is alive`; exception
+  injection self-test passed (1/1). VirtIO contract tests passed and QEMU
+  detected `virtio-blk-pci` with the kernel booting while attached.
+- AOSIN installer matrix passed on Ubuntu and Windows (4/4 jobs). The
+  multi-architecture workflow passed but built x86_64 targets only; ARM64
+  and RISC-V are not validated.
+- No local Cargo/Rust toolchain was available in this automation
+  environment; all validation evidence above comes from GitHub Actions.
+  The VirtIO run still does not perform real block read/write or persistence.
 
 ### Remaining limitations
 
