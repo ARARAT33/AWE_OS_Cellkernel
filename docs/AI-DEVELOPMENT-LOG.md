@@ -1,5 +1,172 @@
+### Final validation on the formatted CellNet head — 2026-11-13
+
+- The final source+documentation head at this validation point was
+  `6b74be812a15b83fe571d92b0b877d95164fb40e`; all nine PR workflows passed.
+- The replay-window change's regression coverage passed as part of the
+  workspace suites. The compatibility re-export fix also passed Clippy.
+- The PR remains draft: loopback-only transport, volatile replay state,
+  caller-supplied validity clock and development TOFU default are still
+  explicit production blockers. No merge was attempted.
+
+### Second rustfmt correction and final-head CI retry — 2026-11-13
+
+- The next authored head `00644f0` reached the full PR workflow set, but
+  Quality Gate, Cloud Security and Workspace CI stopped at formatting checks.
+  The rustfmt bot's exact change was to move the scoped
+  `#[allow(deprecated)] pub use caps::MAX_USED_GRANTS` item before the
+  grouped `pub use caps::{...}` block. No semantic source change was made.
+- Formatter commit: `72f095052bf3146fd74691edb88ec8d1dad038c4`.
+- The failed `00644f0` formatting gates are not counted as code-test
+  failures or passes. A documentation-only commit now triggers the complete
+  suite on the formatter-clean head; final validation must use that new head.
+
+### Clippy regression diagnosed and corrected — 2026-11-13
+
+- The full rerun on `184695216` reached Clippy and found one real compile
+  error: re-exporting the deprecated `MAX_USED_GRANTS` compatibility alias
+  from `services/cellnetd/src/lib.rs` was denied by the repository's
+  `-D warnings` gate. The replay-window implementation itself produced no
+  Clippy diagnostic in that run.
+- Preserved source compatibility and scoped `#[allow(deprecated)]` only to
+  the legacy re-export; new callers use `MAX_REPLAY_STREAMS`. This is a
+  narrow compatibility boundary, not a workspace-wide lint suppression.
+- The formatter had already applied its two formatting-only changes. A new
+  full CI run is required on the corrected commit; the prior Clippy failure
+  is not counted as a pass.
+
+### CI formatting correction — 2026-11-13
+
+- The first validation attempt on source commit `6d542777` failed only at the
+  workspace formatting gates in Quality Gate #1101 and Cloud Security #1046.
+  Their compile/test/Clippy stages were skipped, so no Rust correctness result
+  was obtained from those two jobs. The UEFI loader job passed.
+- The repository's rustfmt workflow applied only the expected formatting
+  changes to `services/cellnetd/src/caps.rs` (commit
+  `9093aa1899887e0d4a0f864e21783065dcf21550`): wrapping the replay-window
+  iterator chain and compacting the test helper signature. No semantic
+  changes were made by the formatter.
+- The bot-authored commit's PR workflows reported `action_required`, so a
+  maintainer-authored documentation-only commit is used to re-run the full
+  suite on the formatted source head. The failed formatting attempt is not
+  counted as a code-test failure or a pass.
+
+## 2026-11-13 — CellNet capability replay-window hardening
+
+### Baseline and continuation
+
+- Continued on `feature/cellnetd-fabric` (draft PR #68) from head
+  `864b6169827c216244ce71a16abd2e8289997a76`. The previous session had
+  added signed per-call capability grants, but its 64-entry table retained
+  every consumed `(grantee node, sequence)` forever. After 64 calls the
+  authority permanently denied further calls, even for an otherwise healthy
+  caller. The table also did not distinguish independent caller cells.
+- Audited the exact PR head and its GitHub Actions runs before changing code.
+  All nine workflow runs completed successfully on `864b616`: Quality Gate,
+  workspace CI, Cloud Security Gate, bootable-image/QEMU, VirtIO/QEMU,
+  multi-architecture image build, AOSIN installer matrix, Clippy diagnostics
+  and CI diagnostics. The Quality Gate Rust workspace job recorded 536
+  passing test cases; Workspace Build & Validation recorded 525; Cloud
+  Security Gate recorded 555. These are separate overlapping suites, not
+  additive totals. UEFI loader, x86_64 QEMU ISO smoke, exception-injection,
+  and QEMU VirtIO-device-presence/boot jobs passed. The VirtIO job did not
+  perform block read/write or persistence.
+
+### Implemented
+
+- `services/cellnetd/src/caps.rs`: replaced the lifetime-growing 64-token
+  replay cache with 64 fixed replay streams keyed by
+  `(grantee_node, caller_cell)`. Each stream tracks a 64-sequence sliding
+  bitmap, rejects duplicates and values older than the window, accepts
+  unique in-window out-of-order messages, and continues indefinitely as
+  sequence numbers advance without evicting still-replayable entries.
+- New regression tests cover 256 sequential grants, duplicate rejection,
+  bounded out-of-order acceptance, stale-sequence rejection, independent
+  caller-cell streams, and full stream-table behavior (existing streams
+  continue while new streams fail closed).
+- `services/cellnetd/src/lib.rs`: exports `MAX_REPLAY_STREAMS`; retains
+  `MAX_USED_GRANTS` as a deprecated compatibility alias and clarifies the
+  table-full error.
+- `docs/CELLNET_ARCHITECTURE.md`: documents sliding-window semantics and
+  explicitly records that replay state is volatile and resets on
+  `cellnetd` restart; cross-restart protection requires durable state or a
+  fresh unpredictable authority epoch from secure entropy.
+
+### Validation
+
+- Final formatted PR head `6b74be812a15b83fe571d92b0b877d95164fb40e`:
+  **9/9 pull-request workflow runs succeeded** (Quality Gate, Workspace CI,
+  Cloud Security Gate, bootable-image/QEMU, VirtIO/QEMU, multi-architecture
+  image build, AOSIN installer matrix, Clippy diagnostics and CI diagnostics).
+- Quality Gate: **540 passed / 0 failed** across 30 test binaries.
+  Workspace Build & Validation: **529 passed / 0 failed** across 29 binaries.
+  Cloud Security Gate: **559 passed / 0 failed** across 36 binaries. These
+  suites overlap and must not be added together.
+- Formatting, workspace compilation, Clippy and UEFI loader checks passed.
+  QEMU bootable ISO smoke reached `AWEOS: kernel is alive`; exception
+  injection self-test passed (1/1). VirtIO contract tests passed and QEMU
+  detected `virtio-blk-pci` with the kernel booting while attached.
+- AOSIN installer matrix passed on Ubuntu and Windows (4/4 jobs). The
+  multi-architecture workflow passed but built x86_64 targets only; ARM64
+  and RISC-V are not validated.
+- No local Cargo/Rust toolchain was available in this automation
+  environment; all validation evidence above comes from GitHub Actions.
+  The VirtIO run still does not perform real block read/write or persistence.
+
+### Remaining limitations
+
+- No persistent replay state or authority-epoch binding across restart.
+- The CellNet `Transport` is still loopback-tested only; no NIC/UDP wiring
+  or two-instance network mesh test.
+- `TrustPolicy::Open` remains the development default; production must
+  configure pinned peer keys.
+- No kernel changes, Ring-3 IPC, or userspace service supervision were made.
+
+### Next priorities
+
+1. Validate this replay-window change with the full PR CI suite and fix any
+   failures before changing PR readiness.
+2. Implement per-process page-table roots and checked user-copy before Ring 3.
+3. Add a live timer-driven dispatch loop to the unified ProcessManager.
+4. Implement real VirtIO block request/completion and QEMU read-after-write
+   persistence.
+5. Wire netd UDP TX/RX into QEMU, then run a two-instance CellNet mesh.
 
 ---
+
+
+---
+
+## 2026-11-12 — CellNet capability-token enforcement (ABI 0.2)
+
+### Continuation point
+
+- Continued from the CellNet trust-boundary hardening session on branch `feature/cellnetd-fabric` (PR #68, draft). That session's recorded blocker was: "Per-caller capability authorization is not implemented inside cellnetd; `required_caps` is metadata until a trusted capability token is supplied by the service boundary." This session closes exactly that blocker.
+- No force-push, no branch deletion, no main-branch changes; external draft PR #64 remains untouched.
+
+### Implemented (commits on `feature/cellnetd-fabric`)
+
+- `services/cellnetd/src/caps.rs` (new, `d61c1a8`): `CapabilityGrant` — a 49-byte signed payload (version, grantee node, cell id, capability mask, validity window, sequence) plus a 64-byte Ed25519 signature, 113 bytes on the wire; `CapabilityAuthority` with a bounded, fail-closed 64-slot single-use replay table. Signing/verification reuse `awe-securityd`'s Ed25519; no new cryptography.
+- `services/cellnetd/src/wire.rs` (`ea9689a`): `MAX_ENVELOPE_PAYLOAD` 576 → 704 with a compile-time assertion, so a CellIpc frame fits the 24-byte header + 113-byte token + 512-byte body budget.
+- `services/cellnetd/src/lib.rs` (`a76f748`): caps module registered and re-exported; four new `CellNetError` variants (`CapabilityDenied`, `CapabilityExpired`, `CapabilityReplayRejected`, `CapabilityTableFull`); crate ABI 0.1 → 0.2.
+- `services/cellnetd/src/fabric.rs` (`2dc502e`): CellIpc payload is now `24 B header ‖ 113 B token ‖ body`; `FabricConfig::capability_enforced()` (`require_ipc_caps = true`) and `capability_enforced()`; `set_capability_authority()` pins the issuer key; `send_cell_ipc_authorized()` verifies the grant (node, cell, caps ⊇ destination `required_caps`, validity window) and spends its sequence before sealing; the grant-free `send_cell_ipc` returns `CapabilityDenied` in enforced mode; the receiver independently re-verifies the token against its own authority pin, the destination's published `required_caps` and its replay table, dropping forged/expired/replayed tokens and counting `ipc_dropped`. Development mode keeps the old grant-free behaviour for compatibility.
+- `services/cellnetd/src/fabric/tests.rs` (`0b233e1`): the unpublished-source raw-frame test now seals a full header-plus-token payload; seven new two-node loopback tests — authorized end-to-end delivery, fail-closed refusal of the grant-free API, insufficient caps, expired grant, single-use sequence replay, foreign-issuer signature failure, receiver-side drop of a forged all-zero token.
+- `docs/CELLNET_ARCHITECTURE.md` (`ac77553`): ABI 0.2; rule 5 rewritten (capability-gated access); CellIpc wire row updated to ≤649 B payload; new "Capability authorization" section; integration contract now shows `send_cell_ipc_authorized` and lists delegation/attenuation as deliberate future work.
+
+### Honest limits
+
+- The remaining CellNet blocker from the previous session is unchanged: the `Transport` trait is still loopback-only; no NIC/UDP wiring and no two-instance mesh test exist yet.
+- Grants are minted directly by the pinned authority; delegation and attenuation chains are not implemented.
+- No kernel-crate changes; the trusted computing base is untouched.
+
+### Validation status
+
+- No local toolchain is available in this environment; validation is deferred to the GitHub Actions suite on this PR head. **No green result is claimed yet.** If CI fails, the diagnostics-bot comment will be read and the defect fixed before any merge decision; PR #68 stays a draft until a full green suite (including the QEMU jobs) exists on the final head.
+
+### Next priorities
+
+1. Watch the fresh CI suite on this head; fix any clippy/rustfmt/test failures from the diagnostics output.
+2. On a full green 16/16 suite: decide draft vs ready for PR #68. The previous session held it draft pending "tokens + real transport"; tokens now exist, the real transport does not — record the decision explicitly either way, and merge only with an expected-head-SHA compare-and-swap.
+3. Then continue the audit queue: per-process page-table roots + checked user copy, timer-driven dispatch, VirtIO block read-after-write in QEMU, netd UDP wiring and the two-instance CellNet mesh.
 
 ## Session 2026-11-08 (post-merge CI verification and stale-PR triage)
 
@@ -308,3 +475,58 @@ Validated code head: `58c2dfd596c708c0b4e3426c37c77471aa4aa67f`.
 3. Continue VirtIO block I/O with real request/completion and read-after-write persistence tests, with QEMU evidence.
 4. Re-evaluate external draft PR #64 (initd restart policies) against current main: rebase or ask for a rebase; it conflicts and must not be merged as-is.
 5. Integrate the polled PS/2 controller with the IRQ/driver-service path before claiming AYUI input support.
+
+---
+
+## 2026-11-12 — CellNet: first executable distributed-cell fabric (directive §V)
+
+### What was done
+
+- Full-tree audit (`docs/ARCHITECTURE_AUDIT_2026-11-12.md`): local builds and tests executed on the pinned nightly; no readiness claims taken from documents. Baseline before this session: 481 workspace tests green, bare-metal `x86_64-unknown-none` kernel build green, UEFI loader check green, Clippy gate clean.
+- `awe-securityd::crypto`: added X25519 key agreement (with contributory / low-order rejection), HKDF-SHA256, and ChaCha20-Poly1305 AEAD wrappers. Validated against RFC 7748 (DH vector + low-order rejection), RFC 5869 (HKDF case 1) and RFC 8439 (AEAD vector + tamper rejection).
+- New service crate `awe-cellnetd` (`services/cellnetd`): bounded, allocation-free distributed cell fabric per `docs/CELLNET_ARCHITECTURE.md` — signed discovery announcements, Open/Pinned trust, mutually authenticated 4-flight handshake (Ed25519 identity, X25519 ephemeral, HKDF-SHA256 schedule, HMAC transcript confirmation), ChaCha20-Poly1305 session envelopes with a 64-bit anti-replay window, publish-policy-gated remote cell IPC, suspect/offline liveness, exponential-backoff reconnect hints, and DirectorySync anti-entropy for partition recovery. Key material is scrubbed on session teardown; no hidden RNG (caller-supplied nonces/secrets).
+- 22 new tests in `awe-cellnetd` + 4 new crypto tests: handshake roundtrip, encrypted IPC both directions, ciphertext tamper, frame replay, signature forgery, node-id spoofing, pinned-trust rejection, low-order key rejection, publish-policy filtering, unpublished-cell drop + stale-entry repair via snapshot, suspect→offline→backoff→reconnect→partition-heal, and offer TTL expiry.
+- Validation after the change: `cargo test --workspace --no-fail-fast` **507 passed, 0 failed**; `cargo fmt --all --check` clean; Clippy CI gate flags clean; `cargo build --release -p aweos-kernel-bin --target x86_64-unknown-none` clean; aweloader UEFI check clean.
+
+### Honest limits
+
+- The fabric's `Transport` trait is loopback-tested only; no NIC/UDP wiring yet (needs the netd QEMU path first). No CellIpc retransmission/ordering (at-most-once), no multicast discovery, no ratchet.
+- No changes to the kernel crate; the trusted computing base is untouched.
+
+### Next priorities (unchanged order, see audit doc)
+
+1. Per-process page-table roots + checked user copy before any Ring-3 entry.
+2. Timer-driven dispatch loop on the unified ProcessManager.
+3. VirtIO block request/completion with read-after-write persistence in QEMU.
+4. netd UDP path in QEMU; then bind cellnetd to it and run a two-instance mesh.
+
+## 2026-11-12 — CellNet trust-boundary hardening follow-up
+
+### Changes
+
+- accept_hello now rechecks node-id/public-key binding, trust policy and Ed25519 signature, and accepts only the exact Hello frame previously validated by inspect_hello.
+- Peer liveness is refreshed only after the AEAD envelope and anti-replay checks succeed; bad-tag traffic can no longer keep a peer alive.
+- Remote IPC now requires the claimed source cell to exist in that authenticated peer's directory; outbound IPC requires a currently published local source cell.
+- Clarified that required_caps is advertised metadata until a trusted caller-capability token is integrated at the service boundary; it is not represented as an enforced per-caller ACL.
+- Added regression coverage for substituted Hello frames, bad-tag liveness refresh, and local/remote source-cell spoofing.
+
+### Validation — code head `6c280ff4c67c27dab634f002cd1c5f4fcac965fa`
+
+- Workspace tests: **521 passed, 0 failed** (all test binaries in the AWEOS CI workspace job).
+- Workspace compilation, formatting, Clippy, UEFI loader check, and security gate: **passed**.
+- QEMU exception-injection self-test: **passed**.
+- Bootable-image smoke test: x86_64 Multiboot2 ISO booted in QEMU and reached the kernel-alive marker.
+- VirtIO runtime check: QEMU exposed a `virtio-blk-pci` device and the kernel booted with it attached; storage/driver contract tests passed. **No actual VirtIO block read/write or persistence test is claimed.**
+- Multi-architecture workflow: x86_64 bare-metal kernel and x86_64 UEFI loader artifacts built. **ARM64 and RISC-V were not built or runtime-tested by this workflow.**
+- Cross-platform AOSIN CLI/GUI installer jobs: Ubuntu and Windows jobs passed.
+- All nine substantive CI workflows on this code head completed successfully. The rustfmt bot's intermediate commit had `action_required` runs, so validation was re-triggered on a maintainer-authored documentation commit after formatting.
+- This log update is documentation-only; the validated Rust source tree is unchanged from code head `6c280ff`.
+
+### Remaining blockers and next priorities
+
+- Per-caller capability authorization is not implemented inside cellnetd. `required_caps` is explicitly documented as metadata until a trusted capability token is supplied by the service boundary.
+- The fabric still uses a loopback-only Transport; no NIC/UDP integration or two-instance network test exists.
+- No real VirtIO block request/completion, read-after-write persistence, or power-loss recovery evidence exists.
+- No per-process page-table roots or checked user-copy path; Ring 3 remains deferred.
+- Next order: (1) per-process address-space roots + checked user copy, (2) timer-driven dispatch, (3) actual VirtIO block I/O and persistence in QEMU, (4) netd UDP wiring and two-instance CellNet mesh.
+- Main remains unchanged. PR #68 is open and draft; external draft PR #64 remains untouched.
