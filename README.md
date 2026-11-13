@@ -71,6 +71,7 @@ See **[PROJECT_STATUS.md](PROJECT_STATUS.md)** for the current project state and
 - **[docs/DRIVER_SYSTEM.md](docs/DRIVER_SYSTEM.md)** — driver architecture.
 - **[docs/AWE_CAPSULE.md](docs/AWE_CAPSULE.md)** — native application security model.
 - **[docs/AWE_XENOSENSE.md](docs/AWE_XENOSENSE.md)** — experimental research direction.
+- **[docs/ADVANCED-CELL-RUNTIME-ARCHITECTURE.md](docs/ADVANCED-CELL-RUNTIME-ARCHITECTURE.md)** — proposed Living Cells, Cell Continuity Capsule, Cell Immune System, Virtual Hardware Fabric, and AWENET boundary.
 
 Historical progress/evidence files under `docs/` remain useful as dated records. They should not override the current status in `PROJECT_STATUS.md` and `PRODUCT_READINESS.md`.
 
