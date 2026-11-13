@@ -1,3 +1,17 @@
+### Clippy regression diagnosed and corrected — 2026-11-13
+
+- The full rerun on `184695216` reached Clippy and found one real compile
+  error: re-exporting the deprecated `MAX_USED_GRANTS` compatibility alias
+  from `services/cellnetd/src/lib.rs` was denied by the repository's
+  `-D warnings` gate. The replay-window implementation itself produced no
+  Clippy diagnostic in that run.
+- Preserved source compatibility and scoped `#[allow(deprecated)]` only to
+  the legacy re-export; new callers use `MAX_REPLAY_STREAMS`. This is a
+  narrow compatibility boundary, not a workspace-wide lint suppression.
+- The formatter had already applied its two formatting-only changes. A new
+  full CI run is required on the corrected commit; the prior Clippy failure
+  is not counted as a pass.
+
 ### CI formatting correction — 2026-11-13
 
 - The first validation attempt on source commit `6d542777` failed only at the
