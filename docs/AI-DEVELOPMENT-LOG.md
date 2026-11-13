@@ -1,3 +1,15 @@
+### Second rustfmt correction and final-head CI retry — 2026-11-13
+
+- The next authored head `00644f0` reached the full PR workflow set, but
+  Quality Gate, Cloud Security and Workspace CI stopped at formatting checks.
+  The rustfmt bot's exact change was to move the scoped
+  `#[allow(deprecated)] pub use caps::MAX_USED_GRANTS` item before the
+  grouped `pub use caps::{...}` block. No semantic source change was made.
+- Formatter commit: `72f095052bf3146fd74691edb88ec8d1dad038c4`.
+- The failed `00644f0` formatting gates are not counted as code-test
+  failures or passes. A documentation-only commit now triggers the complete
+  suite on the formatter-clean head; final validation must use that new head.
+
 ### Clippy regression diagnosed and corrected — 2026-11-13
 
 - The full rerun on `184695216` reached Clippy and found one real compile
