@@ -218,9 +218,12 @@ impl CapabilityAuthority {
         if !awe_securityd::ed25519_verify(&self.issuer_key, &payload, &grant.signature) {
             return Err(CellNetError::BadSignature);
         }
-        if let Some(window) = self.windows.iter_mut().flatten().find(|window| {
-            window.grantee_node == grantee_node && window.cell_id == cell_id
-        }) {
+        if let Some(window) = self
+            .windows
+            .iter_mut()
+            .flatten()
+            .find(|window| window.grantee_node == grantee_node && window.cell_id == cell_id)
+        {
             return window.consume(grant.sequence);
         }
 
@@ -246,11 +249,7 @@ mod tests {
         signed_grant_for(0x1001, sequence, caps)
     }
 
-    fn signed_grant_for(
-        cell_id: u64,
-        sequence: u64,
-        caps: u64,
-    ) -> (CapabilityGrant, [u8; 32]) {
+    fn signed_grant_for(cell_id: u64, sequence: u64, caps: u64) -> (CapabilityGrant, [u8; 32]) {
         let (public, secret) = issuer();
         let mut grant = CapabilityGrant {
             version: 0,
