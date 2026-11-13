@@ -530,3 +530,36 @@ Validated code head: `58c2dfd596c708c0b4e3426c37c77471aa4aa67f`.
 - No per-process page-table roots or checked user-copy path; Ring 3 remains deferred.
 - Next order: (1) per-process address-space roots + checked user copy, (2) timer-driven dispatch, (3) actual VirtIO block I/O and persistence in QEMU, (4) netd UDP wiring and two-instance CellNet mesh.
 - Main remains unchanged. PR #68 is open and draft; external draft PR #64 remains untouched.
+
+## 2026-11-13 — PR #68 (CellNet fabric) rebased, re-validated and merged into main
+
+### Baseline and continuation
+
+- Started from main head `64def465` (PR #69, docs-only merge of the advanced cell runtime architecture spec). The previous session's recorded next-priority item 1 was "Validate this replay-window change with the full PR CI suite and fix any failures before changing PR readiness."
+- Audited open PRs first. PR #68 (CellNet distributed-cell fabric, directive §V) was draft with head `a4fdbf39` behind main; PR #64 (external bot draft, initd restart policies) still conflicts with main.
+
+### What was done
+
+- Updated PR #68's branch onto current main via the GitHub branch-update API (new head `7a34fcd30dd238cc55624b8a07d781e35f634255`), which re-triggered the complete workflow suite on the rebased head.
+- Reviewed the merged content before the merge decision: `awe-securityd` crypto wrappers (X25519/HKDF/ChaCha20-Poly1305/Ed25519, RFC-vector-tested), `awe-cellnetd` fabric (signed announcements, 4-flight mutually authenticated handshake, AEAD envelopes with anti-replay window, per-call capability grants with sliding replay streams, publish policy, heartbeat/backoff/partition recovery), all fixed-capacity, no_std, transport-neutral.
+- On the rebased head: **16/16 check-runs completed success** (cloud-security, cloud-release-contract, Rust workspace, UEFI loader, Workspace Build & Validation, Workspace clippy, cargo failure diagnostics, exception-injection-selftest, build-and-smoke-test-image, virtio-block-contract-and-qemu, Build Multi-Arch Boot Images, 4x Build AOSIN Installers, rustfmt bot).
+- Marked PR #68 ready for review and merged into main as **df13d7a5c3c9f493b0f5d995878e24dd8b596951** (merge method, expected-head-SHA compare-and-swap against `7a34fcd`). Standard caveat: token merges do not trigger Actions on main itself; the green evidence is the PR head run on the rebased head, whose only delta from the merged tree is the merge commit itself.
+- PR #64: re-confirmed merge conflict against current main (`update_pull_request_branch` fails with a merge conflict). It is an external draft not authored by this automation; it was left untouched, unmerged, and nothing was force-pushed or deleted.
+
+### Honest scope
+
+- The CellNet fabric is a contract/protocol layer: Transport is still loopback-tested only, no NIC/UDP wiring, no two-instance mesh, replay state is volatile, TrustPolicy::Open is the development default. No kernel-crate changes were made in this session.
+- No Ring 3, per-process page tables, VirtIO block I/O or persistence evidence exists; those remain the priority queue.
+
+### Files changed in this session
+
+- main via PR #68 merge: services/cellnetd/* (new crate), services/securityd/src/crypto.rs + Cargo.toml, Cargo.toml, Cargo.lock, docs/CELLNET_ARCHITECTURE.md, docs/ARCHITECTURE_AUDIT_2026-11-12.md, docs/AI-DEVELOPMENT-LOG.md.
+- docs/AI-DEVELOPMENT-LOG.md — this entry.
+
+### Next priorities (unchanged order)
+
+1. Per-process page-table roots + checked user-copy before any Ring-3 entry.
+2. Timer-driven dispatch loop on the unified ProcessManager.
+3. Real VirtIO block request/completion with read-after-write persistence in QEMU.
+4. netd UDP path in QEMU, then bind cellnetd to it and run a two-instance mesh.
+5. Re-evaluate external draft PR #64 (still conflicting; must not be merged as-is).
