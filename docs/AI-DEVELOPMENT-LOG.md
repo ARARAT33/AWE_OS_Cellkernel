@@ -1,3 +1,73 @@
+## 2026-11-13 — CellNet capability replay-window hardening
+
+### Baseline and continuation
+
+- Continued on `feature/cellnetd-fabric` (draft PR #68) from head
+  `864b6169827c216244ce71a16abd2e8289997a76`. The previous session had
+  added signed per-call capability grants, but its 64-entry table retained
+  every consumed `(grantee node, sequence)` forever. After 64 calls the
+  authority permanently denied further calls, even for an otherwise healthy
+  caller. The table also did not distinguish independent caller cells.
+- Audited the exact PR head and its GitHub Actions runs before changing code.
+  All nine workflow runs completed successfully on `864b616`: Quality Gate,
+  workspace CI, Cloud Security Gate, bootable-image/QEMU, VirtIO/QEMU,
+  multi-architecture image build, AOSIN installer matrix, Clippy diagnostics
+  and CI diagnostics. The Quality Gate Rust workspace job recorded 536
+  passing test cases; Workspace Build & Validation recorded 525; Cloud
+  Security Gate recorded 555. These are separate overlapping suites, not
+  additive totals. UEFI loader, x86_64 QEMU ISO smoke, exception-injection,
+  and QEMU VirtIO-device-presence/boot jobs passed. The VirtIO job did not
+  perform block read/write or persistence.
+
+### Implemented
+
+- `services/cellnetd/src/caps.rs`: replaced the lifetime-growing 64-token
+  replay cache with 64 fixed replay streams keyed by
+  `(grantee_node, caller_cell)`. Each stream tracks a 64-sequence sliding
+  bitmap, rejects duplicates and values older than the window, accepts
+  unique in-window out-of-order messages, and continues indefinitely as
+  sequence numbers advance without evicting still-replayable entries.
+- New regression tests cover 256 sequential grants, duplicate rejection,
+  bounded out-of-order acceptance, stale-sequence rejection, independent
+  caller-cell streams, and full stream-table behavior (existing streams
+  continue while new streams fail closed).
+- `services/cellnetd/src/lib.rs`: exports `MAX_REPLAY_STREAMS`; retains
+  `MAX_USED_GRANTS` as a deprecated compatibility alias and clarifies the
+  table-full error.
+- `docs/CELLNET_ARCHITECTURE.md`: documents sliding-window semantics and
+  explicitly records that replay state is volatile and resets on
+  `cellnetd` restart; cross-restart protection requires durable state or a
+  fresh unpredictable authority epoch from secure entropy.
+
+### Validation
+
+- Source changes are committed on this branch; the new-head CI result will
+  be recorded separately. No local Cargo/Rust toolchain was available in
+  this automation environment, so no local test result is claimed.
+- Pre-change evidence is only for `864b616` (9/9 workflow runs successful);
+  it does not validate this new replay-window implementation.
+
+### Remaining limitations
+
+- No persistent replay state or authority-epoch binding across restart.
+- The CellNet `Transport` is still loopback-tested only; no NIC/UDP wiring
+  or two-instance network mesh test.
+- `TrustPolicy::Open` remains the development default; production must
+  configure pinned peer keys.
+- No kernel changes, Ring-3 IPC, or userspace service supervision were made.
+
+### Next priorities
+
+1. Validate this replay-window change with the full PR CI suite and fix any
+   failures before changing PR readiness.
+2. Implement per-process page-table roots and checked user-copy before Ring 3.
+3. Add a live timer-driven dispatch loop to the unified ProcessManager.
+4. Implement real VirtIO block request/completion and QEMU read-after-write
+   persistence.
+5. Wire netd UDP TX/RX into QEMU, then run a two-instance CellNet mesh.
+
+---
+
 
 ---
 

@@ -150,9 +150,12 @@ Semantics:
   destination's currently published offer.
 - The validity window (`not_before`/`not_after`) is checked against the
   sender's clock at send time; expired grants are refused before sealing.
-- `sequence` is single-use: the receiver keeps a bounded, fail-closed
-  64-slot replay table; a replayed or exhausted-table sequence drops the
-  call and counts `ipc_dropped`.
+- `sequence` is monotonic and non-wrapping per
+  `(grantee_node, caller cell)`. Each stream keeps a 64-value sliding
+  replay window: duplicates and values older than the window are rejected,
+  while unique out-of-order values inside the window are accepted once.
+  Up to 64 streams are tracked; when the stream table is full, new streams
+  fail closed but existing streams continue to advance.
 - Issuer keys are pinned per fabric (`set_capability_authority`); tokens
   from any other issuer fail signature verification.
 
@@ -164,6 +167,17 @@ authority pin, the destination's `required_caps`, and its replay table.
 A compromised sender cannot smuggle an IPC call through with a zero or
 forged token. In development mode (`FabricConfig::development()`),
 enforcement is off and the token slot is ignored for compatibility.
+
+### Replay-state restart boundary
+
+Replay windows currently live in the `CellFabric` instance's memory. They
+protect against duplicate and stale grants during that instance's lifetime,
+but are reset when `cellnetd` restarts. This is **not** cross-reboot replay
+protection. Before production deployment, persist replay high-water/window
+state atomically or bind grants to a fresh, unpredictable authority epoch
+supplied by the platform's secure random source and reject prior epochs.
+Until that integration exists, callers must use short-lived grants and must
+not claim durable single-use semantics across restart.
 
 ## Remote cell IPC
 

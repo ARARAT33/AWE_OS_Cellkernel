@@ -23,8 +23,12 @@ pub const CAP_SIG_LEN: usize = 64;
 pub const CAP_TOKEN_LEN: usize = CAP_SIGNED_LEN + CAP_SIG_LEN;
 /// Grant wire-format version. Decoders reject anything else.
 pub const CAP_GRANT_VERSION: u8 = 1;
-/// Bounded anti-replay table of consumed `(grantee, sequence)` pairs.
-pub const MAX_USED_GRANTS: usize = 64;
+/// Maximum number of distinct `(grantee node, caller cell)` replay streams.
+pub const MAX_REPLAY_STREAMS: usize = 64;
+/// Legacy name retained for source compatibility. This now bounds replay
+/// streams, not the total number of grants that may be consumed.
+#[deprecated(note = "use MAX_REPLAY_STREAMS; this bounds replay streams, not grants")]
+pub const MAX_USED_GRANTS: usize = MAX_REPLAY_STREAMS;
 
 /// A single-use, signed authorization for one cell to call with a
 /// capability set.
@@ -42,8 +46,9 @@ pub struct CapabilityGrant {
     pub caps: u64,
     pub not_before: u64,
     pub not_after: u64,
-    /// Anti-replay sequence; each sequence value is consumable once per
-    /// grantee node for the whole replay-table lifetime.
+    /// Monotonic, non-wrapping sequence within the
+    /// `(grantee_node, cell_id)` stream. Each value is consumable once
+    /// while it remains inside the receiver's 64-value replay window.
     pub sequence: u64,
     pub signature: [u8; 64],
 }
@@ -110,21 +115,71 @@ impl CapabilityGrant {
     }
 }
 
-/// Verifies capability grants against one issuer key, with a bounded
-/// single-use (anti-replay) table keyed by `(grantee node, sequence)`.
+/// One 64-sequence replay window for a caller cell on a grantee node.
+#[derive(Clone, Copy, Debug)]
+struct ReplayWindow {
+    grantee_node: u64,
+    cell_id: u64,
+    highest_sequence: u64,
+    seen: u64,
+}
+
+impl ReplayWindow {
+    const fn new(grantee_node: u64, cell_id: u64, sequence: u64) -> Self {
+        Self {
+            grantee_node,
+            cell_id,
+            highest_sequence: sequence,
+            seen: 1,
+        }
+    }
+
+    /// Consume a sequence exactly once within the sliding replay window.
+    /// Unique out-of-order values are accepted while they remain in-window.
+    fn consume(&mut self, sequence: u64) -> Result<(), CellNetError> {
+        if sequence > self.highest_sequence {
+            let advance = sequence - self.highest_sequence;
+            self.seen = if advance >= crate::REPLAY_WINDOW {
+                1
+            } else {
+                (self.seen << (advance as u32)) | 1
+            };
+            self.highest_sequence = sequence;
+            return Ok(());
+        }
+
+        let age = self.highest_sequence - sequence;
+        if age >= crate::REPLAY_WINDOW {
+            return Err(CellNetError::CapabilityReplayRejected);
+        }
+
+        let bit = 1u64 << (age as u32);
+        if self.seen & bit != 0 {
+            return Err(CellNetError::CapabilityReplayRejected);
+        }
+
+        self.seen |= bit;
+        Ok(())
+    }
+}
+
+/// Verifies capability grants against one issuer key, with a bounded set
+/// of per-`(grantee node, caller cell)` sliding anti-replay windows.
 ///
-/// The table is fail-closed: when it is full, verification is refused
-/// rather than evicting an entry that could still be replayed.
+/// Each stream remembers the newest 64 sequence values. This permits
+/// sustained traffic and bounded out-of-order delivery without evicting
+/// an unexpired replay record. When all stream slots are occupied, new
+/// streams fail closed while existing streams remain usable.
 pub struct CapabilityAuthority {
     issuer_key: [u8; 32],
-    used: [Option<(u64, u64)>; MAX_USED_GRANTS],
+    windows: [Option<ReplayWindow>; MAX_REPLAY_STREAMS],
 }
 
 impl CapabilityAuthority {
     pub const fn new(issuer_key: [u8; 32]) -> Self {
         Self {
             issuer_key,
-            used: [None; MAX_USED_GRANTS],
+            windows: [None; MAX_REPLAY_STREAMS],
         }
     }
 
@@ -163,20 +218,18 @@ impl CapabilityAuthority {
         if !awe_securityd::ed25519_verify(&self.issuer_key, &payload, &grant.signature) {
             return Err(CellNetError::BadSignature);
         }
-        if self
-            .used
-            .iter()
-            .flatten()
-            .any(|&(node, sequence)| node == grantee_node && sequence == grant.sequence)
-        {
-            return Err(CellNetError::CapabilityReplayRejected);
+        if let Some(window) = self.windows.iter_mut().flatten().find(|window| {
+            window.grantee_node == grantee_node && window.cell_id == cell_id
+        }) {
+            return window.consume(grant.sequence);
         }
+
         let slot = self
-            .used
+            .windows
             .iter_mut()
             .find(|slot| slot.is_none())
             .ok_or(CellNetError::CapabilityTableFull)?;
-        *slot = Some((grantee_node, grant.sequence));
+        *slot = Some(ReplayWindow::new(grantee_node, cell_id, grant.sequence));
         Ok(())
     }
 }
@@ -190,11 +243,19 @@ mod tests {
     }
 
     fn signed_grant(sequence: u64, caps: u64) -> (CapabilityGrant, [u8; 32]) {
+        signed_grant_for(0x1001, sequence, caps)
+    }
+
+    fn signed_grant_for(
+        cell_id: u64,
+        sequence: u64,
+        caps: u64,
+    ) -> (CapabilityGrant, [u8; 32]) {
         let (public, secret) = issuer();
         let mut grant = CapabilityGrant {
             version: 0,
             grantee_node: 0xAAAA,
-            cell_id: 0x1001,
+            cell_id,
             caps,
             not_before: 100,
             not_after: 200,
@@ -297,20 +358,103 @@ mod tests {
     }
 
     #[test]
-    fn replay_table_is_bounded_and_fails_closed() {
-        let (public, _) = issuer();
+    fn replay_window_supports_sustained_sequential_traffic() {
+        let (first, public) = signed_grant(0, 0xFF);
         let mut authority = CapabilityAuthority::new(public);
-        for sequence in 0..MAX_USED_GRANTS as u64 {
+        authority
+            .verify(&first, 150, 0xAAAA, 0x1001, 0)
+            .expect("first sequence");
+
+        for sequence in 1..=256 {
             let (grant, _) = signed_grant(sequence, 0xFF);
             authority
                 .verify(&grant, 150, 0xAAAA, 0x1001, 0)
-                .expect("slot");
+                .expect("window advances without lifetime exhaustion");
         }
-        let (grant, _) = signed_grant(MAX_USED_GRANTS as u64, 0xFF);
+    }
+
+    #[test]
+    fn replay_window_accepts_out_of_order_once_and_rejects_duplicates() {
+        let (first, public) = signed_grant(100, 0xFF);
+        let mut authority = CapabilityAuthority::new(public);
+        authority
+            .verify(&first, 150, 0xAAAA, 0x1001, 0)
+            .expect("highest sequence");
+
+        let (older, _) = signed_grant(98, 0xFF);
+        authority
+            .verify(&older, 150, 0xAAAA, 0x1001, 0)
+            .expect("unique out-of-order sequence inside window");
         assert_eq!(
-            authority.verify(&grant, 150, 0xAAAA, 0x1001, 0),
+            authority.verify(&older, 150, 0xAAAA, 0x1001, 0),
+            Err(CellNetError::CapabilityReplayRejected)
+        );
+        assert_eq!(
+            authority.verify(&first, 150, 0xAAAA, 0x1001, 0),
+            Err(CellNetError::CapabilityReplayRejected)
+        );
+    }
+
+    #[test]
+    fn replay_window_rejects_sequences_older_than_its_width() {
+        let (first, public) = signed_grant(100, 0xFF);
+        let mut authority = CapabilityAuthority::new(public);
+        authority
+            .verify(&first, 150, 0xAAAA, 0x1001, 0)
+            .expect("highest sequence");
+
+        let (oldest_in_window, _) = signed_grant(37, 0xFF);
+        authority
+            .verify(&oldest_in_window, 150, 0xAAAA, 0x1001, 0)
+            .expect("age 63 is inside a 64-value window");
+
+        let (too_old, _) = signed_grant(36, 0xFF);
+        assert_eq!(
+            authority.verify(&too_old, 150, 0xAAAA, 0x1001, 0),
+            Err(CellNetError::CapabilityReplayRejected)
+        );
+    }
+
+    #[test]
+    fn replay_windows_are_independent_per_caller_cell() {
+        let (grant_a, public) = signed_grant_for(0x1001, 7, 0xFF);
+        let (grant_b, _) = signed_grant_for(0x1002, 7, 0xFF);
+        let mut authority = CapabilityAuthority::new(public);
+
+        authority
+            .verify(&grant_a, 150, 0xAAAA, 0x1001, 0)
+            .expect("cell A sequence");
+        authority
+            .verify(&grant_b, 150, 0xAAAA, 0x1002, 0)
+            .expect("same sequence is valid in cell B's independent stream");
+        assert_eq!(
+            authority.verify(&grant_a, 150, 0xAAAA, 0x1001, 0),
+            Err(CellNetError::CapabilityReplayRejected)
+        );
+    }
+
+    #[test]
+    fn replay_stream_table_is_bounded_but_existing_streams_keep_working() {
+        let (public, _) = issuer();
+        let mut authority = CapabilityAuthority::new(public);
+        for index in 0..MAX_REPLAY_STREAMS {
+            let cell_id = 0x1000 + index as u64;
+            let (grant, _) = signed_grant_for(cell_id, 0, 0xFF);
+            authority
+                .verify(&grant, 150, 0xAAAA, cell_id, 0)
+                .expect("stream slot");
+        }
+
+        let (new_stream, _) = signed_grant_for(0x9000, 0, 0xFF);
+        assert_eq!(
+            authority.verify(&new_stream, 150, 0xAAAA, 0x9000, 0),
             Err(CellNetError::CapabilityTableFull)
         );
+
+        let (existing_stream, _) = signed_grant_for(0x1000, 1, 0xFF);
+        authority
+            .verify(&existing_stream, 150, 0xAAAA, 0x1000, 0)
+            .expect("existing stream remains usable when table is full");
     }
 
     #[test]

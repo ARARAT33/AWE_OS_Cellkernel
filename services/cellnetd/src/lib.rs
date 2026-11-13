@@ -35,7 +35,7 @@ mod wire;
 
 pub use caps::{
     CAP_GRANT_VERSION, CAP_SIG_LEN, CAP_SIGNED_LEN, CAP_TOKEN_LEN, CapabilityAuthority,
-    CapabilityGrant, MAX_USED_GRANTS,
+    CapabilityGrant, MAX_REPLAY_STREAMS, MAX_USED_GRANTS,
 };
 pub use directory::{CellOffer, Directory, RemoteCell, RemoteHealth};
 pub use fabric::{
@@ -140,7 +140,7 @@ pub enum CellNetError {
     CapabilityExpired,
     /// Capability grant sequence was already consumed (replay).
     CapabilityReplayRejected,
-    /// Capability replay table is full; verification fails closed.
+    /// No replay-window slot is available for a new caller-cell stream; existing streams remain usable.
     CapabilityTableFull,
     /// Directory cannot hold more remote cells.
     DirectoryFull,
