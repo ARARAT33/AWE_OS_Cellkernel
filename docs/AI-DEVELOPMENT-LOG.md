@@ -1,3 +1,19 @@
+### CI formatting correction — 2026-11-13
+
+- The first validation attempt on source commit `6d542777` failed only at the
+  workspace formatting gates in Quality Gate #1101 and Cloud Security #1046.
+  Their compile/test/Clippy stages were skipped, so no Rust correctness result
+  was obtained from those two jobs. The UEFI loader job passed.
+- The repository's rustfmt workflow applied only the expected formatting
+  changes to `services/cellnetd/src/caps.rs` (commit
+  `9093aa1899887e0d4a0f864e21783065dcf21550`): wrapping the replay-window
+  iterator chain and compacting the test helper signature. No semantic
+  changes were made by the formatter.
+- The bot-authored commit's PR workflows reported `action_required`, so a
+  maintainer-authored documentation-only commit is used to re-run the full
+  suite on the formatted source head. The failed formatting attempt is not
+  counted as a code-test failure or a pass.
+
 ## 2026-11-13 — CellNet capability replay-window hardening
 
 ### Baseline and continuation
