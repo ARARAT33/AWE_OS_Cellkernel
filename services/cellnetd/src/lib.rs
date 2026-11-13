@@ -33,12 +33,12 @@ mod fabric;
 mod session;
 mod wire;
 
+#[allow(deprecated)]
+pub use caps::MAX_USED_GRANTS;
 pub use caps::{
     CAP_GRANT_VERSION, CAP_SIG_LEN, CAP_SIGNED_LEN, CAP_TOKEN_LEN, CapabilityAuthority,
     CapabilityGrant, MAX_REPLAY_STREAMS,
 };
-#[allow(deprecated)]
-pub use caps::MAX_USED_GRANTS;
 pub use directory::{CellOffer, Directory, RemoteCell, RemoteHealth};
 pub use fabric::{
     CellFabric, CellIpcRequest, FabricConfig, FabricEvent, FabricStats, IncomingIpc, PeerPhase,
