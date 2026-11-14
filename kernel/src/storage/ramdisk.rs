@@ -1,22 +1,28 @@
-//! Fixed-capacity in-memory block device used for storage integration tests.
+//! Fixed-capacity in-memory block device used by storage integration tests.
 //!
-//! This is intentionally deterministic and allocation-free so filesystem and
-//! partition logic can be exercised without depending on a host filesystem.
+//! The caller owns the backing memory. Construction stays allocation-free and
+//! does not return a 256 KiB object by value or create a large stack frame.
 
 use super::{BLOCK_SIZE, BlockDevice, StorageError};
 
 pub const RAMDISK_BLOCKS: usize = 64;
+pub const RAMDISK_BYTES: usize = RAMDISK_BLOCKS * BLOCK_SIZE;
 
-pub struct RamBlockDevice {
-    data: [u8; RAMDISK_BLOCKS * BLOCK_SIZE],
+pub struct RamBlockDevice<'a> {
+    data: &'a mut [u8; RAMDISK_BYTES],
     read_only: bool,
     dirty: bool,
 }
 
-impl RamBlockDevice {
-    pub const fn new(read_only: bool) -> Self {
+impl<'a> RamBlockDevice<'a> {
+    /// Create a zeroed ramdisk over caller-owned, exactly sized storage.
+    ///
+    /// The backing array must remain alive and exclusively borrowed for the
+    /// lifetime of this device.
+    pub fn new(data: &'a mut [u8; RAMDISK_BYTES], read_only: bool) -> Self {
+        data.fill(0);
         Self {
-            data: [0; RAMDISK_BLOCKS * BLOCK_SIZE],
+            data,
             read_only,
             dirty: false,
         }
@@ -36,13 +42,7 @@ impl RamBlockDevice {
     }
 }
 
-impl Default for RamBlockDevice {
-    fn default() -> Self {
-        Self::new(false)
-    }
-}
-
-impl BlockDevice for RamBlockDevice {
+impl BlockDevice for RamBlockDevice<'_> {
     fn block_count(&self) -> u64 {
         RAMDISK_BLOCKS as u64
     }
@@ -77,11 +77,22 @@ impl BlockDevice for RamBlockDevice {
 
 #[cfg(test)]
 mod tests {
+    extern crate std;
+
     use super::*;
 
     #[test]
     fn round_trip_and_flush_are_deterministic() {
-        let mut disk = RamBlockDevice::default();
+        let mut backing = std::vec![0xFFu8; RAMDISK_BYTES];
+        let storage: &mut [u8; RAMDISK_BYTES] = backing
+            .as_mut_slice()
+            .try_into()
+            .expect("exact ramdisk size");
+        let mut disk = RamBlockDevice::new(storage, false);
+        let mut initial = [0u8; BLOCK_SIZE];
+        disk.read_block(3, &mut initial).expect("initial read");
+        assert_eq!(initial, [0; BLOCK_SIZE]);
+
         let mut input = [0u8; BLOCK_SIZE];
         input[0] = 0xA5;
         input[BLOCK_SIZE - 1] = 0x5A;
@@ -97,7 +108,12 @@ mod tests {
 
     #[test]
     fn enforces_bounds_and_read_only_mode() {
-        let mut disk = RamBlockDevice::new(true);
+        let mut backing = std::vec![0u8; RAMDISK_BYTES];
+        let storage: &mut [u8; RAMDISK_BYTES] = backing
+            .as_mut_slice()
+            .try_into()
+            .expect("exact ramdisk size");
+        let mut disk = RamBlockDevice::new(storage, true);
         let block = [0u8; BLOCK_SIZE];
         assert_eq!(disk.write_block(0, &block), Err(StorageError::ReadOnly));
         assert_eq!(
