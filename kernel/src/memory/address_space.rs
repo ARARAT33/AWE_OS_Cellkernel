@@ -239,7 +239,10 @@ mod tests {
 
     #[test]
     fn checked_user_range_rejects_kernel_null_and_overflow() {
-        assert_eq!(checked_user_range(0x1000, 0), Err(UserCopyError::InvalidRange));
+        assert_eq!(
+            checked_user_range(0x1000, 0),
+            Err(UserCopyError::InvalidRange)
+        );
         assert_eq!(checked_user_range(0, 8), Err(UserCopyError::NotUserAddress));
         assert_eq!(
             checked_user_range(0x0000_8000_0000_0000, 8),
@@ -258,7 +261,11 @@ mod tests {
         let mut space = AddressSpace::<4>::new(0x5000).unwrap();
         assert!(space.map_user(0x1001, 0x9000, 1, RW).is_err());
         assert!(space.map_user(0x1000, 0x9001, 1, RW).is_err());
-        assert!(space.map_user(0x1000, 0x9000, 1, PageFlags::PRESENT).is_err());
+        assert!(
+            space
+                .map_user(0x1000, 0x9000, 1, PageFlags::PRESENT)
+                .is_err()
+        );
         assert!(space.map_user(0x1000, 0x9000, 0, RW).is_err());
         assert!(space.map_user(0x1000, 0x9000, 2, RW).is_ok());
         assert_eq!(
