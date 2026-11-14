@@ -2,6 +2,8 @@
 
 pub mod clock;
 pub mod dispatch;
+#[cfg(target_arch = "x86_64")]
+pub mod preemptive;
 pub mod priority;
 
 use crate::process::ProcessId;
