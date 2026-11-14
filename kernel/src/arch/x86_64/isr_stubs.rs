@@ -1113,6 +1113,9 @@ pub extern "C" fn awe_interrupt_handler(frame: &mut InterruptFrame) {
             }
             TIMER_IRQ_COUNT.fetch_add(1, Ordering::Relaxed);
             super::timer::interrupt_tick();
+            // Drive the preemptive kernel-thread scheduler. Until
+            // `scheduler::preemptive::start` arms it this only counts ticks.
+            crate::scheduler::preemptive::on_timer_tick(frame);
         } else if vector == 33 {
             unsafe {
                 let _scancode = super::io_in8(0x60);
