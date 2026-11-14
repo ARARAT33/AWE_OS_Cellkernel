@@ -14,7 +14,7 @@ pub use gpt::{
     validate_partition_array_crc,
 };
 pub use journal::{JournalError, JournalState, JournalTxn, RecoveryDecision, decide_recovery};
-pub use ramdisk::{RAMDISK_BLOCKS, RamBlockDevice};
+pub use ramdisk::{RAMDISK_BLOCKS, RAMDISK_BYTES, RamBlockDevice};
 pub use vfs::{AweFs, FileName, FsError, Inode, JournalRecord, NodeKind, RecoveryAction, Vfs};
 
 pub const BLOCK_SIZE: usize = 4096;
@@ -139,10 +139,15 @@ pub fn scan_gpt<D: BlockDevice>(device: &mut D) -> Result<GptScanSummary, Storag
 
 #[cfg(test)]
 mod tests {
+    extern crate std;
+
     use super::*;
     #[test]
     fn scans_real_gpt_metadata_through_block_device() {
-        let mut disk = RamBlockDevice::default();
+        let mut backing = std::vec![0u8; RAMDISK_BYTES];
+        let storage: &mut [u8; RAMDISK_BYTES] =
+            backing.as_mut_slice().try_into().expect("exact ramdisk size");
+        let mut disk = RamBlockDevice::new(storage, false);
         let mut block = [0u8; BLOCK_SIZE];
         let entry_offset = 1024usize;
         block[entry_offset] = 1;
