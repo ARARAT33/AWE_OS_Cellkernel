@@ -267,8 +267,10 @@ mod product_core {
     #[test]
     fn persistent_storage_runtime_round_trip_and_recovery() {
         let mut backing = vec![0u8; RAMDISK_BYTES];
-        let storage: &mut [u8; RAMDISK_BYTES] =
-            backing.as_mut_slice().try_into().expect("exact ramdisk size");
+        let storage: &mut [u8; RAMDISK_BYTES] = backing
+            .as_mut_slice()
+            .try_into()
+            .expect("exact ramdisk size");
         let mut disk = RamBlockDevice::new(storage, false);
         let mut block = [0u8; BLOCK_SIZE];
         block[0] = 0xA5;
