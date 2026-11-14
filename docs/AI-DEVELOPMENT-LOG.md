@@ -563,3 +563,52 @@ Validated code head: `58c2dfd596c708c0b4e3426c37c77471aa4aa67f`.
 3. Real VirtIO block request/completion with read-after-write persistence in QEMU.
 4. netd UDP path in QEMU, then bind cellnetd to it and run a two-instance mesh.
 5. Re-evaluate external draft PR #64 (still conflicting; must not be merged as-is).
+
+
+## 2026-11-14 — Initd restart-policy enforcement and ramdisk stack-safety repair
+
+### Baseline audit
+
+- Current main at audit start: `36f076782707bff10fbd972918709f472c69cb60`; 44 branches and one open PR at that point.
+- Rechecked external draft PR #64 (`fix/initd-restart-policy-enforcement-2026-11-10`): it is still dirty/non-mergeable and diverged from main by 4 commits ahead / 58 behind (merge base `dc898bf66af0f906ac42de9dcbc8b8eae81b8bfc`). It was left untouched; no force-push or branch deletion.
+- The initd bug was still present on main: `ServiceTable::restart()` enforced policy, but callers could bypass it by calling `set_state(Failed|Stopped, Starting)` directly.
+- Main's prior CI evidence was rechecked from real job logs: 347 kernel tests passed; the x86_64 ISO reached the kernel-alive marker; exception injection passed. The VirtIO job only confirmed QEMU's `virtio-blk-pci` exposure and kernel boot, not block I/O.
+
+### Changes on PR #70
+
+Branch: `fix/initd-restart-policy-main-2026-11-14`
+
+Final code head before this log-only commit: `0b39d7620a107168e93962a0ed165e1be58f1c4e`
+
+- `services/initd/src/lib.rs`: `ServiceTable::set_state` now checks the registered service's restart policy whenever a non-Declared state attempts to enter `Starting`. Initial `Declared -> Starting` remains valid; `Never`, `OnFailure`, `Always`, and quarantined-state behavior remain explicit. Added three regression tests covering policy bypass and allowed/denied restart transitions.
+- `kernel/src/storage/ramdisk.rs`: replaced the 256 KiB inline array in `RamBlockDevice` with an exact-size caller-owned mutable backing buffer. Construction zeroes that buffer, remains allocation-free, and no longer returns a huge value by stack. This is a test/in-memory device contract, not durable storage.
+- Updated `kernel/src/storage/mod.rs`, `kernel/src/storage/vfs.rs`, and `tests/product-core/src/lib.rs` to provide backing buffers explicitly.
+- The first PR CI attempt exposed a real Clippy `large_unopt_stack_frames` error in the old ramdisk constructor (estimated 524,292-byte frame). The borrowed-buffer change fixed that finding. The next run caught only rustfmt layout differences; those were corrected and the final code head passed formatting.
+
+### Validation on final code head `0b39d762`
+
+- AWEOS CI Pipeline run **43612951043**: success. Its workspace log contains **532 passed, 0 failed across 57 test binaries**. The new initd suite reported **14 passed**, including all three added regression tests; the kernel suite reported **347 passed**; product-core reported **11 passed**.
+- AWEOS Quality Gate run **43612951076**: success (workspace compile/tests/format/Clippy and UEFI loader jobs).
+- Clippy diagnostics run **43612951055**: success.
+- Bootable Image Pipeline run **43612951202**: success. QEMU ISO smoke test reached `AWEOS: kernel is alive`; exception-injection self-test **1 passed**.
+- VirtIO Runtime run **43612951058**: success. QEMU exposed `virtio-blk-pci`, and the kernel booted with it attached. **No VirtIO block read/write or persistence claim is made.**
+- Multi-Architecture Images run **43612951048**: success, but the workflow built only `x86_64-unknown-none` and `x86_64-unknown-uefi`. ARM64 and RISC-V were not built or runtime-tested.
+- AOSIN Cross-Platform Installers run **43612951046**: success, all 4 Ubuntu/Windows CLI/GUI jobs.
+- CI Diagnostics run **43612951095**: success.
+- rustfmt automation run **43612946838**: success; it made no additional source commit.
+- The 14 PR check-runs visible for this code head completed success. AWEOS Cloud Security Gate run **43612951062** is still pending without an assigned job/step log; an older run on an intermediate head remains queued/in progress. Therefore the cloud-security workflow is **not** counted as passed and PR #70 remains a draft.
+
+### Honest scope and remaining limits
+
+- PR #70 is open, unmerged, and mergeable; main was not modified. The stale external PR #64 remains open and untouched.
+- The ramdisk is still volatile test memory. It is not a native filesystem, durable storage, journal recovery, or power-loss recovery implementation.
+- The QEMU VirtIO evidence remains device enumeration + kernel boot only, not request submission/completion or read-after-write.
+- Ring 3 remains deferred. No per-process page-table roots, active address-space switch, or checked user-copy path was added in this session.
+
+### Next priorities
+
+1. **P0: per-process address-space roots + checked user-copy before any Ring-3 entry.** The current audit found that `PageMapper` owns only one table level; `PageTable` is a 512-entry table primitive; x86_64 bootstrap uses static PML4/PDPT/PD tables with supervisor-only 2 MiB identity leaves for the first 1 GiB; `ProcessContext` carries a CR3 field, but `x86_64_switch.S` does not load CR3. `enter_userspace` is deliberately unused and the general syscall dispatcher fails closed. Implement ownership/lifetime for page-table frames, preserve supervisor-only kernel mappings, enforce USER/NX/W^X policy at every level, add TLB-safe map/unmap, and make user copies validate overflow, permissions, and page crossings before enabling Ring 3.
+2. Wire timer-driven dispatch to the unified ProcessManager only after CR3 switching and per-CPU current-task ownership are explicit.
+3. Implement actual VirtIO block request/completion and QEMU read-after-write persistence; do not treat PCI detection as storage I/O.
+4. Connect netd to a real UDP/NIC path, then run two CellNet instances over that transport.
+5. Re-evaluate PR #64 only after its owner rebases; do not merge its divergent branch as-is.
