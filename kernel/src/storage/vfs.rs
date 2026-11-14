@@ -397,8 +397,10 @@ mod tests {
     #[test]
     fn io_bounds_fail_closed() {
         let mut backing = std::vec![0u8; RAMDISK_BYTES];
-        let storage: &mut [u8; RAMDISK_BYTES] =
-            backing.as_mut_slice().try_into().expect("exact ramdisk size");
+        let storage: &mut [u8; RAMDISK_BYTES] = backing
+            .as_mut_slice()
+            .try_into()
+            .expect("exact ramdisk size");
         let disk = RamBlockDevice::new(storage, false);
         assert!(validate_io(&disk, 0, BLOCK_SIZE - 8, 8).is_ok());
         assert!(validate_io(&disk, 0, BLOCK_SIZE - 7, 8).is_err());
