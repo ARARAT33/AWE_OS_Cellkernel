@@ -145,8 +145,10 @@ mod tests {
     #[test]
     fn scans_real_gpt_metadata_through_block_device() {
         let mut backing = std::vec![0u8; RAMDISK_BYTES];
-        let storage: &mut [u8; RAMDISK_BYTES] =
-            backing.as_mut_slice().try_into().expect("exact ramdisk size");
+        let storage: &mut [u8; RAMDISK_BYTES] = backing
+            .as_mut_slice()
+            .try_into()
+            .expect("exact ramdisk size");
         let mut disk = RamBlockDevice::new(storage, false);
         let mut block = [0u8; BLOCK_SIZE];
         let entry_offset = 1024usize;
