@@ -21,7 +21,7 @@ mod product_core {
     use aweos_kernel::compat::wlin::WlinBridge;
     use aweos_kernel::process::{ResourceBudget, context::CpuContext, context_switch::SwitchFrame};
     use aweos_kernel::storage::{
-        BLOCK_SIZE, BlockDevice, NodeKind, RamBlockDevice, RecoveryAction, Vfs,
+        BLOCK_SIZE, BlockDevice, NodeKind, RAMDISK_BYTES, RamBlockDevice, RecoveryAction, Vfs,
     };
 
     /// QEMU-backed tests spawn nested `cargo build` invocations and full
@@ -266,7 +266,10 @@ mod product_core {
 
     #[test]
     fn persistent_storage_runtime_round_trip_and_recovery() {
-        let mut disk = RamBlockDevice::default();
+        let mut backing = vec![0u8; RAMDISK_BYTES];
+        let storage: &mut [u8; RAMDISK_BYTES] =
+            backing.as_mut_slice().try_into().expect("exact ramdisk size");
+        let mut disk = RamBlockDevice::new(storage, false);
         let mut block = [0u8; BLOCK_SIZE];
         block[0] = 0xA5;
         block[BLOCK_SIZE - 1] = 0x5A;
