@@ -1,6 +1,7 @@
 #![no_std]
 
 pub mod address;
+pub mod address_space;
 pub mod allocator;
 pub mod boot_mapper;
 pub mod frame;
@@ -12,6 +13,7 @@ pub mod region;
 pub mod x86_64;
 
 pub use address::{PhysicalAddress, VirtualAddress};
+pub use address_space::{AddressSpace, UserCopyError, UserMapping, checked_user_range};
 pub use allocator::BumpAllocator;
 pub use boot_mapper::{BootMapError, BootMapper};
 pub use frame::{

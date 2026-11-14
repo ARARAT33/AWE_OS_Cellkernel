@@ -136,3 +136,17 @@ The dispatch loop must persist the switched-away process's outgoing frame throug
 `persist_outgoing_frame` validates the saved RIP/RSP as canonical, clears stale completion metadata (completion hooks belong to the dispatch path, not to a persisted context), applies the saved registers to the stored `ProcessContext`, and rejects processes that cannot be dispatched again (Created/Exited) as well as unknown processes and malformed frames. `ProcessManager::process_context` returns a copy of the stored context for verification.
 
 The feature-gated QEMU self-test now runs a two-process round-robin on separate fresh stacks: each process yields once, the driver persists its outgoing frame (RIP must have advanced past the process entry and RSP must stay inside that process's own stack), and each process must then resume from the persisted context before exiting, acknowledging the switch to idle and being reaped. This is runtime evidence for the persist/resume path; it is still single-core, kernel-address-space-only and does not enable Ring 3, preemption or per-process address spaces.
+
+
+## Per-process address-space roots and checked user copy (2026-11-14)
+
+`kernel/src/memory/address_space.rs` adds the software contract layer for
+per-process address spaces: an `AddressSpace` owns a validated, page-aligned
+PML4 root frame and a bounded registry of user mappings. Every user mapping is
+validated (page alignment, USER+PRESENT flags via `valid_user_mapping`, user-half
+containment, overlap rejection, bounded table). `checked_user_range` and
+`check_user_access` are the gates a future kernel-to-user copy must pass:
+nonzero, canonical user half, no wraparound, and every touched page mapped
+USER+PRESENT plus WRITABLE for writes. This layer does not install page tables,
+touch CR3, or perform the physical copy; hardware activation and the Ring-3
+entry path remain explicitly unimplemented until isolation tests exist.
