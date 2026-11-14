@@ -80,8 +80,10 @@ mod tests {
     #[test]
     fn round_trip_and_flush_are_deterministic() {
         let mut backing = std::vec![0xFFu8; RAMDISK_BYTES];
-        let storage: &mut [u8; RAMDISK_BYTES] =
-            backing.as_mut_slice().try_into().expect("exact ramdisk size");
+        let storage: &mut [u8; RAMDISK_BYTES] = backing
+            .as_mut_slice()
+            .try_into()
+            .expect("exact ramdisk size");
         let mut disk = RamBlockDevice::new(storage, false);
         let mut initial = [0u8; BLOCK_SIZE];
         disk.read_block(3, &mut initial).expect("initial read");
@@ -103,8 +105,10 @@ mod tests {
     #[test]
     fn enforces_bounds_and_read_only_mode() {
         let mut backing = std::vec![0u8; RAMDISK_BYTES];
-        let storage: &mut [u8; RAMDISK_BYTES] =
-            backing.as_mut_slice().try_into().expect("exact ramdisk size");
+        let storage: &mut [u8; RAMDISK_BYTES] = backing
+            .as_mut_slice()
+            .try_into()
+            .expect("exact ramdisk size");
         let mut disk = RamBlockDevice::new(storage, true);
         let block = [0u8; BLOCK_SIZE];
         assert_eq!(disk.write_block(0, &block), Err(StorageError::ReadOnly));
