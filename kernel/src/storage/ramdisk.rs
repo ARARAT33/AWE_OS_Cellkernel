@@ -21,7 +21,11 @@ impl<'a> RamBlockDevice<'a> {
     /// lifetime of this device.
     pub fn new(data: &'a mut [u8; RAMDISK_BYTES], read_only: bool) -> Self {
         data.fill(0);
-        Self { data, read_only, dirty: false }
+        Self {
+            data,
+            read_only,
+            dirty: false,
+        }
     }
 
     pub fn is_dirty(&self) -> bool {
