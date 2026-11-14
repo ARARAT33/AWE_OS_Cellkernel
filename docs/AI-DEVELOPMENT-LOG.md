@@ -1,3 +1,47 @@
+## 2026-11-14 — per-process address-space roots and checked user-copy layer (priority 1)
+
+### Continuation and audit
+
+- Continued from main head `36f07678` (PR #68 merge session). Read the
+  development log first; the recorded next-priority item 1 was per-process
+  page-table roots plus checked user-copy before any Ring-3 entry.
+- Audited `kernel/src/memory/` (address, paging, mapper, frame, allocator,
+  boot_mapper): paging primitives, frame allocators and the boot mapper exist,
+  but no per-process address-space object and no checked user-copy gate.
+
+### Implemented (branch feat/address-space-user-copy-2026-11-14)
+
+- `kernel/src/memory/address_space.rs` (new): `AddressSpace<const MAX_MAPPINGS>`
+  owns a validated page-aligned PML4 root frame (zero and misaligned roots
+  rejected) and a bounded registry of `UserMapping` entries.
+  `map_user` validates page alignment, `valid_user_mapping` flags (USER+PRESENT,
+  WRITABLE only with PRESENT), user-half containment with checked overflow,
+  overlap rejection and table capacity. `unmap_user`, `translate_page` and
+  `check_user_access` complete the contract; `checked_user_range` rejects null,
+  zero-length, non-canonical and overflowing ranges before any lookup.
+- `kernel/src/memory/mod.rs`: module registered and re-exported.
+- Twelve unit tests: root validation, range rejection, mapping validation and
+  overlap, access-permission enforcement (read/write, cross-mapping spans),
+  translation offsets, exact unmap and fail-closed table-full behavior.
+- `docs/CELL_RUNTIME.md`: new section documenting the layer and its
+  explicit non-goals (no CR3 activation, no physical copy, no Ring 3 yet).
+
+### Honest scope
+
+- This is the software contract/validation layer only. Hardware page-table
+  activation (CR3), the physical checked-copy path and Ring-3 entry remain
+  unimplemented and are not claimed. No kernel boot path calls this yet.
+
+### Next priorities
+
+1. Wire `AddressSpace` roots into ProcessManager's ProcessContext so each
+   process carries its own root frame.
+2. Timer-driven dispatch loop on the unified ProcessManager.
+3. Real VirtIO block request/completion with read-after-write persistence.
+4. netd UDP path in QEMU, then a two-instance CellNet mesh.
+
+---
+
 ### Final validation on the formatted CellNet head — 2026-11-13
 
 - The final source+documentation head at this validation point was
