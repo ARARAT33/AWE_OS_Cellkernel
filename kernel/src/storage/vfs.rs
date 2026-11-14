@@ -376,8 +376,10 @@ pub fn validate_io<D: BlockDevice>(
 
 #[cfg(test)]
 mod tests {
+    extern crate std;
+
     use super::*;
-    use crate::storage::RamBlockDevice;
+    use crate::storage::{RAMDISK_BYTES, RamBlockDevice};
 
     #[test]
     fn vfs_is_bounded_and_recoverable() {
@@ -394,7 +396,10 @@ mod tests {
 
     #[test]
     fn io_bounds_fail_closed() {
-        let disk = RamBlockDevice::default();
+        let mut backing = std::vec![0u8; RAMDISK_BYTES];
+        let storage: &mut [u8; RAMDISK_BYTES] =
+            backing.as_mut_slice().try_into().expect("exact ramdisk size");
+        let disk = RamBlockDevice::new(storage, false);
         assert!(validate_io(&disk, 0, BLOCK_SIZE - 8, 8).is_ok());
         assert!(validate_io(&disk, 0, BLOCK_SIZE - 7, 8).is_err());
         assert!(validate_io(&disk, disk.block_count(), 0, 1).is_err());
