@@ -351,7 +351,24 @@ pub extern "C" fn rust_main(boot_magic: u32, boot_info_addr: u64) -> ! {
     }
 
     serial_write(b"AWEOS: kernel is alive\r\n");
-    halt_forever();
+    idle_forever();
+}
+
+/// Idle loop for the boot context. Enabling interrupts arms the PIT, which
+/// drives the preemptive kernel-thread scheduler armed in `kernel_entry`.
+/// The boot context remains runnable as the system's idle thread, so the
+/// CPU always has a valid thread to return to.
+#[cfg(not(test))]
+fn idle_forever() -> ! {
+    #[cfg(target_arch = "x86_64")]
+    unsafe {
+        core::arch::asm!("sti", options(nomem, nostack));
+    }
+    loop {
+        unsafe {
+            core::arch::asm!("hlt", options(nomem, nostack, preserves_flags));
+        }
+    }
 }
 
 #[cfg(not(test))]
