@@ -662,3 +662,44 @@ Final code head before this log-only commit: `0b39d7620a107168e93962a0ed165e1be5
 - Added a regression test proving that a zero-tick quantum is clamped to one tick before preemption is armed.
 - This is a bounded scheduler configuration invariant; it does not claim blocking sleep, SMP, user-mode execution, or FPU/SIMD context switching.
 - Full CI is triggered for the updated, main-synchronized PR #72 tree.
+
+
+## 2026-11-15 — PR #72 final validation
+
+Validated code head: `b99ca39a5d6a2f18e5d9b0e2aa3e95a7409c21e9` (main-synchronized; zero commits behind main).
+
+### Real CI results
+
+- AWEOS CI Pipeline run **43732931241**: success; workspace test log reports **541 passed, 0 failed across 57 test binaries**. Kernel: **356 passed**; initd: **14 passed**; product-core: **11 passed**.
+- AWEOS Quality Gate run **43732931167**: success (Rust workspace and UEFI loader).
+- Clippy report run **43732931222**: success.
+- Bootable Image Pipeline run **43732931184**: success; exception-injection self-test passed.
+- VirtIO Runtime run **43732931177**: success. QEMU exposed `virtio-blk-pci`, booted the kernel, and emitted:
+  - scheduler armed with 3 kernel threads and a 50 ms quantum;
+  - heartbeat at ticks 50, 1100, and 2150;
+  - scheduler diagnostics `switches=44`, dispatch counts `15/15/15`.
+  This validates the ring-0 timer-driven context-switch path in QEMU. It does **not** validate VirtIO block request/completion, read-after-write, or durable storage.
+- Multi-Architecture Images run **43732931201**: success, but actual targets were only `x86_64-unknown-none` and `x86_64-unknown-uefi`. ARM64 and RISC-V were not built or tested.
+- Cloud Security Gate run **43732931202**: success.
+- Cross-platform installer run **43732931162**: success, all four Ubuntu/Windows CLI/GUI jobs.
+- CI Diagnostics run **43732931205**: success.
+
+All **9/9 substantive workflows** passed on the validated code head.
+
+### Remaining limitations
+
+- The scheduler is single-CPU and kernel-thread-only; it does not schedule user processes or switch CR3.
+- `sleep_ticks` is a busy wait, not a blocked sleep/wakeup mechanism.
+- FPU/SIMD register context is not saved/restored; current kernel threads must not depend on it.
+- No SMP, per-CPU run queues, user-mode isolation, or Ring 3 support is claimed.
+- The VirtIO workflow still proves device exposure + boot, not actual block I/O or persistence.
+- The multi-architecture workflow currently builds x86_64 only.
+
+### Next priorities
+
+1. Complete the real page-table allocator/ownership and mapping hierarchy behind PR #71; add TLB-safe map/unmap and preserve supervisor-only kernel mappings.
+2. Wire CR3 switching into process context only after address-space isolation and user-copy tests pass.
+3. Add blocking thread states and timer wakeups; preserve the busy-wait implementation only as an explicitly named temporary delay.
+4. Add FPU/SIMD save/restore (or an enforced kernel soft-float policy) before allowing general kernel-thread code to use those registers.
+5. Implement VirtIO block request/completion and QEMU read-after-write tests; keep persistence claims deferred until crash/power-loss tests exist.
+6. Add actual ARM64 and RISC-V builds before describing the workflow as multi-architecture support.
