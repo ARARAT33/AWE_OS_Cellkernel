@@ -19,7 +19,7 @@
 //!   the registered mapping. NX policy at all levels is the next step and is
 //!   documented as unimplemented.
 
-use super::address_space::{AddressSpace, UserMapping, ADDRESS_SPACE_PAGE_SIZE};
+use super::address_space::{ADDRESS_SPACE_PAGE_SIZE, AddressSpace, UserMapping};
 use super::paging::{PageFlags, PageTable, PageTableEntry, indices, valid_user_mapping};
 
 /// Errors returned while building hardware page tables for an address space.
@@ -241,8 +241,8 @@ impl<'m, M: TableMemory> UserPageTableBuilder<'m, M> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::address_space::AddressSpace;
+    use super::*;
 
     const R: PageFlags = PageFlags::PRESENT.union(PageFlags::USER);
     const RW: PageFlags = R.union(PageFlags::WRITABLE);
@@ -384,11 +384,29 @@ mod tests {
 
         let ro_page = builder.translate(0x1000).unwrap();
         let ro_leaf = memory.table(ro_page).unwrap();
-        assert!(!ro_leaf.get(0).unwrap().flags().contains(PageFlags::WRITABLE));
+        assert!(
+            !ro_leaf
+                .get(0)
+                .unwrap()
+                .flags()
+                .contains(PageFlags::WRITABLE)
+        );
         let rw_leaf = memory.table(builder.translate(0x2000).unwrap()).unwrap();
-        assert!(rw_leaf.get(0).unwrap().flags().contains(PageFlags::WRITABLE));
+        assert!(
+            rw_leaf
+                .get(0)
+                .unwrap()
+                .flags()
+                .contains(PageFlags::WRITABLE)
+        );
         let nx_leaf = memory.table(builder.translate(0x3000).unwrap()).unwrap();
-        assert!(nx_leaf.get(0).unwrap().flags().contains(PageFlags::NO_EXECUTE));
+        assert!(
+            nx_leaf
+                .get(0)
+                .unwrap()
+                .flags()
+                .contains(PageFlags::NO_EXECUTE)
+        );
     }
 
     #[test]
@@ -413,8 +431,12 @@ mod tests {
         let mut memory = TwoFrames { inner };
         let mut space = AddressSpace::<4>::new(root).unwrap();
         // Two mappings in different PML4 branches need more than two tables.
-        space.map_user(0x0000_4000_0000, 0x00a0_0000, 1, RW).unwrap();
-        space.map_user(0x0000_8000_0000, 0x00b0_0000, 1, RW).unwrap();
+        space
+            .map_user(0x0000_4000_0000, 0x00a0_0000, 1, RW)
+            .unwrap();
+        space
+            .map_user(0x0000_8000_0000, 0x00b0_0000, 1, RW)
+            .unwrap();
         let mut builder = UserPageTableBuilder::new(root, &mut memory).unwrap();
         assert_eq!(
             builder.install_address_space(&space).err(),
