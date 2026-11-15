@@ -21,7 +21,7 @@ mod product_core {
     use aweos_kernel::compat::wlin::WlinBridge;
     use aweos_kernel::process::{ResourceBudget, context::CpuContext, context_switch::SwitchFrame};
     use aweos_kernel::storage::{
-        BLOCK_SIZE, BlockDevice, NodeKind, RamBlockDevice, RecoveryAction, Vfs,
+        BLOCK_SIZE, BlockDevice, NodeKind, RAMDISK_BYTES, RamBlockDevice, RecoveryAction, Vfs,
     };
 
     /// QEMU-backed tests spawn nested `cargo build` invocations and full
@@ -266,7 +266,12 @@ mod product_core {
 
     #[test]
     fn persistent_storage_runtime_round_trip_and_recovery() {
-        let mut disk = RamBlockDevice::default();
+        let mut backing = vec![0u8; RAMDISK_BYTES];
+        let storage: &mut [u8; RAMDISK_BYTES] = backing
+            .as_mut_slice()
+            .try_into()
+            .expect("exact ramdisk size");
+        let mut disk = RamBlockDevice::new(storage, false);
         let mut block = [0u8; BLOCK_SIZE];
         block[0] = 0xA5;
         block[BLOCK_SIZE - 1] = 0x5A;
@@ -653,7 +658,7 @@ mod product_core {
             "AWEOS: Kernel Heap initialized",
             "AWEOS: PCI Bus 0 enumerated",
             "AWEOS: Interrupts & PIC/PIT initialized",
-            "AWEOS: timer programmed (no scheduler yet)",
+            "AWEOS: preemptive scheduler armed: 3 kernel threads, quantum 50ms",
             "AWEOS: boot protocol validated",
             "AWEOS: kernel state = RUNNING",
             "AWEOS: kernel is alive",
@@ -697,8 +702,8 @@ mod product_core {
             std::thread::sleep(Duration::from_millis(100));
         }
 
-        // Allow a short settling period to catch immediate privilege/return faults.
-        std::thread::sleep(Duration::from_millis(100));
+        // Let the PIT-driven scheduler complete at least one diagnostics interval.
+        std::thread::sleep(Duration::from_secs(3));
         let final_log = std::fs::read_to_string(&log_file).unwrap_or_default();
         assert!(
             final_log
@@ -706,9 +711,27 @@ mod product_core {
             "Ring 3 must remain deferred until isolated user mappings exist:\n{final_log}"
         );
         assert!(
-            !final_log.contains("Ring 3 userspace reached and active!")
-                && !final_log.contains("Preemptive Scheduler initialized"),
-            "boot log must not claim unimplemented userspace or preemptive scheduling:\n{final_log}"
+            !final_log.contains("Ring 3 userspace reached and active!"),
+            "boot log must not claim that Ring 3 userspace is active before address-space isolation exists:\n{final_log}"
+        );
+
+        assert!(
+            final_log.contains("AWEOS: [cell:heartbeat] beat "),
+            "QEMU did not observe the preemptively scheduled heartbeat thread:\n{final_log}"
+        );
+        assert!(
+            final_log.contains("AWEOS: [cell:diagnostics] switches="),
+            "QEMU did not observe scheduler diagnostics after PIT ticks:\n{final_log}"
+        );
+        let switch_count = final_log
+            .split("switches=")
+            .nth(1)
+            .and_then(|tail| tail.split_whitespace().next())
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(0);
+        assert!(
+            switch_count > 0,
+            "QEMU booted but no preemptive context switch was reported:\n{final_log}"
         );
         assert!(
             !final_log.contains("AWEOS EXCEPTION"),
