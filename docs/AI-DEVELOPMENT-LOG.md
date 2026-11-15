@@ -563,3 +563,32 @@ Validated code head: `58c2dfd596c708c0b4e3426c37c77471aa4aa67f`.
 3. Real VirtIO block request/completion with read-after-write persistence in QEMU.
 4. netd UDP path in QEMU, then bind cellnetd to it and run a two-instance mesh.
 5. Re-evaluate external draft PR #64 (still conflicting; must not be merged as-is).
+
+
+## 2026-11-15 — PR #72 CI repair: scheduler-aware QEMU smoke test and bounded ramdisk backing
+
+### CI findings on initial PR #72 head
+
+- Workspace CI, installer matrix, diagnostics, and x86_64/multi-architecture image build completed successfully.
+- Three independent gates failed for actionable reasons:
+  - QEMU product-core smoke test still expected the removed `timer programmed (no scheduler yet)` marker, so it stopped at 8/17 milestones even though the serial log showed the new scheduler booting and running.
+  - The smoke test still asserted that the boot log must not claim preemptive scheduling, which became stale once the ring-0 scheduler was implemented.
+  - Clippy (including the exception-injection and security gates) rejected the 256 KiB inline ramdisk value for a 524,292-byte potential stack frame.
+
+### Changes on `feat/preemptive-scheduler`
+
+- Reused the allocation-free caller-owned ramdisk backing design: `RamBlockDevice` now borrows an exact-size `RAMDISK_BYTES` buffer, avoiding the large by-value stack frame.
+- Updated storage module/VFS/product-core test callers to provide the backing buffer.
+- Updated the QEMU boot milestone to require the real `preemptive scheduler armed` marker.
+- Extended the QEMU settling interval to 3 seconds and now require heartbeat + scheduler diagnostics with a non-zero reported switch count. Ring 3 remains explicitly deferred; the test no longer treats the implemented ring-0 scheduler as an unimplemented feature.
+
+### Validation status
+
+- Fixes are committed to the PR branch; the new CI run is required before this work is considered validated.
+- No merge to `main`, force-push, or branch deletion was performed.
+
+### Next priorities
+
+1. Confirm the complete CI suite is green on the updated PR #72 head; inspect QEMU serial evidence for heartbeat and non-zero switch count.
+2. Review and harden PR #71's address-space contract (mapping-slot reuse, null virtual mappings, and physical-range overflow) before any hardware page-table activation.
+3. Keep Ring 3 deferred until page-table ownership, CR3 switching, USER/NX/W^X policy, TLB invalidation, and real checked-copy operations are wired and tested.
