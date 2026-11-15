@@ -1,7 +1,7 @@
 #![no_std]
 
 use super::address::is_canonical_user_address_x86_64_48;
-use super::paging::{PageFlags, valid_user_mapping};
+use super::paging::{PageFlags, PageTableEntry, valid_mapping, valid_user_mapping};
 
 /// Size of one page in bytes, re-declared locally to keep this module free of
 /// frame-allocator dependencies.
@@ -66,18 +66,24 @@ pub struct UserMapping {
 }
 
 impl UserMapping {
-    /// Exclusive virtual end, overflow-checked at registration time.
-    pub const fn virtual_end(&self) -> u64 {
-        self.virtual_start + self.page_count * ADDRESS_SPACE_PAGE_SIZE
+    /// Exclusive virtual end. Invalid externally-constructed mappings fail closed.
+    pub const fn virtual_end(&self) -> Option<u64> {
+        match self.page_count.checked_mul(ADDRESS_SPACE_PAGE_SIZE) {
+            Some(bytes) => self.virtual_start.checked_add(bytes),
+            None => None,
+        }
     }
 
     pub const fn covers(&self, page: u64) -> bool {
-        page >= self.virtual_start && page < self.virtual_end()
+        match self.virtual_end() {
+            Some(end) => page >= self.virtual_start && page < end,
+            None => false,
+        }
     }
 }
 
-/// A per-process address-space contract object: an owning PML4 root frame and
-/// a bounded registry of user mappings with checked access validation.
+/// A per-process address-space contract object: a caller-owned PML4 root-frame
+/// address and a bounded registry of user mappings with checked access validation.
 ///
 /// This is the software contract layer for per-process address spaces. It
 /// validates and records every user mapping and every checked user copy
@@ -95,7 +101,9 @@ impl<const MAX_MAPPINGS: usize> AddressSpace<MAX_MAPPINGS> {
     /// Create an address space over a page-aligned PML4 root frame.
     /// A zero root is rejected: frame zero is never a valid root here.
     pub fn new(root_pml4_physical: u64) -> Result<Self, UserCopyError> {
-        if root_pml4_physical == 0 || root_pml4_physical & (ADDRESS_SPACE_PAGE_SIZE - 1) != 0 {
+        if root_pml4_physical == 0
+            || !valid_mapping(root_pml4_physical, PageFlags::PRESENT)
+        {
             return Err(UserCopyError::InvalidMapping);
         }
         Ok(Self {
@@ -132,27 +140,41 @@ impl<const MAX_MAPPINGS: usize> AddressSpace<MAX_MAPPINGS> {
         {
             return Err(UserCopyError::InvalidMapping);
         }
-        let bytes = match page_count.checked_mul(ADDRESS_SPACE_PAGE_SIZE) {
-            Some(bytes) => bytes,
-            None => return Err(UserCopyError::RangeOverflow),
-        };
-        let virtual_end = match virtual_start.checked_add(bytes) {
-            Some(end) => end,
-            None => return Err(UserCopyError::RangeOverflow),
-        };
-        if virtual_end > USER_HALF_END {
+        let bytes = page_count
+            .checked_mul(ADDRESS_SPACE_PAGE_SIZE)
+            .ok_or(UserCopyError::RangeOverflow)?;
+        // Reject null and non-user mappings at registration time, not only
+        // later when a caller asks to copy through the mapping.
+        checked_user_range(virtual_start, bytes)?;
+        let virtual_end = virtual_start
+            .checked_add(bytes)
+            .ok_or(UserCopyError::RangeOverflow)?;
+        let physical_end = physical_start
+            .checked_add(bytes)
+            .ok_or(UserCopyError::RangeOverflow)?;
+        // x86_64 page-table entries in this crate encode 52-bit physical
+        // page bases. The exclusive end may equal 2^52.
+        let physical_limit = PageTableEntry::ADDRESS_MASK + ADDRESS_SPACE_PAGE_SIZE;
+        if physical_end > physical_limit {
             return Err(UserCopyError::RangeOverflow);
         }
         if self.used >= MAX_MAPPINGS {
             return Err(UserCopyError::TableFull);
         }
         for slot in self.mappings.iter().flatten() {
-            let other_end = slot.virtual_end();
+            let other_end = slot.virtual_end().ok_or(UserCopyError::InvalidMapping)?;
             if virtual_start < other_end && slot.virtual_start < virtual_end {
                 return Err(UserCopyError::Overlap);
             }
         }
-        self.mappings[self.used] = Some(UserMapping {
+        // Reuse a vacant slot after unmap. The live-entry count is not a
+        // stable insertion index and must not overwrite a surviving mapping.
+        let free_slot = self
+            .mappings
+            .iter()
+            .position(|slot| slot.is_none())
+            .ok_or(UserCopyError::TableFull)?;
+        self.mappings[free_slot] = Some(UserMapping {
             virtual_start,
             physical_start,
             page_count,
@@ -183,7 +205,7 @@ impl<const MAX_MAPPINGS: usize> AddressSpace<MAX_MAPPINGS> {
             .iter()
             .flatten()
             .find(|m| m.covers(virtual_page))
-            .map(|m| m.physical_start + (virtual_page - m.virtual_start))
+            .and_then(|m| m.physical_start.checked_add(virtual_page - m.virtual_start))
     }
 
     /// Checked user access validation for [address, address + len).
@@ -235,6 +257,7 @@ mod tests {
         assert!(AddressSpace::<4>::new(0).is_err());
         assert!(AddressSpace::<4>::new(0x1000_1001).is_err());
         assert!(AddressSpace::<4>::new(0x5000).is_ok());
+        assert!(AddressSpace::<4>::new(0x0010_0000_0000_0000).is_err());
     }
 
     #[test]
@@ -273,6 +296,39 @@ mod tests {
             Err(UserCopyError::Overlap)
         );
         assert!(space.map_user(0x3000, 0xa000, 1, RW).is_ok());
+    }
+
+    #[test]
+    fn map_user_rejects_null_virtual_ranges_and_physical_overflow() {
+        let mut space = AddressSpace::<4>::new(0x5000).unwrap();
+        assert_eq!(
+            space.map_user(0, 0x9000, 1, RW),
+            Err(UserCopyError::NotUserAddress)
+        );
+        assert_eq!(
+            space.map_user(0x1000, 0x000f_ffff_ffff_f000, 2, RW),
+            Err(UserCopyError::RangeOverflow)
+        );
+        assert!(space
+            .map_user(0x1000, 0x000f_ffff_ffff_f000, 1, RW)
+            .is_ok());
+    }
+
+    #[test]
+    fn mapping_slot_reuse_after_middle_unmap_preserves_live_entries() {
+        let mut space = AddressSpace::<4>::new(0x5000).unwrap();
+        space.map_user(0x1000, 0x9000, 1, RW).unwrap();
+        space.map_user(0x3000, 0xb000, 1, RW).unwrap();
+        space.map_user(0x5000, 0xd000, 1, RW).unwrap();
+
+        space.unmap_user(0x3000).unwrap();
+        space.map_user(0x7000, 0xf000, 1, RW).unwrap();
+
+        assert_eq!(space.mapping_count(), 3);
+        assert_eq!(space.translate_page(0x1000), Some(0x9000));
+        assert_eq!(space.translate_page(0x3000), None);
+        assert_eq!(space.translate_page(0x5000), Some(0xd000));
+        assert_eq!(space.translate_page(0x7000), Some(0xf000));
     }
 
     #[test]
