@@ -15,6 +15,12 @@
 //!   thread. No separate assembly switch path is needed on this architecture.
 //! - Single-CPU only. There is no per-CPU state and no locking beyond
 //!   interrupt masking; SMP requires per-CPU schedulers and is future work.
+//! - FPU/SIMD and per-thread TLS/base-register state are not saved or restored.
+//!   Kernel thread entry points must not depend on those registers until a
+//!   complete architecture-specific context-save path is implemented.
+//! - `sleep_ticks` is a busy-wait delay, not a blocked sleep/wakeup primitive.
+//!   Threads remain runnable and consume CPU time while waiting; do not use it
+//!   as a general service sleep API.
 //!
 //! Concurrency model: the scheduler state is mutated only (a) inside the
 //! IRQ0 handler, which always runs with IF=0, or (b) under
