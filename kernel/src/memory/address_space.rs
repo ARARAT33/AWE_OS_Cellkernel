@@ -119,6 +119,11 @@ impl<const MAX_MAPPINGS: usize> AddressSpace<MAX_MAPPINGS> {
         self.used
     }
 
+    /// Iterate the live user mappings in slot order.
+    pub fn mappings(&self) -> impl Iterator<Item = &UserMapping> {
+        self.mappings.iter().flatten()
+    }
+
     /// Register a user mapping. Both addresses must be page aligned, the
     /// flags must satisfy valid_user_mapping, the virtual range must lie in
     /// the user half, and the range must not overlap any existing mapping.
