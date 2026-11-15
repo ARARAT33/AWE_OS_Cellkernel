@@ -101,9 +101,7 @@ impl<const MAX_MAPPINGS: usize> AddressSpace<MAX_MAPPINGS> {
     /// Create an address space over a page-aligned PML4 root frame.
     /// A zero root is rejected: frame zero is never a valid root here.
     pub fn new(root_pml4_physical: u64) -> Result<Self, UserCopyError> {
-        if root_pml4_physical == 0
-            || !valid_mapping(root_pml4_physical, PageFlags::PRESENT)
-        {
+        if root_pml4_physical == 0 || !valid_mapping(root_pml4_physical, PageFlags::PRESENT) {
             return Err(UserCopyError::InvalidMapping);
         }
         Ok(Self {
@@ -309,9 +307,7 @@ mod tests {
             space.map_user(0x1000, 0x000f_ffff_ffff_f000, 2, RW),
             Err(UserCopyError::RangeOverflow)
         );
-        assert!(space
-            .map_user(0x1000, 0x000f_ffff_ffff_f000, 1, RW)
-            .is_ok());
+        assert!(space.map_user(0x1000, 0x000f_ffff_ffff_f000, 1, RW).is_ok());
     }
 
     #[test]
