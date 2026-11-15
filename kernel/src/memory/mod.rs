@@ -6,6 +6,7 @@ pub mod allocator;
 pub mod boot_mapper;
 pub mod frame;
 pub mod mapper;
+pub mod page_table_build;
 pub mod paging;
 pub mod physical;
 pub mod region;
@@ -21,6 +22,7 @@ pub use frame::{
     PhysicalFrameAllocator, checked_frame_end, frame_at, frame_end,
 };
 pub use mapper::{MapError, PageMapper};
+pub use page_table_build::{PageBuildError, TableMemory, UserPageTableBuilder};
 pub use paging::{
     PageFlags, PageTable, PageTableEntry, indices as page_indices, page_offset, valid_mapping,
 };
