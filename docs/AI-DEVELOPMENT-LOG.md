@@ -607,3 +607,26 @@ Validated code head: `58c2dfd596c708c0b4e3426c37c77471aa4aa67f`.
 3. Real VirtIO block request/completion with read-after-write persistence in QEMU.
 4. netd UDP path in QEMU, then bind cellnetd to it and run a two-instance mesh.
 5. Re-evaluate external draft PR #64 (still conflicting; must not be merged as-is).
+
+
+## 2026-11-15 — PR #71 address-space contract hardening
+
+### Review findings and fixes
+
+- Fixed a mapping-table corruption bug: after removing a middle mapping, the old insertion logic used the live-entry count as an array index and could overwrite a different live mapping. Registration now finds the first vacant slot; a regression test verifies that existing mappings survive middle-slot removal and reuse.
+- Reject null virtual mappings at registration, not only at later access validation.
+- Validate the complete physical range against the 52-bit x86_64 page-table address encoding, including overflow at the exclusive end; the highest representable single page remains valid.
+- Make UserMapping::virtual_end checked so externally constructed invalid descriptors fail closed, and make page translation use checked addition.
+- Clarify that AddressSpace records a caller-owned root-frame address; it does not allocate, own, free, install page tables, or activate CR3.
+
+### Validation status
+
+- Regression tests added for middle-slot reuse, null mapping rejection, and physical-range overflow.
+- The updated PR head must pass the full GitHub Actions suite before merge. No hardware page-table activation, physical user-copy, CR3 switch, or Ring 3 is claimed.
+
+### Next priorities
+
+1. Wire page-table frame allocation/lifetime and real PML4/PDPT/PD/PT installation while preserving supervisor-only kernel mappings.
+2. Add TLB-safe map/unmap and enforce USER/NX/W^X policy at all page-table levels.
+3. Integrate checked physical user-copy with process contexts only after address-space isolation tests pass.
+4. Keep Ring 3 disabled until the above hardware and QEMU isolation tests are green.
