@@ -361,6 +361,15 @@ mod tests {
     }
 
     #[test]
+    fn zero_quantum_is_normalized_to_one_tick() {
+        let _guard = TEST_MUTEX.lock().unwrap();
+        reset();
+        register_boot_context();
+        start(0);
+        assert_eq!(with_scheduler(|scheduler| scheduler.quantum), 1);
+    }
+
+    #[test]
     fn no_switch_before_start() {
         let _guard = TEST_MUTEX.lock().unwrap();
         reset();
