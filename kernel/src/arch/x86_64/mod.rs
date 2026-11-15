@@ -53,6 +53,24 @@ pub fn serial_write_str(s: &str) {
     }
 }
 
+/// Writes `value` to the serial console in decimal. Allocation-free.
+pub fn serial_write_u64(value: u64) {
+    let mut buffer = [0u8; 20];
+    let mut index = buffer.len();
+    let mut remaining = value;
+    loop {
+        index -= 1;
+        buffer[index] = b'0' + (remaining % 10) as u8;
+        remaining /= 10;
+        if remaining == 0 {
+            break;
+        }
+    }
+    if let Ok(text) = core::str::from_utf8(&buffer[index..]) {
+        serial_write_str(text);
+    }
+}
+
 #[inline(always)]
 pub unsafe fn write_cr3(value: u64) {
     unsafe {
