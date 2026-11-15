@@ -726,3 +726,10 @@ All **9/9 substantive workflows** passed on the validated code head.
 2. Add TLB-safe map/unmap and enforce USER/NX/W^X policy at all page-table levels.
 3. Integrate checked physical user-copy with process contexts only after address-space isolation tests pass.
 4. Keep Ring 3 disabled until the above hardware and QEMU isolation tests are green.
+
+
+### Follow-up main synchronization after PR #72
+
+- PR #72 (preemptive ring-0 kernel-thread scheduler) was merged into main as `20a3a24d90d7641b1c5d1f49e9b0f70966c2d50a` after its nine substantive workflows passed on the validated code head.
+- The PR #71 branch was synchronized with that main commit through a normal two-parent merge commit `1b8b4ce270334f12eb91c1142d0c5291a046714e`; compare reports zero commits behind main.
+- PR #71 remains open and mergeable, but its latest head has no completed CI run. The prior workflow attempt was `action_required`; no test success is claimed and no merge was performed.
