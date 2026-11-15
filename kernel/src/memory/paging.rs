@@ -3,7 +3,7 @@
 use super::address::is_canonical_x86_64_48;
 
 #[repr(transparent)]
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct PageFlags(pub u64);
 
 impl PageFlags {
@@ -30,7 +30,7 @@ impl PageFlags {
 }
 
 #[repr(transparent)]
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct PageTableEntry(u64);
 
 impl PageTableEntry {
