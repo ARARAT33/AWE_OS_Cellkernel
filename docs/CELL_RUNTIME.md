@@ -141,12 +141,13 @@ The feature-gated QEMU self-test now runs a two-process round-robin on separate 
 ## Per-process address-space roots and checked user copy (2026-11-14)
 
 `kernel/src/memory/address_space.rs` adds the software contract layer for
-per-process address spaces: an `AddressSpace` owns a validated, page-aligned
-PML4 root frame and a bounded registry of user mappings. Every user mapping is
+per-process address spaces: an `AddressSpace` records a caller-owned,
+validated, page-aligned PML4 root-frame address and a bounded registry of user mappings. Every user mapping is
 validated (page alignment, USER+PRESENT flags via `valid_user_mapping`, user-half
 containment, overlap rejection, bounded table). `checked_user_range` and
 `check_user_access` are the gates a future kernel-to-user copy must pass:
 nonzero, canonical user half, no wraparound, and every touched page mapped
-USER+PRESENT plus WRITABLE for writes. This layer does not install page tables,
-touch CR3, or perform the physical copy; hardware activation and the Ring-3
-entry path remain explicitly unimplemented until isolation tests exist.
+USER+PRESENT plus WRITABLE for writes. The root frame is not allocated, freed, or hardware-installed by this object.
+This layer does not install page tables, touch CR3, or perform the physical
+copy; hardware activation and the Ring-3 entry path remain explicitly
+unimplemented until isolation tests exist.
