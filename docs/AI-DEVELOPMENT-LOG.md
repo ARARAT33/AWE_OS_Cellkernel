@@ -592,3 +592,11 @@ Validated code head: `58c2dfd596c708c0b4e3426c37c77471aa4aa67f`.
 1. Confirm the complete CI suite is green on the updated PR #72 head; inspect QEMU serial evidence for heartbeat and non-zero switch count.
 2. Review and harden PR #71's address-space contract (mapping-slot reuse, null virtual mappings, and physical-range overflow) before any hardware page-table activation.
 3. Keep Ring 3 deferred until page-table ownership, CR3 switching, USER/NX/W^X policy, TLB invalidation, and real checked-copy operations are wired and tested.
+
+
+### Follow-up CI correction — scheduler test spin loops
+
+- The initial PR run exposed two Clippy errors in test-only dummy thread entry points: empty infinite loops were rejected under `-D warnings`.
+- Replaced both empty bodies with `core::hint::spin_loop()`. This preserves the non-returning dummy-thread behavior while avoiding a hot empty loop warning.
+- The earlier `RamBlockDevice::default()` diagnostic came from an intermediate PR push; the current branch tree now uses caller-owned backing storage in the product-core test.
+- A fresh full CI run on the resulting branch head is required; the earlier failed checks are not counted as validation of this final head.
