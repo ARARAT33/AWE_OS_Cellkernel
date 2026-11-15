@@ -655,3 +655,10 @@ Final code head before this log-only commit: `0b39d7620a107168e93962a0ed165e1be5
 - Replaced both empty bodies with `core::hint::spin_loop()`. This preserves the non-returning dummy-thread behavior while avoiding a hot empty loop warning.
 - The earlier `RamBlockDevice::default()` diagnostic came from an intermediate PR push; the current branch tree now uses caller-owned backing storage in the product-core test.
 - A fresh full CI run on the resulting branch head is required; the earlier failed checks are not counted as validation of this final head.
+
+
+### Scheduler regression follow-up
+
+- Added a regression test proving that a zero-tick quantum is clamped to one tick before preemption is armed.
+- This is a bounded scheduler configuration invariant; it does not claim blocking sleep, SMP, user-mode execution, or FPU/SIMD context switching.
+- Full CI is triggered for the updated, main-synchronized PR #72 tree.
