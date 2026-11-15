@@ -344,10 +344,14 @@ mod tests {
     }
 
     extern "C" fn dummy_a() -> ! {
-        loop {}
+        loop {
+            core::hint::spin_loop();
+        }
     }
     extern "C" fn dummy_b() -> ! {
-        loop {}
+        loop {
+            core::hint::spin_loop();
+        }
     }
 
     fn tick_n(frame: &mut InterruptFrame, n: u64) {
