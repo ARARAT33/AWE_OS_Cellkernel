@@ -130,9 +130,21 @@ pub fn kernel_entry(info: &BootInfo) -> KernelBootStatus {
         }
         serial_write_str("AWEOS: Interrupts & PIC/PIT initialized\r\n");
 
-        // No scheduler exists yet: timer ticks terminate in the ISR stubs.
-        // This line previously claimed a running scheduler; it does not.
-        serial_write_str("AWEOS: timer programmed (no scheduler yet)\r\n");
+        // Bring up the preemptive kernel-thread scheduler. These are ring-0
+        // threads sharing the kernel address space; per-process address
+        // spaces and ring-3 execution remain separate readiness gates.
+        use crate::scheduler::preemptive;
+        preemptive::register_boot_context();
+        let heartbeat = preemptive::spawn(heartbeat_service_thread);
+        let diagnostics = preemptive::spawn(diagnostics_service_thread);
+        if heartbeat.is_some() && diagnostics.is_some() {
+            preemptive::start(preemptive::DEFAULT_QUANTUM_TICKS);
+            serial_write_str(
+                "AWEOS: preemptive scheduler armed: 3 kernel threads, quantum 50ms\r\n",
+            );
+        } else {
+            serial_write_str("AWEOS: WARN: scheduler not armed: thread table full\r\n");
+        }
         serial_write_str("AWEOS: boot protocol validated\r\n");
         serial_write_str("AWEOS: kernel state = RUNNING\r\n");
         serial_write_str("AWEOS: kernel is alive\r\n");
@@ -157,6 +169,51 @@ pub fn kernel_entry(info: &BootInfo) -> KernelBootStatus {
     }
 
     KernelBootStatus::Ready
+}
+
+/// Heartbeat kernel service thread: proves that a ring-0 thread other than
+/// the boot context runs, survives preemption and observes scheduler time.
+/// Prints once per second (1000 PIT ticks).
+#[cfg(all(target_arch = "x86_64", target_os = "none"))]
+extern "C" fn heartbeat_service_thread() -> ! {
+    use crate::arch::x86_64::{serial_write_str, serial_write_u64};
+    use crate::scheduler::preemptive;
+    let mut beat = 0u64;
+    loop {
+        beat += 1;
+        // Mask interrupts while printing so concurrent thread output cannot
+        // interleave inside a single line.
+        preemptive::interrupt_free(|| {
+            serial_write_str("AWEOS: [cell:heartbeat] beat ");
+            serial_write_u64(beat);
+            serial_write_str(" @ tick ");
+            serial_write_u64(preemptive::ticks());
+            serial_write_str("\r\n");
+        });
+        preemptive::sleep_ticks(1000);
+    }
+}
+
+/// Diagnostics kernel service thread: reports preemption counters every two
+/// seconds so QEMU smoke runs can verify real context switches.
+#[cfg(all(target_arch = "x86_64", target_os = "none"))]
+extern "C" fn diagnostics_service_thread() -> ! {
+    use crate::arch::x86_64::{serial_write_str, serial_write_u64};
+    use crate::scheduler::preemptive;
+    loop {
+        preemptive::sleep_ticks(2000);
+        preemptive::interrupt_free(|| {
+            serial_write_str("AWEOS: [cell:diagnostics] switches=");
+            serial_write_u64(preemptive::switch_count());
+            serial_write_str(" dispatches(boot/heartbeat/diagnostics)=");
+            serial_write_u64(preemptive::dispatch_count(0).unwrap_or(0));
+            serial_write_str("/");
+            serial_write_u64(preemptive::dispatch_count(1).unwrap_or(0));
+            serial_write_str("/");
+            serial_write_u64(preemptive::dispatch_count(2).unwrap_or(0));
+            serial_write_str("\r\n");
+        });
+    }
 }
 
 /// Enter a user-mode bootstrap context.
