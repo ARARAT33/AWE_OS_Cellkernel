@@ -2,7 +2,7 @@
 
 **Project track:** AWE development project #2  
 **Status:** Active development / preserved for continued work  
-**Date:** 2026-08-27  
+**Date:** 2026-11-16  
 **Primary branch:** `main`  
 **Preserved snapshot:** `archive/pre-restructure-2026-08-27`
 
@@ -24,6 +24,20 @@ The immediate focus is **engineering the bootable and testable AWE_OS core**, wi
 6. AWOSA native runtime and package trust
 7. AYUI and first-party userspace
 8. recovery, validation and release evidence
+
+## Current implementation evidence (2026-11-16)
+
+- PR #71 (per-process address-space contract and x86_64 four-level user page-table builder) is merged into `main` as `991473ee1bd41d7578b5de9df66666a4f19a2730`.
+- The latest validated code head passed **564 tests across 57 test binaries** with zero failures. The nine substantive PR workflows passed; the final main-branch CI, Quality Gate, Cloud Security Gate, boot image, VirtIO QEMU, multi-architecture-image and installer workflows also passed after documentation updates.
+- QEMU x86_64 evidence: boot protocol validated; kernel reaches `RUNNING`; PIT/timer interrupts drive a 3-kernel-thread preemptive scheduler. The captured run reported `switches=44` and 15 dispatches per thread. This is kernel-thread scheduling evidence, not userspace process isolation.
+- Memory: early x86_64 paging and CR3 bootstrap exist. A bounded `AddressSpace` contract and four-level PML4 → PDPT → PD → PT builder now exist, but the builder is currently exercised through a test-only `TableMemory` backend.
+- Storage: bounded block-device, GPT, VFS, journaling and RAM-disk contracts/tests exist. QEMU exposes VirtIO PCI, but actual VirtIO block request/completion, read-after-write and durable persistence are not yet proven.
+- Networking: protocol/transport contracts exist; a real NIC-backed network path and multi-node CellNet runtime are not yet proven.
+- Architecture: current boot-image workflows build `x86_64-unknown-none` and `x86_64-unknown-uefi` only. ARM64 and RISC-V are not yet validated.
+
+### Explicitly not complete
+
+No live frame-backed `TableMemory` backend, per-process CR3 switching, TLB invalidation/shootdown, page-table teardown/reference counting, physical checked user-copy, Ring 3 entry or QEMU user/kernel isolation runtime is enabled. The scheduler remains single-core and kernel-thread-only. Do not describe the OS as having production process isolation, persistent VirtIO storage, a production network stack, or ARM64/RISC-V support.
 
 ## Project-state rules
 
@@ -50,16 +64,14 @@ That branch is the recovery point for the previous repository state and should n
 
 ## Next development cycle
 
-The next implementation cycle should prioritize real execution evidence over percentage claims:
+Prioritize the next missing runtime boundary, not additional feature labels:
 
-- QEMU boot smoke test
-- kernel entry and early initialization evidence
-- memory/paging execution checks
-- interrupt/timer execution checks
-- VirtIO device exercise
-- storage/network runtime exercises
-- userspace service startup
-- package admission and recovery-path tests
+1. Wire `TableMemory` to owned physical frames and a verified physical-to-virtual mapping; define rollback, lifetime and teardown.
+2. Ensure each process root receives supervisor-only kernel mappings, then implement safe CR3 switching and TLB invalidation.
+3. Implement physical checked user-copy and QEMU user/kernel isolation tests before any Ring 3 entry.
+4. Implement actual VirtIO block request/completion, read-after-write, flush and power-loss recovery tests.
+5. Connect the network contracts to a real NIC/UDP transport and test two independent nodes, reconnect and partition behavior.
+6. Add real ARM64 and RISC-V builds and runtime tests before claiming those ports.
 
 ## Long-term objective
 
