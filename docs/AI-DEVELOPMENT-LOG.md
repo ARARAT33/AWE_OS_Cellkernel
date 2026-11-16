@@ -860,3 +860,11 @@ All **9/9 substantive workflows** passed on the validated code head.
 4. Implement real VirtIO block request/completion, read-after-write and persistence/recovery tests.
 5. Connect netd/CellNet to a real NIC/UDP transport and test two independent nodes.
 6. Add actual ARM64 and RISC-V builds and runtime evidence before claiming those ports.
+
+
+### Documentation synchronization (2026-11-16)
+
+- `docs/CELL_RUNTIME.md` documents the four-level builder and its non-goals (commit `526b2bed928e931df47d63cfa5353d8b8268d8fa`).
+- `PRODUCT_READINESS.md` records the per-process VM milestone and explicitly leaves memory-isolation/userspace gates unchecked (commit `69461219d811423b874eab47e28d14b30d4a6fd4`).
+- `PROJECT_STATUS.md` was refreshed with the QEMU/test evidence and the next concrete VM, storage, networking and architecture-port milestones (commit `9884ffd301cc0df60f5a5cc6f8f47aaa1a7bcf2a`).
+- These documentation-only commits do not change kernel code; the validated code evidence above remains the final PR head `fe8db1d`.
