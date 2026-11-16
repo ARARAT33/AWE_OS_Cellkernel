@@ -19,9 +19,7 @@
 //!   unpublished address space. The caller must not activate a partially
 //!   built root after any error.
 
-use super::address::{
-    is_canonical_user_address_x86_64_48, is_canonical_x86_64_48,
-};
+use super::address::{is_canonical_user_address_x86_64_48, is_canonical_x86_64_48};
 use super::address_space::{ADDRESS_SPACE_PAGE_SIZE, AddressSpace, USER_HALF_END, UserMapping};
 use super::paging::{
     PageFlags, PageTable, PageTableEntry, indices, valid_mapping, valid_user_mapping,
@@ -417,7 +415,8 @@ impl<'m, M: TableMemory> UserPageTableBuilder<'m, M> {
     /// absent. Only the caller's memory backend is used; no identity map is
     /// assumed.
     pub fn translate(&self, virtual_address: u64) -> Option<u64> {
-        self.leaf_entry(virtual_address).map(PageTableEntry::address)
+        self.leaf_entry(virtual_address)
+            .map(PageTableEntry::address)
     }
 }
 
