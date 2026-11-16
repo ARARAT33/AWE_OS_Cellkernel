@@ -30,8 +30,8 @@ pub use paging::{
 pub use physical::{FrameBitmap, PhysicalMemoryError};
 pub use region::{Region, RegionKind};
 pub use table_frames::{
-    BuiltTables, FrameReleaseError, OwnedTableFrames, TableFramePool, build_address_space,
-    DEFAULT_OWNED_CAPACITY,
+    BuiltTables, DEFAULT_OWNED_CAPACITY, FrameReleaseError, OwnedTableFrames, TableFramePool,
+    build_address_space,
 };
 #[cfg(target_arch = "x86_64")]
 pub use x86_64::activate_bootstrap_identity_map;

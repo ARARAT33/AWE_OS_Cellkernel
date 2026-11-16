@@ -358,8 +358,7 @@ mod tests {
 
         // Translations resolve through the pool after ownership transfer.
         let mut access = OwnedTableFrames::<MirrorPool, 64>::new(&mut pool);
-        let builder =
-            UserPageTableBuilder::new(root, &mut access).expect("valid transferred root");
+        let builder = UserPageTableBuilder::new(root, &mut access).expect("valid transferred root");
         assert_eq!(builder.translate(0x0040_0000), Some(0x0090_0000));
         assert_eq!(builder.translate(0x0040_1000), Some(0x0090_1000));
         assert_eq!(builder.translate(0x0040_2000), None);
@@ -410,8 +409,7 @@ mod tests {
         let mut pool = MirrorPool::new();
         let mut memory = OwnedTableFrames::<MirrorPool, 64>::new(&mut pool);
         let root = memory.alloc_root().expect("root");
-        let mut builder =
-            UserPageTableBuilder::new(root, &mut memory).expect("valid root");
+        let mut builder = UserPageTableBuilder::new(root, &mut memory).expect("valid root");
         let kernel_half = super::super::address_space::USER_HALF_END;
         let bad = super::super::address_space::UserMapping {
             virtual_start: kernel_half,
@@ -454,7 +452,8 @@ mod tests {
         let root = memory.alloc_root().expect("root");
         let first = memory.alloc_table().expect("table frame");
         // Simulate a foreign release of one owned frame.
-        pool.release(Frame { start: first }).expect("foreign release");
+        pool.release(Frame { start: first })
+            .expect("foreign release");
         assert_eq!(memory.teardown(), Err(FrameReleaseError::DoubleRelease));
         // The remaining frames, including the root, were still released.
         assert_eq!(memory.owned_count(), 0);
@@ -516,8 +515,7 @@ mod tests {
 
         let mut memory = OwnedTableFrames::<MirrorPool, 64>::new(&mut pool);
         let root = memory.alloc_root().expect("root");
-        let mut builder =
-            UserPageTableBuilder::new(root, &mut memory).expect("valid root");
+        let mut builder = UserPageTableBuilder::new(root, &mut memory).expect("valid root");
         builder
             .install_address_space(&space)
             .expect("install must succeed");
@@ -557,8 +555,7 @@ mod tests {
 
         let mut memory = OwnedTableFrames::<MirrorPool, 64>::new(&mut pool);
         let root = memory.alloc_root().expect("root");
-        let mut builder =
-            UserPageTableBuilder::new(root, &mut memory).expect("valid root");
+        let mut builder = UserPageTableBuilder::new(root, &mut memory).expect("valid root");
         builder
             .install_address_space(&space)
             .expect("install must succeed");
