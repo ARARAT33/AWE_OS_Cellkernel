@@ -15,6 +15,7 @@ The current tree contains foundations for:
 
 - AWE loader and versioned boot information contract.
 - x86_64 paging, early identity mapping, CR3 activation and interrupt primitives.
+- Per-process x86_64 address-space metadata and a four-level user page-table builder; currently verified through a test-only `TableMemory` backend, not the live frame allocator.
 - Process, scheduler, syscall, IPC, capability and security foundations.
 - PCI, ACPI, APIC/IOAPIC and VirtIO hardware contracts/execution primitives.
 - Bounded block-device, GPT, VFS, journaling and recovery foundations.
@@ -90,3 +91,20 @@ Documentation, architecture diagrams, static compilation, or percentage labels a
 Dated progress/evidence documents under `docs/` are preserved for traceability. They describe their historical milestone and should not be read as a guarantee about the current `main` tree.
 
 See `PROJECT_STATUS.md` for the current project-state source of truth.
+
+
+## Per-process virtual-memory status (2026-11-16)
+
+The repository now contains a bounded `AddressSpace` contract and a
+four-level PML4 → PDPT → PD → PT builder for validated 4 KiB user mappings.
+The builder rejects writable+executable leaves, preserves the kernel half of
+the PML4, and is covered by host unit tests. The latest validated PR head
+passed 564 tests across 57 test binaries and all nine substantive CI workflows.
+
+This is **not yet process memory isolation**. The current `TableMemory`
+implementation is test-only; it is not wired to the physical frame allocator
+or a production physical-to-virtual mapping. CR3 switching between process
+roots, TLB invalidation/shootdown, page-table teardown/reference counting,
+physical checked user-copy, Ring 3 entry, and QEMU user/kernel isolation tests
+remain unimplemented. Keep the memory-isolation and userspace execution gates
+unchecked until those runtime milestones are proven.
