@@ -796,3 +796,67 @@ All **9/9 substantive workflows** passed on the validated code head.
 3. Enforce W^X/NX policy at all page-table levels; then CR3 switching and
    the checked physical user-copy path, then QEMU isolation tests before
    any Ring 3 work.
+
+
+## 2026-11-16 — PR #71 merged: x86_64 address-space contract and page-table builder
+
+### Baseline and scope
+
+- Continued from main head `20a3a24d90d7641b1c5d1f49e9b0f70966c2d50a` (PR #72, preemptive ring-0 kernel-thread scheduler).
+- PR #71 was the existing main-synchronized branch `feat/address-space-user-copy-2026-11-14`; it was kept separate until the full CI suite passed.
+- Final validated code head: `fe8db1d599e478cf6e530cfb013eb57b512092a2`.
+- PR #71 merged into main as `991473ee1bd41d7578b5de9df66666a4f19a2730`. No force push or branch deletion was used.
+
+### Implemented
+
+- `kernel/src/memory/address_space.rs`:
+  - Bounded per-process address-space contract with caller-owned, validated PML4 root address.
+  - User mapping registration, lower canonical user-half validation, overlap/range/52-bit physical-address checks, exact unmap, safe vacant-slot reuse, page translation and checked user-access validation.
+- `kernel/src/memory/page_table_build.rs`:
+  - Four-level PML4 → PDPT → PD → PT construction for 4 KiB user mappings through the `TableMemory` backend contract.
+  - Kernel-half PML4 indexes 256..511 are never written.
+  - Intermediate USER/WRITABLE checks; rejection of huge-page intermediates, invalid/duplicate table frames, existing leaf overwrites, invalid ranges, GLOBAL/HUGE user-leaf flags and writable+executable user leaves.
+  - Executable leaves are rejected beneath NX intermediate entries; writable leaves must carry NX.
+  - Full mapping preflight before writing and tracker-capacity validation before requesting another frame.
+  - `leaf_entry` exposes the actual leaf PTE for permission tests; `translate` returns the mapped physical page base.
+- `kernel/src/memory/mod.rs` exports the new address-space and page-table builder APIs.
+- `kernel/src/memory/paging.rs` provides Debug support required by the new contract/test diagnostics.
+- `docs/CELL_RUNTIME.md` now documents the builder and its explicit limitations (commit `526b2bed928e931df47d63cfa5353d8b8268d8fa`).
+
+### CI findings and corrections
+
+- The first full compile attempt caught E0502 in the pre-existing leaf-permission test: it tried to borrow the fake memory backend while the builder still held its mutable borrow, and it incorrectly treated a mapped data frame as a page-table frame. Added `leaf_entry` and rewrote the test to inspect the returned PTE.
+- The first executable test run caught an incorrect expected range: `0x1400..0x1c00` is entirely inside the mapped `0x1000` page, not an unmapped cross-page range. Corrected the test to `0x2c00..0x3400`; no user-access error precedence change was made.
+- Fixed the out-of-frames fake backend so it truly permits only two intermediate allocations; it now verifies deterministic `OutOfFrames` behavior.
+- Added a tracker-capacity check before allocating a frame, preventing an untracked allocation when the bounded table-frame list is full.
+- Rustfmt automation completed successfully on the final code head.
+
+### Validation — final code head `fe8db1d`
+
+- AWEOS CI Pipeline run **43905385673**: success; **564 passed, 0 failed across 57 test binaries** (kernel: **379 passed**).
+- AWEOS Quality Gate **43905385639**: success.
+- AWEOS Cloud Security Gate **43905385660**: success.
+- CI Diagnostics **43905385559**: success.
+- Clippy report **43905385546**: success.
+- AOSIN Cross-Platform Installers **43905385527**: success.
+- AWEOS Bootable Image Pipeline **43905385461**: success; boot image and exception-injection self-test passed.
+- AWEOS VirtIO Runtime **43905385408**: success; QEMU exposed the VirtIO PCI device, booted the kernel to RUNNING, and showed the existing 3-thread scheduler heartbeat/diagnostics (`switches=44`). **This is not block request/completion, read-after-write, or durable-storage evidence.**
+- AWEOS Multi-Architecture Images **43905385519**: success, but the workflow currently builds only `x86_64-unknown-none` and `x86_64-unknown-uefi`; ARM64 and RISC-V remain unbuilt and untested.
+- All **9/9 substantive workflows** passed on the final PR head.
+
+### Honest limitations
+
+- `TableMemory` has only the in-memory test backend; it is not wired to the live physical-frame allocator or a production physical-to-virtual table mapping.
+- The builder constructs an unpublished page-table tree only. It does not switch CR3, invalidate/shoot down TLB entries, tear down/refcount frames, or perform a physical checked user copy.
+- No Ring 3 entry or per-process memory-isolation runtime is enabled. Kernel-half mappings must be supplied by a future address-space owner; this builder deliberately does not clone or modify them.
+- The existing scheduler remains single-core and kernel-thread-only.
+- VirtIO storage I/O/persistence, real NIC/UDP integration, and ARM64/RISC-V ports remain incomplete.
+
+### Next priorities
+
+1. Implement a real `TableMemory` backend over owned physical frames and a verified kernel mapping; define frame lifetime, rollback and teardown.
+2. Preserve a supervisor-only kernel mapping in every process root, then implement safe CR3 switching and TLB invalidation.
+3. Implement physical checked user-copy and QEMU tests proving user/kernel isolation before enabling Ring 3.
+4. Implement real VirtIO block request/completion, read-after-write and persistence/recovery tests.
+5. Connect netd/CellNet to a real NIC/UDP transport and test two independent nodes.
+6. Add actual ARM64 and RISC-V builds and runtime evidence before claiming those ports.
