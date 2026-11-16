@@ -703,3 +703,96 @@ All **9/9 substantive workflows** passed on the validated code head.
 4. Add FPU/SIMD save/restore (or an enforced kernel soft-float policy) before allowing general kernel-thread code to use those registers.
 5. Implement VirtIO block request/completion and QEMU read-after-write tests; keep persistence claims deferred until crash/power-loss tests exist.
 6. Add actual ARM64 and RISC-V builds before describing the workflow as multi-architecture support.
+
+
+## 2026-11-15 — PR #71 address-space contract hardening
+
+### Review findings and fixes
+
+- Fixed a mapping-table corruption bug: after removing a middle mapping, the old insertion logic used the live-entry count as an array index and could overwrite a different live mapping. Registration now finds the first vacant slot; a regression test verifies that existing mappings survive middle-slot removal and reuse.
+- Reject null virtual mappings at registration, not only at later access validation.
+- Validate the complete physical range against the 52-bit x86_64 page-table address encoding, including overflow at the exclusive end; the highest representable single page remains valid.
+- Make UserMapping::virtual_end checked so externally constructed invalid descriptors fail closed, and make page translation use checked addition.
+- Clarify that AddressSpace records a caller-owned root-frame address; it does not allocate, own, free, install page tables, or activate CR3.
+
+### Validation status
+
+- Regression tests added for middle-slot reuse, null mapping rejection, and physical-range overflow.
+- The updated PR head must pass the full GitHub Actions suite before merge. No hardware page-table activation, physical user-copy, CR3 switch, or Ring 3 is claimed.
+
+### Next priorities
+
+1. Wire page-table frame allocation/lifetime and real PML4/PDPT/PD/PT installation while preserving supervisor-only kernel mappings.
+2. Add TLB-safe map/unmap and enforce USER/NX/W^X policy at all page-table levels.
+3. Integrate checked physical user-copy with process contexts only after address-space isolation tests pass.
+4. Keep Ring 3 disabled until the above hardware and QEMU isolation tests are green.
+
+
+### Follow-up main synchronization after PR #72
+
+- PR #72 (preemptive ring-0 kernel-thread scheduler) was merged into main as `20a3a24d90d7641b1c5d1f49e9b0f70966c2d50a` after its nine substantive workflows passed on the validated code head.
+- The PR #71 branch was synchronized with that main commit through a normal two-parent merge commit `1b8b4ce270334f12eb91c1142d0c5291a046714e`; compare reports zero commits behind main.
+- PR #71 remains open and mergeable, but its latest head has no completed CI run. The prior workflow attempt was `action_required`; no test success is claimed and no merge was performed.
+
+
+## 2026-11-15 — PR #71 CI root cause fixed and real page-table construction added
+
+### CI root cause diagnosis and fix
+
+- The first completed CI run on this branch (head c69a905) failed seven
+  jobs (Rust workspace, cloud-security, virtio-block-contract-and-qemu,
+  exception-injection-selftest, build-and-smoke-test-image, multi-arch,
+  AOSIN installers) with exit code 101. The repo's CI diagnostics comments
+  named one root cause: E0277, `&PageFlags` does not implement `Debug`,
+  raised by the `#[derive(Debug)]` on `UserMapping`
+  (kernel/src/memory/address_space.rs:65). `PageFlags` and
+  `PageTableEntry` in kernel/src/memory/paging.rs did not derive `Debug`.
+- Fix (commit 52b20d8): both types now derive `Debug`. No semantic change.
+  This was a compile error, so no test result from that run is counted as a
+  pass or failure of the address-space logic.
+
+### Real page-table construction (new module)
+
+- New kernel/src/memory/page_table_build.rs (commit a51345f, registered in
+  memory/mod.rs): `UserPageTableBuilder` installs real four-level
+  PML4 -> PDPT -> PD -> PT entries for every registered user mapping of an
+  `AddressSpace`, through a caller-supplied `TableMemory` backend
+  (alloc_table / table / table_mut). No identity map is assumed; nothing
+  touches CR3.
+- Security properties: intermediate entries carry
+  PRESENT|WRITABLE|USER so leaf permissions are the only boundary; the
+  kernel half of the PML4 (indexes 256..512) is never written and a
+  mapping that would land there fails closed with
+  `KernelHalfForbidden`; frame exhaustion fails closed with
+  `OutOfFrames` and all allocations are recorded in a bounded tracker
+  for later reclamation.
+- `AddressSpace::mappings()` iterator added so the builder (and future
+  CR3-switch code) can walk live mappings.
+- A hardware-style four-level `translate` walk allows verifying built
+  tables without dereferencing frames as data.
+- Seven new host unit tests: walk-equivalence with the contract layer,
+  kernel-half preservation, intermediate flag policy, exact leaf flags
+  (R/RW/NX preserved), fail-closed frame exhaustion, kernel-half and
+  invalid-mapping rejection at install time.
+
+### Explicit non-goals (still unimplemented)
+
+- Frame teardown / reference counting, TLB invalidation, CR3 switching,
+  the physical checked user-copy path, Ring 3 entry, and W^X/NX policy
+  enforcement at all page-table levels.
+
+### Validation status
+
+- No local Rust toolchain is available in this run's environment; the
+  branch has not been compiled or tested locally. The new head must pass
+  the full GitHub Actions suite before any merge. No green result is
+  claimed yet.
+
+### Next priorities
+
+1. Inspect the CI run on this head; fix any compile or clippy findings.
+2. Wire `TableMemory` to the kernel's physical frame allocator and
+   mapper so the builder runs on real boot memory.
+3. Enforce W^X/NX policy at all page-table levels; then CR3 switching and
+   the checked physical user-copy path, then QEMU isolation tests before
+   any Ring 3 work.

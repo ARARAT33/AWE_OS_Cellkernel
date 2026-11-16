@@ -1,10 +1,12 @@
 #![no_std]
 
 pub mod address;
+pub mod address_space;
 pub mod allocator;
 pub mod boot_mapper;
 pub mod frame;
 pub mod mapper;
+pub mod page_table_build;
 pub mod paging;
 pub mod physical;
 pub mod region;
@@ -12,6 +14,7 @@ pub mod region;
 pub mod x86_64;
 
 pub use address::{PhysicalAddress, VirtualAddress};
+pub use address_space::{AddressSpace, UserCopyError, UserMapping, checked_user_range};
 pub use allocator::BumpAllocator;
 pub use boot_mapper::{BootMapError, BootMapper};
 pub use frame::{
@@ -19,6 +22,7 @@ pub use frame::{
     PhysicalFrameAllocator, checked_frame_end, frame_at, frame_end,
 };
 pub use mapper::{MapError, PageMapper};
+pub use page_table_build::{PageBuildError, TableMemory, UserPageTableBuilder};
 pub use paging::{
     PageFlags, PageTable, PageTableEntry, indices as page_indices, page_offset, valid_mapping,
 };
