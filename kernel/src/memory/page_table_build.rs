@@ -666,10 +666,7 @@ mod tests {
         let pdpt = memory.alloc_table().unwrap();
         memory.table_mut(root).unwrap().set(
             0,
-            PageTableEntry::new(
-                pdpt,
-                INTERMEDIATE_FLAGS.union(PageFlags::NO_EXECUTE),
-            ),
+            PageTableEntry::new(pdpt, INTERMEDIATE_FLAGS.union(PageFlags::NO_EXECUTE)),
         );
 
         let mut space = AddressSpace::<4>::new(root).unwrap();
