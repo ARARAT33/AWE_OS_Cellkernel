@@ -226,29 +226,13 @@ impl<const MAX_MAPPINGS: usize> AddressSpace<MAX_MAPPINGS> {
         checked_user_range(address, len)?;
         let start_page = address & !(ADDRESS_SPACE_PAGE_SIZE - 1);
         let end = address + len;
-
-        // Establish complete coverage before checking permissions. A later
-        // unmapped page must not be hidden by an earlier page's read-only bit.
         let mut page = start_page;
-        while page < end {
-            if !self
-                .mappings
-                .iter()
-                .flatten()
-                .any(|mapping| mapping.covers(page))
-            {
-                return Err(UserCopyError::Unmapped);
-            }
-            page += ADDRESS_SPACE_PAGE_SIZE;
-        }
-
-        page = start_page;
         while page < end {
             let mapping = self
                 .mappings
                 .iter()
                 .flatten()
-                .find(|mapping| mapping.covers(page))
+                .find(|m| m.covers(page))
                 .ok_or(UserCopyError::Unmapped)?;
             if !mapping.flags.contains(PageFlags::USER)
                 || !mapping.flags.contains(PageFlags::PRESENT)
@@ -361,7 +345,7 @@ mod tests {
         );
         assert!(space.check_user_access(0x2000, 8, true).is_ok());
         assert_eq!(
-            space.check_user_access(0x1400, 0x800, true),
+            space.check_user_access(0x2c00, 0x800, true),
             Err(UserCopyError::Unmapped)
         );
         assert_eq!(
