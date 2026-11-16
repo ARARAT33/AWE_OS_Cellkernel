@@ -20,10 +20,10 @@
 //!   built root after any error.
 
 use super::address::is_canonical_user_address_x86_64_48;
-use super::address_space::{
-    ADDRESS_SPACE_PAGE_SIZE, AddressSpace, USER_HALF_END, UserMapping,
+use super::address_space::{ADDRESS_SPACE_PAGE_SIZE, AddressSpace, USER_HALF_END, UserMapping};
+use super::paging::{
+    PageFlags, PageTable, PageTableEntry, indices, valid_mapping, valid_user_mapping,
 };
-use super::paging::{PageFlags, PageTable, PageTableEntry, indices, valid_mapping, valid_user_mapping};
 
 /// Errors returned while building hardware page tables for an address space.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -406,9 +406,7 @@ mod tests {
     use super::*;
 
     const R: PageFlags = PageFlags::PRESENT.union(PageFlags::USER);
-    const RW: PageFlags = R
-        .union(PageFlags::WRITABLE)
-        .union(PageFlags::NO_EXECUTE);
+    const RW: PageFlags = R.union(PageFlags::WRITABLE).union(PageFlags::NO_EXECUTE);
     const RWNX: PageFlags = RW;
 
     /// In-memory pool of page-table frames, used as a TableMemory backend.
