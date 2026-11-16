@@ -10,6 +10,7 @@ pub mod page_table_build;
 pub mod paging;
 pub mod physical;
 pub mod region;
+pub mod table_frames;
 #[cfg(target_arch = "x86_64")]
 pub mod x86_64;
 
@@ -28,5 +29,9 @@ pub use paging::{
 };
 pub use physical::{FrameBitmap, PhysicalMemoryError};
 pub use region::{Region, RegionKind};
+pub use table_frames::{
+    BuiltTables, FrameReleaseError, OwnedTableFrames, TableFramePool, build_address_space,
+    DEFAULT_OWNED_CAPACITY,
+};
 #[cfg(target_arch = "x86_64")]
 pub use x86_64::activate_bootstrap_identity_map;

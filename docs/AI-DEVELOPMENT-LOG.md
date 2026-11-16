@@ -1,4 +1,4 @@
-### Final validation on the formatted CellNet head — 2026-11-13
+successfully downloaded text file (SHA: 1fabcb94b0a7cb1d05ad441f89e5f28a82daccb2)### Final validation on the formatted CellNet head — 2026-11-13
 
 - The final source+documentation head at this validation point was
   `6b74be812a15b83fe571d92b0b877d95164fb40e`; all nine PR workflows passed.
@@ -868,3 +868,24 @@ All **9/9 substantive workflows** passed on the validated code head.
 - `PRODUCT_READINESS.md` records the per-process VM milestone and explicitly leaves memory-isolation/userspace gates unchecked (commit `69461219d811423b874eab47e28d14b30d4a6fd4`).
 - `PROJECT_STATUS.md` was refreshed with the QEMU/test evidence and the next concrete VM, storage, networking and architecture-port milestones (commit `9884ffd301cc0df60f5a5cc6f8f47aaa1a7bcf2a`).
 - These documentation-only commits do not change kernel code; the validated code evidence above remains the final PR head `fe8db1d`.
+
+
+### Frame ownership, rollback and teardown for the page-table builder (2026-11-16)
+
+- `kernel/src/memory/table_frames.rs` adds the ownership layer the builder
+  left to its caller: a `TableFramePool` trait, an `OwnedTableFrames`
+  `TableMemory` wrapper that records every allocated frame including the PML4
+  root, batch `rollback`, full `teardown`, drop-time best-effort release, a
+  `take_ownership` transfer (`BuiltTables`) and `build_address_space`, which
+  releases every frame on any build failure before returning the error.
+- Explicit non-goal preserved: no code path yet dereferences real physical
+  frames. A kernel-side `TableFramePool` over the live frame allocator plus a
+  verified physical-to-virtual mapping remains required before boot-path use;
+  `build_address_space` documents that restriction.
+- Ten new unit tests cover successful transfer, rollback on frame exhaustion
+  (including the root), kernel-half rejection before allocation, batch-scoped
+  rollback, double-release surfacing with continued teardown, drop safety,
+  double-root rejection, leaf flag preservation, a manual four-level walk and
+  contract/hardware translation parity.
+- Validation pending: CI on this branch (fmt, Clippy, workspace tests). No
+  merge claim is made before the PR workflows pass.

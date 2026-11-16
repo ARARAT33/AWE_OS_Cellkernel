@@ -1,4 +1,4 @@
-# CellKernel Local Cell Runtime — ABI 1.1
+successfully downloaded text file (SHA: 2a7219a190ab588e0a5f6d2076be6e3af885a047)# CellKernel Local Cell Runtime — ABI 1.1
 
 **Status:** bounded local CellManager runtime is merged on `main`; latest full validation is recorded in `docs/AI-DEVELOPMENT-LOG.md`.  
 **Scope:** bounded, local, process-backed cell lifecycle and IPC. This document does not claim per-cell memory isolation or distributed execution.
@@ -179,3 +179,23 @@ enter Ring 3. On any build error, the caller must discard the unpublished root
 and reclaim its recorded intermediate frames. No process-memory-isolation claim
 is made until the live backend, lifetime rules, CR3/TLB path, checked user-copy,
 and QEMU isolation tests exist.
+
+
+## Page-table frame ownership, rollback and teardown (2026-11-16)
+
+`kernel/src/memory/table_frames.rs` adds the ownership layer the builder left
+to its caller. `TableFramePool` is the allocation/release/access contract a
+frame source must satisfy; `OwnedTableFrames` implements `TableMemory` over
+any pool while recording every frame it allocates, including the PML4 root.
+It provides batch `rollback`, full `teardown`, a drop-time best-effort
+release and an explicit `take_ownership` transfer. `build_address_space`
+allocates the root, installs the whole address space and, on any error,
+releases every frame before returning the builder error, so a failed build
+leaks no frames.
+
+**The physical frame wiring is still an open milestone.** No implementation
+in this module dereferences real physical frames; a kernel-side pool over the
+live physical frame allocator plus a verified physical-to-virtual mapping is
+required before `build_address_space` may be used from boot code. CR3
+activation, TLB invalidation, checked physical user-copy and Ring 3 remain
+unimplemented.
