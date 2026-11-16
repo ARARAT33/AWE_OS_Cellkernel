@@ -290,6 +290,11 @@ impl<'m, M: TableMemory> UserPageTableBuilder<'m, M> {
                 }
             };
             if next == 0 {
+                // Check tracker capacity before asking the backend for a frame;
+                // otherwise the first untrackable frame would leak on TableLimit.
+                if self.allocated_count >= MAX_TRACKED_TABLES {
+                    return Err(PageBuildError::TableLimit);
+                }
                 let frame = self
                     .memory
                     .alloc_table()
