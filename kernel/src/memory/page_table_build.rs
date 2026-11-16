@@ -212,6 +212,8 @@ impl<'m, M: TableMemory> UserPageTableBuilder<'m, M> {
                 }
                 if !entry.flags().contains(PageFlags::USER)
                     || !entry.flags().contains(PageFlags::WRITABLE)
+                    || (!mapping.flags.contains(PageFlags::NO_EXECUTE)
+                        && entry.flags().contains(PageFlags::NO_EXECUTE))
                 {
                     return Err(PageBuildError::IntermediatePermissionConflict);
                 }
@@ -268,6 +270,8 @@ impl<'m, M: TableMemory> UserPageTableBuilder<'m, M> {
                     }
                     if !entry.flags().contains(PageFlags::USER)
                         || !entry.flags().contains(PageFlags::WRITABLE)
+                        || (!flags.contains(PageFlags::NO_EXECUTE)
+                            && entry.flags().contains(PageFlags::NO_EXECUTE))
                     {
                         return Err(PageBuildError::IntermediatePermissionConflict);
                     }
@@ -647,6 +651,31 @@ mod tests {
 
         let mut space = AddressSpace::<4>::new(root).unwrap();
         space.map_user(0x1000, 0x9000, 1, RW).unwrap();
+        let mut builder = UserPageTableBuilder::new(root, &mut memory).unwrap();
+        assert_eq!(
+            builder.install_address_space(&space).err(),
+            Some(PageBuildError::IntermediatePermissionConflict)
+        );
+        assert_eq!(builder.allocated_table_count(), 0);
+    }
+
+    #[test]
+    fn executable_leaf_is_rejected_beneath_nx_intermediate_entry() {
+        let mut memory = FakeMemory::new();
+        let root = memory.alloc_table().unwrap();
+        let pdpt = memory.alloc_table().unwrap();
+        memory.table_mut(root).unwrap().set(
+            0,
+            PageTableEntry::new(
+                pdpt,
+                INTERMEDIATE_FLAGS.union(PageFlags::NO_EXECUTE),
+            ),
+        );
+
+        let mut space = AddressSpace::<4>::new(root).unwrap();
+        // Read-only and executable: the parent NX bit must not silently
+        // turn this requested executable mapping into a non-executable one.
+        space.map_user(0x1000, 0x9000, 1, R).unwrap();
         let mut builder = UserPageTableBuilder::new(root, &mut memory).unwrap();
         assert_eq!(
             builder.install_address_space(&space).err(),
