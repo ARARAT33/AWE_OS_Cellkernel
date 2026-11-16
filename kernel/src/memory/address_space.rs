@@ -231,7 +231,12 @@ impl<const MAX_MAPPINGS: usize> AddressSpace<MAX_MAPPINGS> {
         // unmapped page must not be hidden by an earlier page's read-only bit.
         let mut page = start_page;
         while page < end {
-            if !self.mappings.iter().flatten().any(|mapping| mapping.covers(page)) {
+            if !self
+                .mappings
+                .iter()
+                .flatten()
+                .any(|mapping| mapping.covers(page))
+            {
                 return Err(UserCopyError::Unmapped);
             }
             page += ADDRESS_SPACE_PAGE_SIZE;
