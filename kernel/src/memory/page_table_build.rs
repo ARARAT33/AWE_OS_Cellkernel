@@ -93,7 +93,7 @@ pub struct UserPageTableBuilder<'m, M: TableMemory> {
 impl<'m, M: TableMemory> UserPageTableBuilder<'m, M> {
     /// Create a builder over a page-aligned, nonzero PML4 root frame.
     pub fn new(pml4_physical: u64, memory: &'m mut M) -> Result<Self, PageBuildError> {
-        if pml4_physical == 0 || pml4_physical & (ADDRESS_SPACE_PAGE_SIZE - 1) != 0 {
+        if pml4_physical == 0 || !valid_mapping(pml4_physical, PageFlags::PRESENT) {
             return Err(PageBuildError::InvalidRoot);
         }
         Ok(Self {
@@ -378,18 +378,19 @@ impl<'m, M: TableMemory> UserPageTableBuilder<'m, M> {
         Ok(total)
     }
 
-    /// Hardware-style four-level walk of the built tables. Returns the mapped
-    /// physical page base for a virtual address, or None when any level is
-    /// absent. Only the caller's memory backend is used; no identity map is
-    /// assumed.
-    pub fn translate(&self, virtual_address: u64) -> Option<u64> {
+    /// Return the leaf PTE for a user virtual address, or None when the path
+    /// is absent, malformed, or resolves outside the user half.
+    pub fn leaf_entry(&self, virtual_address: u64) -> Option<PageTableEntry> {
         let idx = indices(virtual_address);
+        if idx[0] >= 256 {
+            return None;
+        }
         let mut table_phys = self.pml4;
-        let mut level = 0;
+        let mut level = 0usize;
         while level < 3 {
             let table = self.memory.table(table_phys)?;
             let entry = table.get(idx[level])?;
-            if !entry.is_present() {
+            if !entry.is_present() || entry.flags().contains(PageFlags::HUGE) {
                 return None;
             }
             table_phys = entry.address();
@@ -397,10 +398,19 @@ impl<'m, M: TableMemory> UserPageTableBuilder<'m, M> {
         }
         let table = self.memory.table(table_phys)?;
         let entry = table.get(idx[3])?;
-        if !entry.is_present() {
-            return None;
+        if entry.is_present() {
+            Some(entry)
+        } else {
+            None
         }
-        Some(entry.address())
+    }
+
+    /// Hardware-style four-level walk of the built tables. Returns the mapped
+    /// physical page base for a virtual address, or None when any level is
+    /// absent. Only the caller's memory backend is used; no identity map is
+    /// assumed.
+    pub fn translate(&self, virtual_address: u64) -> Option<u64> {
+        self.leaf_entry(virtual_address).map(PageTableEntry::address)
     }
 }
 
@@ -472,6 +482,10 @@ mod tests {
         );
         assert_eq!(
             UserPageTableBuilder::new(0x0010_0001, &mut memory).err(),
+            Some(PageBuildError::InvalidRoot)
+        );
+        assert_eq!(
+            UserPageTableBuilder::new(0x0010_0000_0000_0000, &mut memory).err(),
             Some(PageBuildError::InvalidRoot)
         );
     }
@@ -547,31 +561,16 @@ mod tests {
         let mut builder = UserPageTableBuilder::new(root, &mut memory).unwrap();
         builder.install_address_space(&space).unwrap();
 
-        let ro_page = builder.translate(0x1000).unwrap();
-        let ro_leaf = memory.table(ro_page).unwrap();
-        assert!(
-            !ro_leaf
-                .get(0)
-                .unwrap()
-                .flags()
-                .contains(PageFlags::WRITABLE)
-        );
-        let rw_leaf = memory.table(builder.translate(0x2000).unwrap()).unwrap();
-        assert!(
-            rw_leaf
-                .get(0)
-                .unwrap()
-                .flags()
-                .contains(PageFlags::WRITABLE)
-        );
-        let nx_leaf = memory.table(builder.translate(0x3000).unwrap()).unwrap();
-        assert!(
-            nx_leaf
-                .get(0)
-                .unwrap()
-                .flags()
-                .contains(PageFlags::NO_EXECUTE)
-        );
+        let ro_leaf = builder.leaf_entry(0x1000).unwrap();
+        assert!(!ro_leaf.flags().contains(PageFlags::WRITABLE));
+        assert!(!ro_leaf.flags().contains(PageFlags::NO_EXECUTE));
+
+        let rw_leaf = builder.leaf_entry(0x2000).unwrap();
+        assert!(rw_leaf.flags().contains(PageFlags::WRITABLE));
+        assert!(rw_leaf.flags().contains(PageFlags::NO_EXECUTE));
+
+        let nx_leaf = builder.leaf_entry(0x3000).unwrap();
+        assert!(nx_leaf.flags().contains(PageFlags::NO_EXECUTE));
     }
 
     #[test]
