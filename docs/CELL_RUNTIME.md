@@ -151,3 +151,31 @@ USER+PRESENT plus WRITABLE for writes. The root frame is not allocated, freed, o
 This layer does not install page tables, touch CR3, or perform the physical
 copy; hardware activation and the Ring-3 entry path remain explicitly
 unimplemented until isolation tests exist.
+
+
+## x86_64 four-level user page-table builder
+
+`kernel/src/memory/page_table_build.rs` provides the kernel-internal
+`UserPageTableBuilder` over a caller-supplied `TableMemory` backend. It
+constructs PML4 → PDPT → PD → PT entries for validated 4 KiB user mappings
+and exposes leaf-PTE inspection plus a page-base translation helper.
+
+- Only lower-canonical user PML4 indexes 0..255 are writable; indexes 256..511
+  remain owned by the caller for kernel mappings.
+- Intermediate entries require PRESENT|WRITABLE|USER. Writable user leaves
+  must also carry NX; GLOBAL and HUGE are rejected for these 4 KiB user leaves.
+  An executable leaf is rejected beneath an NX intermediate entry.
+- Existing leaf mappings are never overwritten. Huge-page intermediates,
+  malformed/duplicate table frames, invalid ranges, and tracker exhaustion fail
+  closed. The complete mapping set is preflighted before the first write.
+- The PML4 root is caller-owned. Intermediate frames allocated by the builder
+  are exposed through `allocated_tables()`; the builder does not free them.
+
+**This is not yet the live VM subsystem.** The current repository has no
+production `TableMemory` implementation wired to the physical frame allocator
+and a usable physical-to-virtual mapping. The builder does not activate CR3,
+invalidate TLB entries, tear down page tables, copy physical user memory, or
+enter Ring 3. On any build error, the caller must discard the unpublished root
+and reclaim its recorded intermediate frames. No process-memory-isolation claim
+is made until the live backend, lifetime rules, CR3/TLB path, checked user-copy,
+and QEMU isolation tests exist.
