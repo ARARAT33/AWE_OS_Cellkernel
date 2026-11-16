@@ -709,9 +709,14 @@ mod tests {
     fn out_of_frames_fails_closed_and_records_allocations() {
         struct TwoFrames {
             inner: FakeMemory,
+            remaining: usize,
         }
         impl TableMemory for TwoFrames {
             fn alloc_table(&mut self) -> Option<u64> {
+                if self.remaining == 0 {
+                    return None;
+                }
+                self.remaining -= 1;
                 self.inner.alloc_table()
             }
             fn table_mut(&mut self, physical: u64) -> Option<&mut PageTable> {
@@ -724,7 +729,10 @@ mod tests {
 
         let mut inner = FakeMemory::new();
         let root = inner.alloc_table().unwrap();
-        let mut memory = TwoFrames { inner };
+        let mut memory = TwoFrames {
+            inner,
+            remaining: 2,
+        };
         let mut space = AddressSpace::<4>::new(root).unwrap();
         // Two mappings in different PML4 branches need more than two tables.
         space
