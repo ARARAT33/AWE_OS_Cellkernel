@@ -19,7 +19,9 @@
 //!   unpublished address space. The caller must not activate a partially
 //!   built root after any error.
 
-use super::address::is_canonical_user_address_x86_64_48;
+use super::address::{
+    is_canonical_user_address_x86_64_48, is_canonical_x86_64_48,
+};
 use super::address_space::{ADDRESS_SPACE_PAGE_SIZE, AddressSpace, USER_HALF_END, UserMapping};
 use super::paging::{
     PageFlags, PageTable, PageTableEntry, indices, valid_mapping, valid_user_mapping,
@@ -148,6 +150,11 @@ impl<'m, M: TableMemory> UserPageTableBuilder<'m, M> {
         }
 
         if !is_canonical_user_address_x86_64_48(mapping.virtual_start) {
+            if is_canonical_x86_64_48(mapping.virtual_start)
+                && indices(mapping.virtual_start)[0] >= 256
+            {
+                return Err(PageBuildError::KernelHalfForbidden);
+            }
             return Err(PageBuildError::InvalidMapping);
         }
         let bytes = mapping
