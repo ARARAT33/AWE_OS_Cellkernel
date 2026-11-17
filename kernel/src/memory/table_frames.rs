@@ -572,11 +572,11 @@ mod tests {
         // Walk the hardware hierarchy manually through the owned backend.
         let idx = page_indices(0x0040_1000);
         let mut table_phys = root;
-        for level in 0..3 {
+        for &table_index in idx.iter().take(3) {
             let entry = memory
                 .table(table_phys)
                 .expect("owned table")
-                .get(idx[level])
+                .get(table_index)
                 .expect("entry");
             assert!(entry.is_present());
             assert!(entry.flags().contains(PageFlags::USER));
