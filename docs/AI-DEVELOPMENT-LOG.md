@@ -942,3 +942,15 @@ All **9/9 substantive workflows** passed on the validated code head.
 - The previous run reached 387 passing kernel tests but had these two
   assertion failures. A fresh full validation is pending on the new head;
   no pass or merge is claimed yet.
+
+
+### PR #73 Clippy correction — 2026-11-17
+
+- The new page-table tests progressed past the previous assertion failures.
+  Clippy then rejected one manual 0..3 loop that indexed the four-level
+  page-table index array (needless_range_loop, promoted by -D warnings).
+- Replaced it with iteration over the first three indices, preserving the
+  explicit walk of the three intermediate levels.
+- Code commit: 191e6f041772f9524f5818f358daa4605ed404d4.
+- Fresh CI is pending; no merge/readiness claim is made until workspace tests,
+  Clippy, QEMU boot, VirtIO and security checks all pass.
