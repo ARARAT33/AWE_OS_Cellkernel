@@ -889,3 +889,26 @@ All **9/9 substantive workflows** passed on the validated code head.
   contract/hardware translation parity.
 - Validation pending: CI on this branch (fmt, Clippy, workspace tests). No
   merge claim is made before the PR workflows pass.
+
+
+### PR #73 compile-failure correction — 2026-11-17
+
+- Reviewed the actual PR checks and diagnostics for the frame-ownership change.
+  The first source head failed workspace compilation with Rust borrow-checker
+  errors (E0502 / E0499) confined to the new table_frames.rs tests:
+  tests attempted to inspect or mutate the pool while OwnedTableFrames
+  still held its exclusive mutable borrow.
+- Corrected the tests on the existing review branch
+  feat/frame-backed-table-memory-2026-11-16:
+  - explicitly end builder/pool-wrapper lifetimes before inspecting the pool;
+  - drop OwnedTableFrames after explicit teardown before checking pool
+    state;
+  - replace the impossible direct foreign-release-while-borrowed test
+    setup with a DoubleReleasePool test adapter that models a stale-owner
+    release inside the pool contract, reports
+    FrameReleaseError::DoubleRelease, and still verifies teardown
+    continues to release the root frame.
+- Code correction commit: 877147733cdaf9d8e8061c8ca809825395a2f85c.
+- Validation: pending fresh GitHub Actions on the corrected head. The earlier
+  failed compile is not counted as a pass; no merge or readiness promotion
+  is claimed. The PR remains draft until the full check set is green.
