@@ -257,7 +257,7 @@ pub fn build_address_space<P: TableFramePool, const CAP: usize, const NM: usize>
 
 #[cfg(test)]
 mod tests {
-    use super::super::paging::{PageFlags, PageTableEntry, indices as page_indices};
+    use super::super::paging::{PageFlags, indices as page_indices};
     use super::*;
 
     const RW: PageFlags = PageFlags::PRESENT
@@ -409,7 +409,6 @@ mod tests {
         let mut pool = MirrorPool::new();
         let mut memory = OwnedTableFrames::<MirrorPool, 64>::new(&mut pool);
         let root = memory.alloc_root().expect("root");
-        let mut builder = UserPageTableBuilder::new(root, &mut memory).expect("valid root");
         let kernel_half = super::super::address_space::USER_HALF_END;
         let bad = super::super::address_space::UserMapping {
             virtual_start: kernel_half,
@@ -417,12 +416,15 @@ mod tests {
             page_count: 1,
             flags: RW,
         };
+        let install_error = {
+            let mut builder = UserPageTableBuilder::new(root, &mut memory).expect("valid root");
+            builder.install_mapping(&bad).err()
+        };
         assert_eq!(
-            builder.install_mapping(&bad).err(),
+            install_error,
             Some(PageBuildError::KernelHalfForbidden)
         );
         assert_eq!(memory.owned_count(), 1); // only the root
-        drop(builder);
         memory.teardown().expect("teardown");
         drop(memory);
         assert_eq!(pool.free_count(), 16);
@@ -558,16 +560,17 @@ mod tests {
 
         let mut memory = OwnedTableFrames::<MirrorPool, 64>::new(&mut pool);
         let root = memory.alloc_root().expect("root");
-        let mut builder = UserPageTableBuilder::new(root, &mut memory).expect("valid root");
-        builder
-            .install_address_space(&space)
-            .expect("install must succeed");
-        let leaf = builder.leaf_entry(0x0040_0000).expect("leaf present");
+        let leaf = {
+            let mut builder = UserPageTableBuilder::new(root, &mut memory).expect("valid root");
+            builder
+                .install_address_space(&space)
+                .expect("install must succeed");
+            builder.leaf_entry(0x0040_0000).expect("leaf present")
+        };
         assert_eq!(leaf.address(), 0x0090_0000);
         assert!(leaf.flags().contains(PageFlags::WRITABLE));
         assert!(leaf.flags().contains(PageFlags::NO_EXECUTE));
         assert!(leaf.flags().contains(PageFlags::USER));
-        drop(builder);
         // Walk the hardware hierarchy manually through the owned backend.
         let idx = page_indices(0x0040_1000);
         let mut table_phys = root;
@@ -600,12 +603,13 @@ mod tests {
 
         let mut memory = OwnedTableFrames::<MirrorPool, 64>::new(&mut pool);
         let root = memory.alloc_root().expect("root");
-        let mut builder = UserPageTableBuilder::new(root, &mut memory).expect("valid root");
-        builder
-            .install_address_space(&space)
-            .expect("install must succeed");
-        let hardware = builder.leaf_entry(0x0040_0000).expect("hardware leaf");
-        drop(builder);
+        let hardware = {
+            let mut builder = UserPageTableBuilder::new(root, &mut memory).expect("valid root");
+            builder
+                .install_address_space(&space)
+                .expect("install must succeed");
+            builder.leaf_entry(0x0040_0000).expect("hardware leaf")
+        };
         let contract = space.translate_page(0x0040_0000).expect("contract leaf");
         assert_eq!(hardware.address(), contract);
         memory.teardown().expect("teardown");
