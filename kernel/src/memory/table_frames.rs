@@ -422,7 +422,9 @@ mod tests {
             Some(PageBuildError::KernelHalfForbidden)
         );
         assert_eq!(memory.owned_count(), 1); // only the root
+        drop(builder);
         memory.teardown().expect("teardown");
+        drop(memory);
         assert_eq!(pool.free_count(), 16);
     }
 
@@ -442,22 +444,62 @@ mod tests {
         assert!(memory.table(first).is_none());
         assert!(memory.table(second).is_none());
         memory.teardown().expect("teardown");
+        drop(memory);
         assert_eq!(pool.free_count(), 16);
     }
 
     #[test]
     fn teardown_surfaces_double_release_but_keeps_going() {
-        let mut pool = MirrorPool::new();
-        let mut memory = OwnedTableFrames::<MirrorPool, 64>::new(&mut pool);
+        struct DoubleReleasePool {
+            inner: MirrorPool,
+            duplicate_release: Option<u64>,
+        }
+
+        impl TableFramePool for DoubleReleasePool {
+            fn allocate(&mut self) -> Option<Frame> {
+                self.inner.allocate()
+            }
+
+            fn release(&mut self, frame: Frame) -> Result<(), FrameReleaseError> {
+                if self.duplicate_release == Some(frame.start) {
+                    self.duplicate_release = None;
+                    // Model another owner having released this frame just
+                    // before teardown tries to release its stale ownership.
+                    self.inner.release(frame)?;
+                    return Err(FrameReleaseError::DoubleRelease);
+                }
+                self.inner.release(frame)
+            }
+
+            fn table(&self, frame: Frame) -> Option<&PageTable> {
+                self.inner.table(frame)
+            }
+
+            fn table_mut(&mut self, frame: Frame) -> Option<&mut PageTable> {
+                self.inner.table_mut(frame)
+            }
+        }
+
+        // MirrorPool allocates its root at 0x100000 and its next frame at
+        // 0x101000. Configure the simulated foreign release before borrowing
+        // the pool into OwnedTableFrames.
+        let mut pool = DoubleReleasePool {
+            inner: MirrorPool::new(),
+            duplicate_release: Some(0x0010_1000),
+        };
+        let mut memory = OwnedTableFrames::<DoubleReleasePool, 64>::new(&mut pool);
         let root = memory.alloc_root().expect("root");
         let first = memory.alloc_table().expect("table frame");
-        // Simulate a foreign release of one owned frame.
-        pool.release(Frame { start: first })
-            .expect("foreign release");
+        assert_eq!(first, 0x0010_1000);
+
         assert_eq!(memory.teardown(), Err(FrameReleaseError::DoubleRelease));
-        // The remaining frames, including the root, were still released.
         assert_eq!(memory.owned_count(), 0);
-        assert!(pool.table(Frame { start: root }).is_none());
+        drop(memory);
+
+        // The simulated foreign release and teardown's remaining releases
+        // leave every frame free, including the root.
+        assert_eq!(pool.inner.free_count(), 16);
+        assert!(pool.inner.table(Frame { start: root }).is_none());
     }
 
     #[test]
@@ -504,6 +546,7 @@ mod tests {
         );
         assert_eq!(memory.owned_count(), 1);
         memory.teardown().expect("teardown");
+        drop(memory);
         assert_eq!(pool.free_count(), 16);
     }
 
@@ -524,6 +567,7 @@ mod tests {
         assert!(leaf.flags().contains(PageFlags::WRITABLE));
         assert!(leaf.flags().contains(PageFlags::NO_EXECUTE));
         assert!(leaf.flags().contains(PageFlags::USER));
+        drop(builder);
         // Walk the hardware hierarchy manually through the owned backend.
         let idx = page_indices(0x0040_1000);
         let mut table_phys = root;
@@ -544,6 +588,7 @@ mod tests {
             .expect("leaf entry");
         assert_eq!(pte.address(), 0x0090_1000);
         memory.teardown().expect("teardown");
+        drop(memory);
         assert_eq!(pool.free_count(), 16);
     }
 
@@ -560,9 +605,11 @@ mod tests {
             .install_address_space(&space)
             .expect("install must succeed");
         let hardware = builder.leaf_entry(0x0040_0000).expect("hardware leaf");
+        drop(builder);
         let contract = space.translate_page(0x0040_0000).expect("contract leaf");
         assert_eq!(hardware.address(), contract);
         memory.teardown().expect("teardown");
+        drop(memory);
         assert_eq!(pool.free_count(), 16);
     }
 }
