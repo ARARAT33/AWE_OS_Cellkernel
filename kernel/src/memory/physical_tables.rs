@@ -69,7 +69,9 @@ impl DirectMapWindow {
         if length == 0 {
             return Err(DirectMapError::EmptyWindow);
         }
-        phys_base.checked_add(length).ok_or(DirectMapError::Overflow)?;
+        phys_base
+            .checked_add(length)
+            .ok_or(DirectMapError::Overflow)?;
         // Highest translated address must stay representable in usize.
         let highest = virt_offset
             .checked_add(length - PAGE_SIZE)
@@ -320,10 +322,7 @@ mod tests {
         assert!(table.get(3).expect("entry").is_present());
 
         pool.release(frame).expect("release");
-        assert_eq!(
-            pool.release(frame),
-            Err(FrameReleaseError::DoubleRelease)
-        );
+        assert_eq!(pool.release(frame), Err(FrameReleaseError::DoubleRelease));
     }
 
     #[test]
@@ -346,10 +345,7 @@ mod tests {
 
         // A frame outside the window is unknown to this pool.
         let outside = source.alloc_frame().expect("outside frame");
-        assert_eq!(
-            pool.release(outside),
-            Err(FrameReleaseError::UnknownFrame)
-        );
+        assert_eq!(pool.release(outside), Err(FrameReleaseError::UnknownFrame));
     }
 
     #[test]
@@ -376,8 +372,7 @@ mod tests {
         // Hardware walk through the real tables matches the contract.
         let mut access = OwnedTableFrames::<PhysicalTablePool<_>, 64>::new(&mut pool);
         let translate = {
-            let mut builder =
-                UserPageTableBuilder::new(root, &mut access).expect("valid root");
+            let mut builder = UserPageTableBuilder::new(root, &mut access).expect("valid root");
             (
                 builder.translate(0x0040_0000),
                 builder.translate(0x0040_1000),
