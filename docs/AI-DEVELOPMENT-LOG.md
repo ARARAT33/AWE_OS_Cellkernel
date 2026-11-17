@@ -982,3 +982,40 @@ All **9/9 substantive workflows** passed on the validated code head.
   integration report this configuration mismatch and use an explicit
   head-SHA-guarded merge only after every required check is successful, or
   have the repository owner enable auto-merge intentionally.
+
+
+
+### Physical-frame table pool over a verified direct-map window — 2026-11-18
+
+Continued the memory-isolation track from where PR #73 stopped: the
+`TableFramePool` contract now has a kernel-side implementation over real
+physical frames.
+
+- New `kernel/src/memory/physical_tables.rs`:
+  - `DirectMapWindow`: a bounded physical window with a fixed virtual
+    offset. Construction validates alignment, nonzero length and both the
+    physical-end and highest-virtual-translation overflow; `translate`
+    returns `None` for unaligned or out-of-window addresses instead of
+    guessing.
+  - `FramePoolSource`: allocation plus ownership-tracked release,
+    implemented for `BitmapFrameAllocator` (double-free maps to
+    `DoubleRelease`, unknown frames to `UnknownFrame`).
+  - `PhysicalTablePool`: implements `TableFramePool` over the source.
+    Every allocated frame is verified to be inside the window before it is
+    handed out; a frame the window cannot translate is returned to the
+    source and the allocation fails closed. Handed-out frames are zeroed
+    through the mapped virtual address with volatile stores, and
+    `table`/`table_mut` resolve through the same checked window.
+- The safety contract is explicit: the caller guarantees the window really
+  maps the physical range writable. The module does not fake that mapping.
+- Tests use real page-aligned host memory behind an identity window, so the
+  dereferencing path is exercised for the first time: zeroing, table access,
+  out-of-window fail-closed allocation with frame return, double-release
+  detection, window arithmetic, and an end-to-end `build_address_space`
+  run whose hardware walk matches the contract translation and whose PML4
+  root entry in real memory points at a built frame.
+- Explicit non-goals unchanged: CR3 activation, TLB invalidation and boot
+  wiring of the live allocator. `build_address_space` still must not be
+  called from boot code until the boot path installs a real window.
+- Validation: pending fresh GitHub Actions on this branch; no pass or merge
+  is claimed before the full check set is green.
