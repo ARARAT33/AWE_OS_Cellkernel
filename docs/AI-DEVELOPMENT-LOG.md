@@ -925,3 +925,20 @@ All **9/9 substantive workflows** passed on the validated code head.
 - Follow-up code commit: eed650da3a2d8d45e9681065c4623cc1cc86b923.
 - Validation is pending on the resulting final head. Earlier failed runs are
   not counted as passes; PR #73 remains draft and unmerged.
+
+
+### PR #73 test-fixture corrections — 2026-11-17
+
+- After the borrow-scope fix, the workspace test run compiled and executed
+  the new tests, then exposed two incorrect expectations:
+  - the four-level tree for the tested mapping is four frames total
+    (PML4 root, PDPT, PD, PT); the PML4 entry is stored in the root and is
+    not a separate frame;
+  - USER_HALF_END is a non-canonical boundary, so it correctly produces
+    InvalidMapping. The kernel-half rejection test now uses the canonical
+    high-half address 0xffff800000000000 and expects KernelHalfForbidden.
+- Corrected both fixtures in commit
+  261b4a34d55203597d8e952a19baa3b33bdaa82c.
+- The previous run reached 387 passing kernel tests but had these two
+  assertion failures. A fresh full validation is pending on the new head;
+  no pass or merge is claimed yet.
