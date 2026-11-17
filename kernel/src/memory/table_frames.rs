@@ -420,10 +420,7 @@ mod tests {
             let mut builder = UserPageTableBuilder::new(root, &mut memory).expect("valid root");
             builder.install_mapping(&bad).err()
         };
-        assert_eq!(
-            install_error,
-            Some(PageBuildError::KernelHalfForbidden)
-        );
+        assert_eq!(install_error, Some(PageBuildError::KernelHalfForbidden));
         assert_eq!(memory.owned_count(), 1); // only the root
         memory.teardown().expect("teardown");
         drop(memory);
