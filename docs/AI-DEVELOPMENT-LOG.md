@@ -1,4 +1,4 @@
-### Final validation on the formatted CellNet head — 2026-11-13
+successfully downloaded text file (SHA: 1fabcb94b0a7cb1d05ad441f89e5f28a82daccb2)### Final validation on the formatted CellNet head — 2026-11-13
 
 - The final source+documentation head at this validation point was
   `6b74be812a15b83fe571d92b0b877d95164fb40e`; all nine PR workflows passed.
@@ -868,3 +868,117 @@ All **9/9 substantive workflows** passed on the validated code head.
 - `PRODUCT_READINESS.md` records the per-process VM milestone and explicitly leaves memory-isolation/userspace gates unchecked (commit `69461219d811423b874eab47e28d14b30d4a6fd4`).
 - `PROJECT_STATUS.md` was refreshed with the QEMU/test evidence and the next concrete VM, storage, networking and architecture-port milestones (commit `9884ffd301cc0df60f5a5cc6f8f47aaa1a7bcf2a`).
 - These documentation-only commits do not change kernel code; the validated code evidence above remains the final PR head `fe8db1d`.
+
+
+### Frame ownership, rollback and teardown for the page-table builder (2026-11-16)
+
+- `kernel/src/memory/table_frames.rs` adds the ownership layer the builder
+  left to its caller: a `TableFramePool` trait, an `OwnedTableFrames`
+  `TableMemory` wrapper that records every allocated frame including the PML4
+  root, batch `rollback`, full `teardown`, drop-time best-effort release, a
+  `take_ownership` transfer (`BuiltTables`) and `build_address_space`, which
+  releases every frame on any build failure before returning the error.
+- Explicit non-goal preserved: no code path yet dereferences real physical
+  frames. A kernel-side `TableFramePool` over the live frame allocator plus a
+  verified physical-to-virtual mapping remains required before boot-path use;
+  `build_address_space` documents that restriction.
+- Ten new unit tests cover successful transfer, rollback on frame exhaustion
+  (including the root), kernel-half rejection before allocation, batch-scoped
+  rollback, double-release surfacing with continued teardown, drop safety,
+  double-root rejection, leaf flag preservation, a manual four-level walk and
+  contract/hardware translation parity.
+- Validation pending: CI on this branch (fmt, Clippy, workspace tests). No
+  merge claim is made before the PR workflows pass.
+
+
+### PR #73 compile-failure correction — 2026-11-17
+
+- Reviewed the actual PR checks and diagnostics for the frame-ownership change.
+  The first source head failed workspace compilation with Rust borrow-checker
+  errors (E0502 / E0499) confined to the new table_frames.rs tests:
+  tests attempted to inspect or mutate the pool while OwnedTableFrames
+  still held its exclusive mutable borrow.
+- Corrected the tests on the existing review branch
+  feat/frame-backed-table-memory-2026-11-16:
+  - explicitly end builder/pool-wrapper lifetimes before inspecting the pool;
+  - drop OwnedTableFrames after explicit teardown before checking pool
+    state;
+  - replace the impossible direct foreign-release-while-borrowed test
+    setup with a DoubleReleasePool test adapter that models a stale-owner
+    release inside the pool contract, reports
+    FrameReleaseError::DoubleRelease, and still verifies teardown
+    continues to release the root frame.
+- Code correction commit: 877147733cdaf9d8e8061c8ca809825395a2f85c.
+- Validation: pending fresh GitHub Actions on the corrected head. The earlier
+  failed compile is not counted as a pass; no merge or readiness promotion
+  is claimed. The PR remains draft until the full check set is green.
+
+
+### PR #73 follow-up borrow-scope correction — 2026-11-17
+
+- The first test-lifetime correction moved one builder drop after an
+  assertion that still borrowed the wrapper. The next GitHub Actions run
+  caught that remaining E0502 at the test's owned-frame-count assertion.
+- Reworked the affected tests to use lexical scopes for
+  UserPageTableBuilder, so its mutable borrow ends before the wrapper or
+  pool is inspected. Removed an unused PageTableEntry test import.
+- Follow-up code commit: eed650da3a2d8d45e9681065c4623cc1cc86b923.
+- Validation is pending on the resulting final head. Earlier failed runs are
+  not counted as passes; PR #73 remains draft and unmerged.
+
+
+### PR #73 test-fixture corrections — 2026-11-17
+
+- After the borrow-scope fix, the workspace test run compiled and executed
+  the new tests, then exposed two incorrect expectations:
+  - the four-level tree for the tested mapping is four frames total
+    (PML4 root, PDPT, PD, PT); the PML4 entry is stored in the root and is
+    not a separate frame;
+  - USER_HALF_END is a non-canonical boundary, so it correctly produces
+    InvalidMapping. The kernel-half rejection test now uses the canonical
+    high-half address 0xffff800000000000 and expects KernelHalfForbidden.
+- Corrected both fixtures in commit
+  261b4a34d55203597d8e952a19baa3b33bdaa82c.
+- The previous run reached 387 passing kernel tests but had these two
+  assertion failures. A fresh full validation is pending on the new head;
+  no pass or merge is claimed yet.
+
+
+### PR #73 Clippy correction — 2026-11-17
+
+- The new page-table tests progressed past the previous assertion failures.
+  Clippy then rejected one manual 0..3 loop that indexed the four-level
+  page-table index array (needless_range_loop, promoted by -D warnings).
+- Replaced it with iteration over the first three indices, preserving the
+  explicit walk of the three intermediate levels.
+- Code commit: 191e6f041772f9524f5818f358daa4605ed404d4.
+- Fresh CI is pending; no merge/readiness claim is made until workspace tests,
+  Clippy, QEMU boot, VirtIO and security checks all pass.
+
+
+### PR #73 validation completed — 2026-11-17
+
+- Final validated code head: b5712b7a94a32b8f357cfab5ed98666527eada00.
+- All 16 reported PR check-runs completed successfully: workspace formatting,
+  check, tests and Clippy; UEFI loader; bootable-image build/smoke; exception
+  injection; VirtIO QEMU transport/boot; cloud security; release contract;
+  multi-architecture image workflow; and four AOSIN installer matrix jobs.
+- CI diagnostics reported 389 kernel tests plus 3 kernel-bin tests passing,
+  zero failures. The Quality Gate workspace tests, product-core evidence and
+  workspace Clippy all passed.
+- PR #73 was marked ready for review after CI passed. It remains unmerged.
+- Runtime boundary unchanged: the pool is still a contract/test backend.
+  Physical-frame dereferencing, live allocator integration, CR3/TLB lifecycle,
+  checked user-copy and Ring 3 remain unimplemented.
+
+### Integration automation audit — 2026-11-17
+
+- The repository setting reports allow_auto_merge=false, while
+  .github/workflows/branch-integration.yml invokes gh pr merge --auto and
+  suppresses failure with || true. That path can propose branch PRs but cannot
+  enable auto-merge under the current repository setting; the failure is
+  hidden rather than surfaced.
+- No branch or PR was merged by this run. Next automation task: make branch
+  integration report this configuration mismatch and use an explicit
+  head-SHA-guarded merge only after every required check is successful, or
+  have the repository owner enable auto-merge intentionally.
