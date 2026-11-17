@@ -353,7 +353,7 @@ mod tests {
         let built = build_address_space::<MirrorPool, 64, 4>(&mut pool, &space)
             .expect("build must succeed");
         let root = built.root().expect("root allocated by the builder wrapper");
-        assert_eq!(built.frame_count(), 5); // root + PML4E + PDPT + PD + PT
+        assert_eq!(built.frame_count(), 4); // PML4 root + PDPT + PD + PT
         assert!(built.frames().contains(&root));
 
         // Translations resolve through the pool after ownership transfer.
@@ -409,9 +409,10 @@ mod tests {
         let mut pool = MirrorPool::new();
         let mut memory = OwnedTableFrames::<MirrorPool, 64>::new(&mut pool);
         let root = memory.alloc_root().expect("root");
-        let kernel_half = super::super::address_space::USER_HALF_END;
         let bad = super::super::address_space::UserMapping {
-            virtual_start: kernel_half,
+            // A canonical kernel-half address (USER_HALF_END itself is the
+            // non-canonical boundary and correctly reports InvalidMapping).
+            virtual_start: 0xffff_8000_0000_0000,
             physical_start: 0x0090_0000,
             page_count: 1,
             flags: RW,
