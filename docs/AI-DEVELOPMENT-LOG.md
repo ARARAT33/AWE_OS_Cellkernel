@@ -954,3 +954,31 @@ All **9/9 substantive workflows** passed on the validated code head.
 - Code commit: 191e6f041772f9524f5818f358daa4605ed404d4.
 - Fresh CI is pending; no merge/readiness claim is made until workspace tests,
   Clippy, QEMU boot, VirtIO and security checks all pass.
+
+
+### PR #73 validation completed — 2026-11-17
+
+- Final validated code head: b5712b7a94a32b8f357cfab5ed98666527eada00.
+- All 16 reported PR check-runs completed successfully: workspace formatting,
+  check, tests and Clippy; UEFI loader; bootable-image build/smoke; exception
+  injection; VirtIO QEMU transport/boot; cloud security; release contract;
+  multi-architecture image workflow; and four AOSIN installer matrix jobs.
+- CI diagnostics reported 389 kernel tests plus 3 kernel-bin tests passing,
+  zero failures. The Quality Gate workspace tests, product-core evidence and
+  workspace Clippy all passed.
+- PR #73 was marked ready for review after CI passed. It remains unmerged.
+- Runtime boundary unchanged: the pool is still a contract/test backend.
+  Physical-frame dereferencing, live allocator integration, CR3/TLB lifecycle,
+  checked user-copy and Ring 3 remain unimplemented.
+
+### Integration automation audit — 2026-11-17
+
+- The repository setting reports allow_auto_merge=false, while
+  .github/workflows/branch-integration.yml invokes gh pr merge --auto and
+  suppresses failure with || true. That path can propose branch PRs but cannot
+  enable auto-merge under the current repository setting; the failure is
+  hidden rather than surfaced.
+- No branch or PR was merged by this run. Next automation task: make branch
+  integration report this configuration mismatch and use an explicit
+  head-SHA-guarded merge only after every required check is successful, or
+  have the repository owner enable auto-merge intentionally.
