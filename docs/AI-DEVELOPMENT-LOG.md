@@ -912,3 +912,16 @@ All **9/9 substantive workflows** passed on the validated code head.
 - Validation: pending fresh GitHub Actions on the corrected head. The earlier
   failed compile is not counted as a pass; no merge or readiness promotion
   is claimed. The PR remains draft until the full check set is green.
+
+
+### PR #73 follow-up borrow-scope correction — 2026-11-17
+
+- The first test-lifetime correction moved one builder drop after an
+  assertion that still borrowed the wrapper. The next GitHub Actions run
+  caught that remaining E0502 at the test's owned-frame-count assertion.
+- Reworked the affected tests to use lexical scopes for
+  UserPageTableBuilder, so its mutable borrow ends before the wrapper or
+  pool is inspected. Removed an unused PageTableEntry test import.
+- Follow-up code commit: eed650da3a2d8d45e9681065c4623cc1cc86b923.
+- Validation is pending on the resulting final head. Earlier failed runs are
+  not counted as passes; PR #73 remains draft and unmerged.
