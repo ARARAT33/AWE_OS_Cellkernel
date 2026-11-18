@@ -982,3 +982,14 @@ All **9/9 substantive workflows** passed on the validated code head.
   integration report this configuration mismatch and use an explicit
   head-SHA-guarded merge only after every required check is successful, or
   have the repository owner enable auto-merge intentionally.
+
+### Scheduled branch-integration workflow permission fix — 2026-11-18
+
+- Followed up on scheduled run `44298405205` and its job log. The workflow iterated through the branch inventory and repeatedly attempted `gh pr create`; GitHub rejected every attempt with `GitHub Actions is not permitted to create or approve pull requests (createPullRequest)`. The script suppressed each failure with `|| true`, so the scheduled run appeared green despite creating no PRs.
+- The same workflow also attempted `gh pr merge --auto` while repository metadata reported `allow_auto_merge=false`, again suppressing the error. No merge occurred.
+- Updated `.github/workflows/branch-integration.yml` on a separate review branch:
+  - The scheduled workflow now inventories branches and open PRs and writes branches without an open PR to the GitHub Actions step summary.
+  - It no longer retries a PR-creation mutation that the current workflow token is not permitted to perform.
+  - It reads the repository's `allow_auto_merge` setting and explicitly skips merge attempts when disabled.
+  - When auto-merge is enabled, it only requests auto-merge for non-draft PRs targeting the default branch with at least one reported check and every reported check successful. Merge errors are no longer hidden.
+- This is an automation-control fix; it does not change kernel code or merge any branch. Fresh workflow validation is pending.
