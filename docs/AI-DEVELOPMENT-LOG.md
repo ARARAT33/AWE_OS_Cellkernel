@@ -1025,3 +1025,11 @@ All **9/9 substantive workflows** passed on the validated code head.
 3. Repair the scheduled branch-integration workflow's permission/configuration reporting.
 4. Continue toward safe CR3/TLB lifecycle and checked user-copy, then prove isolation in QEMU before Ring 3.
 5. Keep real VirtIO block persistence and two-node authenticated CellNet transport as separate runtime milestones.
+
+### Scheduled branch-integration workflow permission fix — 2026-11-18
+
+- Followed up on scheduled run `44298405205`. Its logs show repeated `gh pr create` failures because GitHub Actions is not permitted to create or approve pull requests; the old script suppressed each failure with `|| true`, so the run appeared green while creating no PRs.
+- Repository metadata reports `allow_auto_merge=false`; the old workflow also suppressed `gh pr merge --auto` errors, so its success did not mean any branch was integrated.
+- Updated `.github/workflows/branch-integration.yml` to inventory branches and open PRs, publish branches without an open PR in the Actions step summary, skip PR-creation attempts that the current workflow token cannot perform, and explicitly skip auto-merge while the repository setting is disabled.
+- If repository auto-merge is enabled later, the workflow requests auto-merge only for non-draft PRs targeting the default branch with at least one reported check and all reported checks successful. Merge errors are no longer hidden.
+- This changes automation reporting and safety only; no kernel code or branch was merged. Fresh workflow validation is pending.
