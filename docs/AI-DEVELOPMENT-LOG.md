@@ -1033,3 +1033,10 @@ All **9/9 substantive workflows** passed on the validated code head.
 - Updated `.github/workflows/branch-integration.yml` to inventory branches and open PRs, publish branches without an open PR in the Actions step summary, skip PR-creation attempts that the current workflow token cannot perform, and explicitly skip auto-merge while the repository setting is disabled.
 - If repository auto-merge is enabled later, the workflow requests auto-merge only for non-draft PRs targeting the default branch with at least one reported check and all reported checks successful. Merge errors are no longer hidden.
 - This changes automation reporting and safety only; no kernel code or branch was merged. Fresh workflow validation is pending.
+
+### Deterministic bump-allocator regression fixture — 2026-11-18
+
+- The corrected CI diagnostics workflow exposed the actual PR validation failure: Clippy and the `x86_64-unknown-none` kernel-bin check both exited 0, but workspace tests reported 388 passed and one failed.
+- The failing test was `memory::allocator::tests::allocator_respects_alignment_and_bounds` at `kernel/src/memory/allocator.rs:112`. It expected 104 bytes remaining even though its stack byte array had alignment 1, so the array's base address could vary modulo 16 between runners. The implementation's alignment padding, and therefore the remaining-byte count, was nondeterministic relative to that hard-coded expectation.
+- Updated only the test fixture: a 16-byte-aligned 136-byte backing object is used, with the allocator region starting exactly 8 bytes into it and a fixed 128-byte capacity. This makes the expected 8-byte base offset and 104-byte remaining count deterministic while still exercising the 16-byte allocation alignment.
+- No production allocator behavior was changed. The earlier failing run is not counted as passing; a fresh CI run on the new commit must confirm the correction.
