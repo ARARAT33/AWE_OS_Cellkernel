@@ -982,3 +982,46 @@ All **9/9 substantive workflows** passed on the validated code head.
   integration report this configuration mismatch and use an explicit
   head-SHA-guarded merge only after every required check is successful, or
   have the repository owner enable auto-merge intentionally.
+
+### Scheduled development audit and CI diagnostics hardening — 2026-11-18
+
+#### Repository state reviewed
+
+- Default branch: `main`; audited head: `90a88a6c92cdd43889a76e499a0b7d82500dd695`.
+- Workspace manifest contains 30 members across boot/protocol, kernel/kernel-bin, system services, first-party apps, tools and product tests.
+- Open PRs at audit time: #74 (physical-frame page-table pool) and #64 (initd restart-policy enforcement). Neither was merged by this run.
+- The current project-status and product-readiness documents correctly keep live per-process address-space activation, user/kernel isolation, durable VirtIO storage, real NIC-backed networking and ARM64/RISC-V runtime validation as open gates. No historical percentage was treated as evidence.
+- The local Cell Runtime ABI 1.1 is a bounded, process-backed in-kernel lifecycle/IPC manager. Its own documentation explicitly excludes per-cell memory isolation and distributed authenticated IPC.
+- The latest main-line evidence recorded before this run is 564 tests across 57 test binaries, with the substantive boot, loader, VirtIO and security workflows reported green. This does not validate the new code in PR #74.
+
+#### PR #74 and memory boundary findings
+
+- PR #74 head at review time: `01e39d0a005f2987da0f72f5cf3ce5d8b253379a`.
+- The proposed `PhysicalTablePool` adds a checked arithmetic window and a physical-frame allocator adapter. Its unsafe constructor still relies on the caller to have installed the actual writable mapping; it does not activate CR3 or wire the live boot allocator.
+- Review follow-up remains necessary: `table` and `table_mut` currently check only whether an address translates through the window, not whether the frame is currently owned by this pool. Before treating this as a hardened `TableFramePool`, add ownership-aware access/release tests or explicitly narrow the trait contract.
+- The PR's first diagnostics run (run `44172684575`) failed in the diagnostic job. The workflow itself had `-e -o pipefail`; a failing Cargo pipeline exited before its `PIPESTATUS` value and `/tmp/diag.txt` were printed. Therefore the underlying Rust failure was not established from that run. Later PR checks reported `action_required`, not success; no pass is inferred.
+
+#### CI change in this branch
+
+- Updated `.github/workflows/ci-diagnostics.yml` so each Cargo command is allowed to finish and its pipeline exit status is captured immediately.
+- The report is now printed before the step exits nonzero, and the existing `if: always()` PR-comment step can read the report.
+- This is a diagnostics reliability fix only; it does not change kernel runtime behavior or readiness gates.
+
+#### Integration automation finding (not changed in this PR)
+
+- Scheduled run `44298405205` completed successfully at the workflow level but its logs show repeated PR-creation failures: GitHub Actions is not permitted to create or approve pull requests.
+- Repository metadata reports `allow_auto_merge=false`; the integration workflow currently suppresses `gh pr merge --auto` errors with `|| true`. The green scheduled workflow therefore does not mean branches were integrated.
+- Follow-up: make the integration workflow report these permission/settings blockers explicitly and avoid repeatedly attempting operations the workflow token cannot perform. Do not enable or merge unverified changes.
+
+#### Validation and limitations
+
+- No local Rust toolchain, QEMU runner or repository checkout was available through this GitHub-only editing session, so no local `cargo test`, Clippy, formatting or boot test is claimed for this workflow-only patch.
+- Fresh GitHub Actions validation is required on this branch. PR #74 remains separate and unmerged.
+
+#### Next priorities
+
+1. Review and test ownership checks for `PhysicalTablePool::table`, `table_mut` and `release`; do not wire it into boot until the direct map is actually installed and validated.
+2. Obtain actionable diagnostics for PR #74 after the corrected diagnostics workflow runs.
+3. Repair the scheduled branch-integration workflow's permission/configuration reporting.
+4. Continue toward safe CR3/TLB lifecycle and checked user-copy, then prove isolation in QEMU before Ring 3.
+5. Keep real VirtIO block persistence and two-node authenticated CellNet transport as separate runtime milestones.
