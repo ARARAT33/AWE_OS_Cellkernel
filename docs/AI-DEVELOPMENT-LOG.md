@@ -1,4 +1,4 @@
-successfully downloaded text file (SHA: 1fabcb94b0a7cb1d05ad441f89e5f28a82daccb2)### Final validation on the formatted CellNet head — 2026-11-13
+### Final validation on the formatted CellNet head — 2026-11-13
 
 - The final source+documentation head at this validation point was
   `6b74be812a15b83fe571d92b0b877d95164fb40e`; all nine PR workflows passed.
@@ -1051,3 +1051,37 @@ All **9/9 substantive workflows** passed on the validated code head.
 - The failing test was `memory::allocator::tests::allocator_respects_alignment_and_bounds` at `kernel/src/memory/allocator.rs:112`. It expected 104 bytes remaining even though its stack byte array had alignment 1, so the array's base address could vary modulo 16 between runners. The implementation's alignment padding, and therefore the remaining-byte count, was nondeterministic relative to that hard-coded expectation.
 - Updated only the test fixture: a 16-byte-aligned 136-byte backing object is used, with the allocator region starting exactly 8 bytes into it and a fixed 128-byte capacity. This makes the expected 8-byte base offset and 104-byte remaining count deterministic while still exercising the 16-byte allocation alignment.
 - No production allocator behavior was changed. The fresh run on PR head `50c8829` passed the test and reported 389 kernel tests plus 3 kernel-bin tests with zero failures.
+### Physical-frame table pool over a verified direct-map window — 2026-11-18
+
+Continued the memory-isolation track from where PR #73 stopped: the
+`TableFramePool` contract now has a kernel-side implementation over real
+physical frames.
+
+- New `kernel/src/memory/physical_tables.rs`:
+  - `DirectMapWindow`: a bounded physical window with a fixed virtual
+    offset. Construction validates alignment, nonzero length and both the
+    physical-end and highest-virtual-translation overflow; `translate`
+    returns `None` for unaligned or out-of-window addresses instead of
+    guessing.
+  - `FramePoolSource`: allocation plus ownership-tracked release,
+    implemented for `BitmapFrameAllocator` (double-free maps to
+    `DoubleRelease`, unknown frames to `UnknownFrame`).
+  - `PhysicalTablePool`: implements `TableFramePool` over the source.
+    Every allocated frame is verified to be inside the window before it is
+    handed out; a frame the window cannot translate is returned to the
+    source and the allocation fails closed. Handed-out frames are zeroed
+    through the mapped virtual address with volatile stores, and
+    `table`/`table_mut` resolve through the same checked window.
+- The safety contract is explicit: the caller guarantees the window really
+  maps the physical range writable. The module does not fake that mapping.
+- Tests use real page-aligned host memory behind an identity window, so the
+  dereferencing path is exercised for the first time: zeroing, table access,
+  out-of-window fail-closed allocation with frame return, double-release
+  detection, window arithmetic, and an end-to-end `build_address_space`
+  run whose hardware walk matches the contract translation and whose PML4
+  root entry in real memory points at a built frame.
+- Explicit non-goals unchanged: CR3 activation, TLB invalidation and boot
+  wiring of the live allocator. `build_address_space` still must not be
+  called from boot code until the boot path installs a real window.
+- Validation: pending fresh GitHub Actions on this branch; no pass or merge
+  is claimed before the full check set is green.
