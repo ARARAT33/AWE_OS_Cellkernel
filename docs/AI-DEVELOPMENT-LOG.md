@@ -1015,8 +1015,19 @@ All **9/9 substantive workflows** passed on the validated code head.
 
 #### Validation and limitations
 
-- No local Rust toolchain, QEMU runner or repository checkout was available through this GitHub-only editing session, so no local `cargo test`, Clippy, formatting or boot test is claimed for this workflow-only patch.
-- Fresh GitHub Actions validation is required on this branch. PR #74 remains separate and unmerged.
+- Fresh GitHub Actions completed successfully on PR head `50c8829a44b3d5f57e4debcbffa383148adbf23a`:
+  - CI Diagnostics: Clippy exit 0; `x86_64-unknown-none` kernel-bin check exit 0; workspace/all-target tests exit 0.
+  - The diagnostic run reported 389 kernel tests and 3 kernel-bin tests passing, with zero failures.
+  - AWEOS CI Pipeline: workspace compilation, workspace tests, formatting and boot-image generation passed.
+  - AWEOS Quality Gate: UEFI loader, workspace check/tests, product-core evidence and Clippy passed.
+  - Bootable Image Pipeline: kernel build, Multiboot2 validation and QEMU ISO smoke boot passed.
+  - VirtIO Runtime: storage/driver contract tests, kernel build, QEMU VirtIO PCI detection and QEMU boot passed. This is not proof of actual block read/write or durable persistence.
+  - Cloud Security Gate, Multi-Architecture Images and AOSIN installer matrix passed.
+  - rustfmt-fix completed successfully without changing the final head.
+- The initial failing run on head `226a534` is retained as historical evidence; the deterministic fixture correction was validated by the successful run on `50c8829`.
+- No local Rust toolchain or QEMU runner was available through this GitHub-only editing session; all reported passes above are GitHub Actions results.
+- The revised branch-integration workflow is triggered only by schedule/workflow_dispatch, so its new audit path has not yet been exercised by this PR's pull-request checks. Its next scheduled run must verify the new summary and explicit skip behavior.
+- PR #74 remains separate and unmerged.
 
 #### Next priorities
 
@@ -1039,4 +1050,4 @@ All **9/9 substantive workflows** passed on the validated code head.
 - The corrected CI diagnostics workflow exposed the actual PR validation failure: Clippy and the `x86_64-unknown-none` kernel-bin check both exited 0, but workspace tests reported 388 passed and one failed.
 - The failing test was `memory::allocator::tests::allocator_respects_alignment_and_bounds` at `kernel/src/memory/allocator.rs:112`. It expected 104 bytes remaining even though its stack byte array had alignment 1, so the array's base address could vary modulo 16 between runners. The implementation's alignment padding, and therefore the remaining-byte count, was nondeterministic relative to that hard-coded expectation.
 - Updated only the test fixture: a 16-byte-aligned 136-byte backing object is used, with the allocator region starting exactly 8 bytes into it and a fixed 128-byte capacity. This makes the expected 8-byte base offset and 104-byte remaining count deterministic while still exercising the 16-byte allocation alignment.
-- No production allocator behavior was changed. The earlier failing run is not counted as passing; a fresh CI run on the new commit must confirm the correction.
+- No production allocator behavior was changed. The fresh run on PR head `50c8829` passed the test and reported 389 kernel tests plus 3 kernel-bin tests with zero failures.
