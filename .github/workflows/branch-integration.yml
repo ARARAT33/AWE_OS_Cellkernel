@@ -1,4 +1,4 @@
-name: Safe branch integration
+name: Safe branch integration audit
 
 on:
   workflow_dispatch:
@@ -18,43 +18,71 @@ jobs:
   integrate:
     runs-on: ubuntu-latest
     steps:
-      - name: Create integration PRs and enable safe auto-merge
+      - name: Audit branch proposals and safely auto-merge verified PRs
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        shell: bash
         run: |
           set -euo pipefail
 
-          # Preserve the repository's configured default branch (AWEOS uses master).
+          repo_json="$(gh api "repos/$GH_REPO")"
+          auto_merge_enabled="$(jq -r '.allow_auto_merge // false' <<<"$repo_json")"
           mapfile -t branches < <(gh api --paginate "repos/$GH_REPO/branches?per_page=100" --jq '.[].name')
           prs_json="$(gh pr list --repo "$GH_REPO" --state open --limit 500 --json number,headRefName,baseRefName,isDraft)"
-          
+
+          untracked=()
           for branch in "${branches[@]}"; do
             [[ "$branch" == "$DEFAULT_BRANCH" ]] && continue
-
             existing="$(jq -r --arg b "$branch" '[.[] | select(.headRefName == $b)] | length' <<<"$prs_json")"
             if [[ "$existing" == "0" ]]; then
-              # Do not overwrite or delete a branch; propose it as a normal PR.
-              gh pr create --repo "$GH_REPO" --base "$DEFAULT_BRANCH" --head "$branch" \
-                --title "Integrate branch: $branch" \
-                --body "Automated integration proposal. This PR preserves the source branch and its commits. It will only be auto-merged after GitHub reports successful checks and the PR is mergeable." || true
-              prs_json="$(gh pr list --repo "$GH_REPO" --state open --limit 500 --json number,headRefName,baseRefName,isDraft)"
+              untracked+=("$branch")
             fi
           done
 
-          # Only auto-merge non-draft PRs directly targeting the default branch.
-          # Stacked PRs, conflicts, missing checks, and failing/pending checks are left untouched.
+          {
+            echo "### Safe branch integration audit"
+            echo "- Default branch: `$DEFAULT_BRANCH`"
+            echo "- Branches discovered: ${#branches[@]}"
+            echo "- Open pull requests: $(jq 'length' <<<"$prs_json")"
+            echo "- Branches without an open PR: ${#untracked[@]}"
+            if [[ ${#untracked[@]} -gt 0 ]]; then
+              echo
+              echo "#### Branches awaiting an explicit PR proposal"
+              for branch in "${untracked[@]}"; do
+                echo "- `$branch`"
+              done
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          # This workflow token cannot create PRs when the repository's
+          # Actions setting forbids it. Do not retry a failing mutation for
+          # every branch; report candidates for an explicit, reviewed PR.
+          if [[ ${#untracked[@]} -gt 0 ]]; then
+            echo "::notice::${#untracked[@]} branches have no open PR; no PRs were created by this audit."
+          fi
+
+          # GitHub auto-merge must be enabled at repository level before
+          # gh pr merge --auto can work. Never hide this configuration blocker.
+          if [[ "$auto_merge_enabled" != "true" ]]; then
+            echo "::warning::Repository allow_auto_merge is false; no pull requests were merged."
+            echo "- Auto-merge: disabled in repository settings; no merge attempted." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
           while IFS=$'\t' read -r number head base draft; do
             [[ -z "$number" || "$draft" == "true" || "$base" != "$DEFAULT_BRANCH" ]] && continue
 
-            checks="$(gh pr checks "$number" --repo "$GH_REPO" --json name,state 2>/dev/null || echo '[]')"
+            checks="$(gh pr checks "$number" --repo "$GH_REPO" --json name,state)"
             count="$(jq 'length' <<<"$checks")"
-            passed="$(jq '[.[] | select(.state == "SUCCESS")] | length' <<<"$checks")"
             all_passed="$(jq 'length > 0 and all(.[]; .state == "SUCCESS")' <<<"$checks")"
 
-            # Require at least one check, and require every reported check to pass.
-            if [[ "$count" -gt 0 && "$passed" -eq "$count" && "$all_passed" == "true" ]]; then
-              gh pr merge "$number" --repo "$GH_REPO" --merge --auto || true
+            if [[ "$count" -gt 0 && "$all_passed" == "true" ]]; then
+              echo "All reported checks passed for PR #$number; requesting GitHub auto-merge."
+              gh pr merge "$number" --repo "$GH_REPO" --merge --auto
+              echo "- PR #$number (`$head`): all reported checks passed; auto-merge requested." >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo "- PR #$number (`$head`): left untouched (missing, pending or failing checks)." >> "$GITHUB_STEP_SUMMARY"
             fi
           done < <(jq -r '.[] | [.number, .headRefName, .baseRefName, (.isDraft|tostring)] | @tsv' <<<"$prs_json")
