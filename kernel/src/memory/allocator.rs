@@ -101,8 +101,13 @@ mod tests {
     #[test]
     fn allocator_respects_alignment_and_bounds() {
         let allocator = BumpAllocator::new();
-        let mut storage = [0u8; 128];
-        unsafe { allocator.init(storage.as_mut_ptr() as usize, storage.len()) }
+        #[repr(align(16))]
+        struct AlignedStorage([u8; 136]);
+        let mut storage = AlignedStorage([0u8; 136]);
+        // Start eight bytes into an aligned allocation so the expected
+        // alignment padding is deterministic on every test runner.
+        let start = storage.0.as_mut_ptr().wrapping_add(8);
+        unsafe { allocator.init(start as usize, 128) }
         let a = allocator.alloc_inner(Layout::from_size_align(1, 1).unwrap());
         let b = allocator.alloc_inner(Layout::from_size_align(16, 16).unwrap());
         assert!(!a.is_null());

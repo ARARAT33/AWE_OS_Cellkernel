@@ -26,21 +26,42 @@ jobs:
       - name: Collect cargo diagnostics
         shell: bash
         run: |
+          set -euo pipefail
+          : > /tmp/diag.txt
+
+          # Keep collecting evidence after an individual Cargo command fails.
+          # With -e and pipefail left active, the first failed pipeline would
+          # otherwise terminate this step before PIPESTATUS and the log are saved.
+          set +e
           {
             echo "## CI diagnostics (head ${{ github.sha }})"
             echo '~~~text'
+
             echo '--- clippy: kernel with kernel-selftest feature ---'
             cargo clippy -p aweos-kernel --features kernel-selftest 2>&1 | tail -n 120
-            echo "CLIPPY_SELFTEST_EXIT=${PIPESTATUS[0]}"
+            clippy_status=${PIPESTATUS[0]}
+            printf 'CLIPPY_SELFTEST_EXIT=%s\n' "$clippy_status"
+
             echo '--- check: kernel-bin with selftest feature (x86_64-unknown-none) ---'
             cargo check -p aweos-kernel-bin --target x86_64-unknown-none --features selftest 2>&1 | tail -n 80
-            echo "CHECK_SELFTEST_EXIT=${PIPESTATUS[0]}"
+            check_status=${PIPESTATUS[0]}
+            printf 'CHECK_SELFTEST_EXIT=%s\n' "$check_status"
+
             echo '--- test: workspace, all targets (virtio job parity) ---'
             cargo test --workspace --all-targets 2>&1 | tail -n 200
-            echo "TEST_ALL_TARGETS_EXIT=${PIPESTATUS[0]}"
+            test_status=${PIPESTATUS[0]}
+            printf 'TEST_ALL_TARGETS_EXIT=%s\n' "$test_status"
+
             echo '~~~'
+            printf 'SUMMARY: clippy=%s check=%s tests=%s\n' "$clippy_status" "$check_status" "$test_status"
           } > /tmp/diag.txt
+          set -e
+
+          # Print and preserve the complete diagnostic report before failing.
           cat /tmp/diag.txt
+          if [[ "$clippy_status" -ne 0 || "$check_status" -ne 0 || "$test_status" -ne 0 ]]; then
+            exit 1
+          fi
 
       - name: Comment diagnostics on PR
         if: always()
