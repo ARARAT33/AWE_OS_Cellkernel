@@ -399,7 +399,7 @@ mod tests {
             Some(DirectMapError::Overflow)
         );
         assert_eq!(
-            DirectMapWindow::new(0x1000, PAGE_SIZE, u64::MAX - 0xfff).err(),
+            DirectMapWindow::new(0x1000, 2 * PAGE_SIZE, u64::MAX - 0xfff).err(),
             Some(DirectMapError::Overflow)
         );
     }
