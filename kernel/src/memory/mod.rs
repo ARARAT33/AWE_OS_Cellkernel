@@ -12,6 +12,7 @@ pub mod physical;
 pub mod physical_tables;
 pub mod region;
 pub mod table_frames;
+pub mod user_copy;
 #[cfg(target_arch = "x86_64")]
 pub mod x86_64;
 
@@ -37,6 +38,10 @@ pub use region::{Region, RegionKind};
 pub use table_frames::{
     BuiltTables, DEFAULT_OWNED_CAPACITY, FrameReleaseError, OwnedTableFrames, TableFramePool,
     build_address_space,
+};
+pub use user_copy::{
+    AccessorFault, CopyUserError, MAX_COPY_BYTES, PhysicalAccess, USER_COPY_PAGE_SIZE,
+    copy_user_bytes_in, copy_user_bytes_out,
 };
 #[cfg(target_arch = "x86_64")]
 pub use x86_64::activate_bootstrap_identity_map;
