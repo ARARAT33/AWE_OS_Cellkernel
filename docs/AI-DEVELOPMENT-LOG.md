@@ -1184,3 +1184,18 @@ physical frames.
 - Corrected source commit: `414789a42224abe3bb496530316416e054bd38d6`.
   Fresh CI is pending on this exact source head. The earlier test-build
   failure remains recorded and is not counted as a pass.
+
+
+#### CI follow-up — direct-map overflow fixture boundary
+
+- The next workspace run compiled the full test targets and executed the kernel
+  suite: **395 passed, 1 failed**. The only failure was the virtual-overflow
+  expectation in `window_rejects_misaligned_empty_and_overflowing_configuration`.
+- The fixture used a one-page window at `u64::MAX - 0xfff`. The implementation
+  correctly accepts that range because its highest translated byte address
+  is exactly representable; the test's expected overflow was wrong.
+- Increased that fixture's length to two pages, making the highest translated
+  page address actually overflow. Production translation logic was unchanged.
+- Corrected test commit: `3a50c7d84ac38b286e8dfbb7aaed5742926c665f`.
+  Fresh full validation is pending; the 395/1 result is recorded as a failed
+  test run, not a pass.
