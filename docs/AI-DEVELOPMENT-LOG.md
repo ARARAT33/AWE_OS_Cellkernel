@@ -1215,3 +1215,24 @@ physical frames.
 - Correction commit: `00d665d3b2707d61dd9283f3ae522875b385f9bc`.
   Fresh workspace, formatting, Clippy, boot-image, VirtIO and security
   validation is pending on this new head.
+
+
+#### CI follow-up — test/Clippy pass, formatter bot correction
+
+- On the pre-format head `bbca195d8b6b3fa7a88e165dbe514ddcff8958a5`:
+  - workspace compilation passed;
+  - kernel/workspace tests passed (396 kernel tests plus 3 kernel-bin
+    bootstrap tests in the diagnostics run);
+  - the standalone Clippy report passed;
+  - CI diagnostics completed successfully.
+- The quality gate, CI pipeline, VirtIO gate and cloud-security gate stopped
+  at formatting before their downstream steps. No QEMU/VirtIO runtime result
+  is claimed from those skipped jobs.
+- The repository's rustfmt bot applied the exact formatting-only correction
+  in commit `0abee6b3210b16511c7bda1002548a92d7db03cb`. No semantic source
+  changes were made by that bot commit.
+- GitHub reported all runs for the bot-authored head as `action_required`
+  with no jobs created. A new owner-authored documentation commit follows
+  this entry to trigger the full suite against the already-formatted tree.
+  Until that run completes, formatting and all downstream runtime gates are
+  still treated as unverified.
