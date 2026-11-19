@@ -1151,3 +1151,22 @@ physical frames.
    TLB invalidation and checked physical user-copy before Ring 3.
 4. Keep VirtIO durable block I/O and NIC-backed two-node CellNet transport as
    separate runtime milestones.
+
+
+#### CI follow-up — explicit physical-pool capacity constructor
+
+- The first fresh run on corrected head `6052faa09e3fc8c267733f044dc290798cabdea4`
+  passed the non-test Clippy/self-test checks but the workspace test build
+  still failed with E0284: Rust could not infer the const-generic ledger
+  capacity at `PhysicalTablePool::new` call sites. The default const
+  parameter does not resolve an associated constructor's unconstrained
+  generic parameter.
+- Split the API into `PhysicalTablePool::new` for the documented default
+  capacity and `PhysicalTablePool::<_, N>::with_capacity` for an explicit
+  bounded capacity. This keeps ordinary callers ergonomic while making
+  custom limits unambiguous.
+- Added a capacity-exhaustion regression test proving that an untracked
+  source frame is returned rather than leaked when the ledger is full.
+- Fresh validation on head
+  `cb4acffd0cc83f13265df743b6c9250d258854b6` is pending. The E0284 run is
+  recorded as a failure, not a pass; no merge/readiness promotion is claimed.
