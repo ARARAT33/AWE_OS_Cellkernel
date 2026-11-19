@@ -222,9 +222,9 @@ impl<'s, S: FramePoolSource, const CAP: usize> PhysicalTablePool<'s, S, CAP> {
     }
 
     fn record_index(&self, frame: Frame) -> Option<usize> {
-        self.records.iter().position(|record| {
-            record.state != FrameState::Empty && record.start == frame.start
-        })
+        self.records
+            .iter()
+            .position(|record| record.state != FrameState::Empty && record.start == frame.start)
     }
 
     fn is_live(&self, frame: Frame) -> bool {
@@ -443,12 +443,14 @@ mod tests {
         let reused = pool.allocate().expect("reused frame");
         assert_eq!(reused, frame);
         assert!(pool.table(reused).is_some());
-        assert!(!pool
-            .table(reused)
-            .expect("reused table")
-            .get(3)
-            .expect("cleared entry")
-            .is_present());
+        assert!(
+            !pool
+                .table(reused)
+                .expect("reused table")
+                .get(3)
+                .expect("cleared entry")
+                .is_present()
+        );
     }
 
     #[test]
@@ -464,10 +466,7 @@ mod tests {
 
         assert!(pool.table(foreign).is_none());
         assert!(pool.table_mut(foreign).is_none());
-        assert_eq!(
-            pool.release(foreign),
-            Err(FrameReleaseError::UnknownFrame)
-        );
+        assert_eq!(pool.release(foreign), Err(FrameReleaseError::UnknownFrame));
 
         // The pool must not free or zero the source owner's frame.
         let owned = pool.allocate().expect("pool-owned frame");
@@ -475,7 +474,9 @@ mod tests {
         assert_eq!(memory.pages[0][0], 0xfeed_cafe_dead_beef);
 
         drop(pool);
-        source.try_free_frame(foreign).expect("foreign owner still owns frame");
+        source
+            .try_free_frame(foreign)
+            .expect("foreign owner still owns frame");
     }
 
     #[test]
@@ -496,9 +497,13 @@ mod tests {
         // The rejected frame is returned to the source. End the pool's
         // exclusive borrow before checking the source allocator directly.
         drop(pool);
-        let returned = source.allocate_frame().expect("returned out-of-window frame");
+        let returned = source
+            .allocate_frame()
+            .expect("returned out-of-window frame");
         assert_eq!(returned.start, base + 4 * PAGE_SIZE);
-        source.try_free_frame(returned).expect("return to free list");
+        source
+            .try_free_frame(returned)
+            .expect("return to free list");
     }
 
     #[test]
