@@ -1,3 +1,14 @@
+#### CI follow-up — no_std test fix (bounded recorder instead of Vec)
+
+- The first full test run on PR #78 failed to compile the kernel lib tests with E0433/E0425: the segment-splitting
+  regression test used `core::cell::RefCell<Vec<usize>>`, but the kernel crate has no allocator, so `Vec` is not
+  in scope in a `#![no_std]` crate. Production code was unaffected; two identical diagnostics came from the same
+  test fixture.
+- Replaced the collector with a bounded `[usize; 8]` fixture that records at most the first eight segment lengths,
+  keeping the assertion (4096 + 16 for a 4112-byte copy starting at 0x1000) and the no_std, allocation-free
+  workspace contract. No production behavior changed.
+- Fresh CI on the corrected owner-authored head is pending; the failed run is recorded as a failure, not a pass.
+
 #### CI follow-up — formatter correction and suite retrigger
 
 - The first PR #78 run exposed only rustfmt layout differences; no compile or test result was obtained and the

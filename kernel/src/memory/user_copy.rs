@@ -300,15 +300,20 @@ mod tests {
         );
     }
 
-    #[test]
     fn reads_are_split_per_page_segment() {
         let space = mixed_space();
-        let chunks = core::cell::RefCell::new(Vec::new());
-        struct Recorder<'a>(&'a core::cell::RefCell<Vec<usize>>);
+        let chunks = core::cell::RefCell::new([0usize; 8]);
+        struct Recorder<'a>(&'a core::cell::RefCell<[usize; 8]>);
 
         impl PhysicalAccess for Recorder<'_> {
             fn read_bytes(&mut self, _physical: u64, out: &mut [u8]) -> Result<(), AccessorFault> {
-                self.0.borrow_mut().push(out.len());
+                let mut cells = self.0.borrow_mut();
+                for cell in cells.iter_mut() {
+                    if *cell == 0 {
+                        *cell = out.len();
+                        return Ok(());
+                    }
+                }
                 Ok(())
             }
 
@@ -320,11 +325,14 @@ mod tests {
         let mut recorder = Recorder(&chunks);
         let mut buf = [0u8; 4112];
         copy_user_bytes_in(&space, 0x1000, &mut buf, &mut recorder).unwrap();
-        assert_eq!(chunks.borrow().as_slice(), &[4096usize, 16]);
+        assert_eq!(
+            chunks.borrow().as_slice(),
+            &[4096usize, 16, 0, 0, 0, 0, 0, 0]
+        );
     }
 
     #[test]
-    fn user_copy_page_size_matches_the_contract_layer() {
+        fn user_copy_page_size_matches_the_contract_layer() {
         assert_eq!(
             USER_COPY_PAGE_SIZE,
             super::super::address_space::ADDRESS_SPACE_PAGE_SIZE
