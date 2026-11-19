@@ -410,11 +410,11 @@ mod tests {
             .expect("valid window");
         assert_eq!(
             window.translate(0x200_0000),
-            usize::try_from(0xffff_8000_0200_0000).ok()
+            usize::try_from(0xffff_8000_0200_0000u64).ok()
         );
         assert_eq!(
             window.translate(0x200_3000),
-            usize::try_from(0xffff_8000_0200_3000).ok()
+            usize::try_from(0xffff_8000_0200_3000u64).ok()
         );
         // Before, after, unaligned.
         assert_eq!(window.translate(0x1ff_f000), None);
