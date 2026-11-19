@@ -433,8 +433,8 @@ mod tests {
         let frame = pool.allocate().expect("frame");
         assert_eq!(frame.start, base);
         // The handed-out frame must be fully zeroed.
-        for index in 0..512usize {
-            assert_eq!(memory.pages[0][index], 0);
+        for entry in &memory.pages[0] {
+            assert_eq!(*entry, 0);
         }
         // Table access resolves through the window and is writable.
         pool.table_mut(frame).expect("table").set(
@@ -473,19 +473,20 @@ mod tests {
         let mut source = BitmapFrameAllocator::<1>::new(base, 8);
         // Allocate directly from the source before the pool exists.
         let foreign = source.allocate_frame().expect("foreign frame");
-        // SAFETY: the identity window maps the backing buffer itself.
-        let mut pool = unsafe { PhysicalTablePool::new(identity_window(base), &mut source) };
+        {
+            // SAFETY: the identity window maps the backing buffer itself.
+            let mut pool =
+                unsafe { PhysicalTablePool::new(identity_window(base), &mut source) };
 
-        assert!(pool.table(foreign).is_none());
-        assert!(pool.table_mut(foreign).is_none());
-        assert_eq!(pool.release(foreign), Err(FrameReleaseError::UnknownFrame));
+            assert!(pool.table(foreign).is_none());
+            assert!(pool.table_mut(foreign).is_none());
+            assert_eq!(pool.release(foreign), Err(FrameReleaseError::UnknownFrame));
 
-        // The pool must not free or zero the source owner's frame.
-        let owned = pool.allocate().expect("pool-owned frame");
-        assert_eq!(owned.start, base + PAGE_SIZE);
-        assert_eq!(memory.pages[0][0], 0xfeed_cafe_dead_beef);
-
-        drop(pool);
+            // The pool must not free or zero the source owner's frame.
+            let owned = pool.allocate().expect("pool-owned frame");
+            assert_eq!(owned.start, base + PAGE_SIZE);
+            assert_eq!(memory.pages[0][0], 0xfeed_cafe_dead_beef);
+        }
         source
             .try_free_frame(foreign)
             .expect("foreign owner still owns frame");
@@ -498,17 +499,17 @@ mod tests {
         let mut source = BitmapFrameAllocator::<1>::new(base, 8);
         // The window covers only the first four frames of the allocator.
         let window = DirectMapWindow::new(base, 4 * PAGE_SIZE, base).expect("window");
-        // SAFETY: the identity window maps the buffer itself.
-        let mut pool = unsafe { PhysicalTablePool::new(window, &mut source) };
+        {
+            // SAFETY: the identity window maps the buffer itself.
+            let mut pool = unsafe { PhysicalTablePool::new(window, &mut source) };
 
-        for _ in 0..4 {
-            assert!(pool.allocate().is_some());
+            for _ in 0..4 {
+                assert!(pool.allocate().is_some());
+            }
+            // The fifth frame is outside the window: fail closed, frame returned.
+            assert!(pool.allocate().is_none());
         }
-        // The fifth frame is outside the window: fail closed, frame returned.
-        assert!(pool.allocate().is_none());
-        // The rejected frame is returned to the source. End the pool's
-        // exclusive borrow before checking the source allocator directly.
-        drop(pool);
+        // The rejected frame is returned to the source after the pool borrow ends.
         let returned = source
             .allocate_frame()
             .expect("returned out-of-window frame");
@@ -523,15 +524,17 @@ mod tests {
         let memory = PhysicalMemory::new();
         let base = memory.as_u64();
         let mut source = BitmapFrameAllocator::<1>::new(base, 8);
-        // SAFETY: the identity window maps the backing buffer itself.
-        let mut pool =
-            unsafe { PhysicalTablePool::<_, 1>::with_capacity(identity_window(base), &mut source) };
+        let first = {
+            // SAFETY: the identity window maps the backing buffer itself.
+            let mut pool =
+                unsafe { PhysicalTablePool::<_, 1>::with_capacity(identity_window(base), &mut source) };
 
-        let first = pool.allocate().expect("first tracked frame");
-        assert!(pool.allocate().is_none());
+            let first = pool.allocate().expect("first tracked frame");
+            assert!(pool.allocate().is_none());
+            first
+        };
 
         // The second address was returned to the source when the ledger filled.
-        drop(pool);
         let returned = source.allocate_frame().expect("untracked frame returned");
         assert_eq!(returned.start, base + PAGE_SIZE);
         source
