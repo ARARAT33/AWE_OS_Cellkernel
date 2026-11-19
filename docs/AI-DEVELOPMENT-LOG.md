@@ -1,3 +1,49 @@
+## 2026-11-19 (second session) — PR #77 merged; checked physical user-copy layer added
+
+### Continuation and PR #77 outcome
+
+- Continued from the 2026-11-19 morning entry. On the final PR #77 head `0f4d01945b99375a5cab5864e105d7760eab537d`,
+  all 16 check-runs completed **success**, including the previously pending multi-architecture image job
+  (build-only; still x86_64 targets only).
+- PR #77 was merged into main as `415dd9800201034d1622b6f0f85b616cb9d1d73f` (merge method,
+  expected-head-SHA compare against `0f4d019`). The branch is preserved; nothing was force-pushed or deleted.
+
+### Implemented this session (branch feat/checked-user-copy-layer-2026-11-19)
+
+- `kernel/src/memory/user_copy.rs` (new): the checked physical user-copy layer that closes the gap between
+  `AddressSpace::check_user_access` and an actual kernel-side copy.
+  - `PhysicalAccess` trait: a bounded physical-memory backend (`read_bytes` / `write_bytes`), page-bounded per
+    call. The layer never dereferences memory itself; a backend that hands out unchecked mappings is a caller
+    error, exactly as for `DirectMapWindow`.
+  - `CopyUserError` (`Access`, `TooLarge`, `PhysOverflow`, `Accessor`) and the `AccessorFault` marker.
+  - `MAX_COPY_BYTES` (1 MiB) hard cap checked before any mapping lookup.
+  - `copy_user_bytes_in` (user -> kernel buffer, read access) and `copy_user_bytes_out` (kernel buffer -> user,
+    write access): the full range is validated first, then copied one page-bounded segment at a time via checked
+    address arithmetic.
+- `kernel/src/memory/mod.rs`: module registered and API re-exported.
+- New tests: page-boundary roundtrip (`0x1ff0`, 32 bytes over two pages), validation-before-access for write
+  denial and unmapped tail pages (the backend is never called), cross-mapping read across the RW -> RO boundary,
+  out-of-window `Accessor` fault propagation, zero-length rejection, oversized-copy cap, and per-page segment
+  splitting of backend calls (4096 + 16 for a 4112-byte copy).
+
+### Honest scope
+
+- This is a checked-copy contract layer over an explicit backend. It is not wired into the live boot memory map,
+  does not switch CR3, and does not enable Ring 3.
+- An `Accessor` fault after validation can leave the copy partially applied; the module documentation requires
+  callers to treat destination buffers as unspecified until `Ok(())`.
+- VirtIO block I/O, durable storage, NIC/UDP transport and ARM64/RISC-V runtime remain untouched open gates.
+
+### Next priorities
+
+1. Validate this layer with the full PR CI suite; fix any Clippy/rustfmt/test findings before merge.
+2. Audit the boot memory-map handoff and design a validated direct-map/allocator integration so
+   `PhysicalTablePool` and this copy layer can run on real boot memory.
+3. Continue with supervisor-only kernel mappings, per-process CR3 switching and TLB invalidation before any
+   Ring-3 entry.
+4. Keep real VirtIO block read/write persistence and two-node authenticated CellNet transport as separate
+   runtime milestones.
+
 ### Final validation on the formatted CellNet head — 2026-11-13
 
 - The final source+documentation head at this validation point was
