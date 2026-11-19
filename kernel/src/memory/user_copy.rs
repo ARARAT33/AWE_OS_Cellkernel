@@ -300,6 +300,7 @@ mod tests {
         );
     }
 
+    #[test]
     fn reads_are_split_per_page_segment() {
         let space = mixed_space();
         let chunks = core::cell::RefCell::new([0usize; 8]);
