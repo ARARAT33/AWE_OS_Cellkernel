@@ -29,7 +29,10 @@ pub use paging::{
     PageFlags, PageTable, PageTableEntry, indices as page_indices, page_offset, valid_mapping,
 };
 pub use physical::{FrameBitmap, PhysicalMemoryError};
-pub use physical_tables::{DirectMapError, DirectMapWindow, FramePoolSource, PhysicalTablePool};
+pub use physical_tables::{
+    DEFAULT_PHYSICAL_TABLE_POOL_CAPACITY, DirectMapError, DirectMapWindow, FramePoolSource,
+    PhysicalTablePool,
+};
 pub use region::{Region, RegionKind};
 pub use table_frames::{
     BuiltTables, DEFAULT_OWNED_CAPACITY, FrameReleaseError, OwnedTableFrames, TableFramePool,
