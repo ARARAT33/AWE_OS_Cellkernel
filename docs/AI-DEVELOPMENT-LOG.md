@@ -1170,3 +1170,17 @@ physical frames.
 - Fresh validation on head
   `cb4acffd0cc83f13265df743b6c9250d258854b6` is pending. The E0284 run is
   recorded as a failure, not a pass; no merge/readiness promotion is claimed.
+
+
+#### CI follow-up — high-half test literal typing
+
+- The first run after splitting `new` / `with_capacity` passed workspace
+  library compilation and the non-test kernel checks, so the E0284 constructor
+  inference issue was resolved.
+- Workspace test compilation then failed on two pre-existing high-half
+  address expectations in the new test: unsuffixed literals passed to
+  `usize::try_from` defaulted to `i32` and triggered
+  `overflowing_literals`. Added explicit `u64` suffixes to both values.
+- Corrected source commit: `414789a42224abe3bb496530316416e054bd38d6`.
+  Fresh CI is pending on this exact source head. The earlier test-build
+  failure remains recorded and is not counted as a pass.
