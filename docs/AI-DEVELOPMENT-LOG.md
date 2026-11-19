@@ -1,3 +1,11 @@
+#### CI follow-up — formatter correction and suite retrigger
+
+- The first PR #78 run exposed only rustfmt layout differences; no compile or test result was obtained and the
+  failed format gates are not counted as code-test failures or passes. The repository rustfmt bot applied the
+  formatting-only correction in commit `983a6691171a23da383e635ea94e559889e7382e`; no semantic source change.
+- Bot-authored heads do not trigger Actions, so this owner-authored documentation-only commit re-runs the full
+  suite on the formatted tree. Until that run completes, all runtime gates remain unverified for this head.
+
 ## 2026-11-19 (second session) — PR #77 merged; checked physical user-copy layer added
 
 ### Continuation and PR #77 outcome
