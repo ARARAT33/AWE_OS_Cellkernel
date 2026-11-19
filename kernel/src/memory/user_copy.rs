@@ -253,14 +253,17 @@ mod tests {
         let mut buf = [0u8; 32];
         assert!(copy_user_bytes_in(&space, 0x2ff0, &mut buf, &mut access).is_ok());
 
-        // The second half of 0x3ff0 + 32 is unmapped (page 0x4000).
+        // 0x3ff0 + 32 starts on the read-only page and crosses into page
+        // 0x4000. Reads fail with Unmapped on the second page; writes hit the
+        // PermissionDenied of the first page first, because checks walk pages
+        // in order.
         assert_eq!(
             copy_user_bytes_in(&space, 0x3ff0, &mut buf, &mut access),
             Err(CopyUserError::Access(UserCopyError::Unmapped))
         );
         assert_eq!(
             copy_user_bytes_out(&space, 0x3ff0, &source, &mut access),
-            Err(CopyUserError::Access(UserCopyError::Unmapped))
+            Err(CopyUserError::Access(UserCopyError::PermissionDenied))
         );
     }
 
