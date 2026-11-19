@@ -1,4 +1,4 @@
-successfully downloaded text file (SHA: 1fabcb94b0a7cb1d05ad441f89e5f28a82daccb2)### Final validation on the formatted CellNet head — 2026-11-13
+### Final validation on the formatted CellNet head — 2026-11-13
 
 - The final source+documentation head at this validation point was
   `6b74be812a15b83fe571d92b0b877d95164fb40e`; all nine PR workflows passed.
@@ -1051,3 +1051,217 @@ All **9/9 substantive workflows** passed on the validated code head.
 - The failing test was `memory::allocator::tests::allocator_respects_alignment_and_bounds` at `kernel/src/memory/allocator.rs:112`. It expected 104 bytes remaining even though its stack byte array had alignment 1, so the array's base address could vary modulo 16 between runners. The implementation's alignment padding, and therefore the remaining-byte count, was nondeterministic relative to that hard-coded expectation.
 - Updated only the test fixture: a 16-byte-aligned 136-byte backing object is used, with the allocator region starting exactly 8 bytes into it and a fixed 128-byte capacity. This makes the expected 8-byte base offset and 104-byte remaining count deterministic while still exercising the 16-byte allocation alignment.
 - No production allocator behavior was changed. The fresh run on PR head `50c8829` passed the test and reported 389 kernel tests plus 3 kernel-bin tests with zero failures.
+### Physical-frame table pool over a verified direct-map window — 2026-11-18
+
+Continued the memory-isolation track from where PR #73 stopped: the
+`TableFramePool` contract now has a kernel-side implementation over real
+physical frames.
+
+- New `kernel/src/memory/physical_tables.rs`:
+  - `DirectMapWindow`: a bounded physical window with a fixed virtual
+    offset. Construction validates alignment, nonzero length and both the
+    physical-end and highest-virtual-translation overflow; `translate`
+    returns `None` for unaligned or out-of-window addresses instead of
+    guessing.
+  - `FramePoolSource`: allocation plus ownership-tracked release,
+    implemented for `BitmapFrameAllocator` (double-free maps to
+    `DoubleRelease`, unknown frames to `UnknownFrame`).
+  - `PhysicalTablePool`: implements `TableFramePool` over the source.
+    Every allocated frame is verified to be inside the window before it is
+    handed out; a frame the window cannot translate is returned to the
+    source and the allocation fails closed. Handed-out frames are zeroed
+    through the mapped virtual address with volatile stores, and
+    `table`/`table_mut` resolve through the same checked window.
+- The safety contract is explicit: the caller guarantees the window really
+  maps the physical range writable. The module does not fake that mapping.
+- Tests use real page-aligned host memory behind an identity window, so the
+  dereferencing path is exercised for the first time: zeroing, table access,
+  out-of-window fail-closed allocation with frame return, double-release
+  detection, window arithmetic, and an end-to-end `build_address_space`
+  run whose hardware walk matches the contract translation and whose PML4
+  root entry in real memory points at a built frame.
+- Explicit non-goals unchanged: CR3 activation, TLB invalidation and boot
+  wiring of the live allocator. `build_address_space` still must not be
+  called from boot code until the boot path installs a real window.
+- Validation: pending fresh GitHub Actions on this branch; no pass or merge
+  is claimed before the full check set is green.
+
+
+### 2026-11-19 — Physical table-pool ownership and PR #76 CI correction
+
+#### Baseline and failure diagnosis
+
+- Continued on `feat/physical-table-pool-rebased-20261118`, PR #76, from
+  head `b2dbfaa31a632958dbbdcc967c5665d8619327d7`; `main` remained at
+  `bdfaf4dabc18593951c83c26f398e98cecd0ef34`.
+- Inspected all nine workflow runs associated with the PR head. Two
+  completed successfully (multi-architecture image workflow and installer
+  matrix); seven failed. The workspace/Clippy diagnostics identified:
+  - private `PageTableEntry` import from `page_table_build` (E0603);
+  - two mutable-borrow conflicts in the out-of-window test (E0499);
+  - a mutable/immutable borrow conflict in the end-to-end test (E0502);
+  - an unused `TableMemory` import promoted to an error by the Clippy gate.
+- The review also found a security/correctness defect: address-window
+  containment alone allowed table access and release for any in-window
+  frame, including frames allocated by another owner and frames already
+  released by this pool.
+- A further test-fixture defect was found during code inspection:
+  the supposed identity window used virtual base zero. The translation
+  contract requires the actual backing-buffer address as the virtual base;
+  the old fixture would dereference address zero once compilation passed.
+
+#### Implemented on the existing PR branch
+
+- `kernel/src/memory/physical_tables.rs` now maintains a fixed-capacity
+  ownership ledger (default 256 distinct physical addresses):
+  - only frames allocated through this pool can be read, mutated or released;
+  - foreign/in-window frames return `UnknownFrame` and are never freed;
+  - released frames become tombstones, so access is denied and a second
+    release returns `DoubleRelease`;
+  - when the source allocator reuses a released address, its record becomes
+    live again and the frame is zeroed before it is handed out;
+  - ledger exhaustion fails closed and returns a newly allocated frame to
+    the source when possible; a source that returns an already-live frame
+    is not freed, avoiding corruption of the existing owner.
+- Corrected the host test identity mapping to map the backing buffer at its
+  actual virtual address.
+- Fixed the private test import and borrow scopes; the end-to-end test now
+  explicitly releases the frames transferred through `BuiltTables`.
+- Updated `TableFramePool` contract documentation and exported the default
+  ledger-capacity constant.
+- No CR3 activation, TLB invalidation, live boot-map installation, Ring 3
+  entry or production per-process isolation is claimed.
+
+#### Validation
+
+- GitHub Actions on the original PR head failed as listed above; the new
+  ownership and fixture changes have not yet been run by CI.
+- No local Cargo/QEMU execution is available in this GitHub-only session.
+  The PR remains unmerged until fresh workspace, Clippy, QEMU, VirtIO and
+  security workflows pass on the corrected head.
+
+#### Next priorities
+
+1. Validate the ownership ledger and corrected identity mapping on the new
+   PR head; fix every fresh CI failure before considering merge.
+2. Review the direct-map boot contract and implement a real, validated
+   boot-time mapping only after the kernel memory map and allocator ownership
+   rules are proven.
+3. Continue with supervisor-only kernel mappings, per-process CR3 switching,
+   TLB invalidation and checked physical user-copy before Ring 3.
+4. Keep VirtIO durable block I/O and NIC-backed two-node CellNet transport as
+   separate runtime milestones.
+
+
+#### CI follow-up — explicit physical-pool capacity constructor
+
+- The first fresh run on corrected head `6052faa09e3fc8c267733f044dc290798cabdea4`
+  passed the non-test Clippy/self-test checks but the workspace test build
+  still failed with E0284: Rust could not infer the const-generic ledger
+  capacity at `PhysicalTablePool::new` call sites. The default const
+  parameter does not resolve an associated constructor's unconstrained
+  generic parameter.
+- Split the API into `PhysicalTablePool::new` for the documented default
+  capacity and `PhysicalTablePool::<_, N>::with_capacity` for an explicit
+  bounded capacity. This keeps ordinary callers ergonomic while making
+  custom limits unambiguous.
+- Added a capacity-exhaustion regression test proving that an untracked
+  source frame is returned rather than leaked when the ledger is full.
+- Fresh validation on head
+  `cb4acffd0cc83f13265df743b6c9250d258854b6` is pending. The E0284 run is
+  recorded as a failure, not a pass; no merge/readiness promotion is claimed.
+
+
+#### CI follow-up — high-half test literal typing
+
+- The first run after splitting `new` / `with_capacity` passed workspace
+  library compilation and the non-test kernel checks, so the E0284 constructor
+  inference issue was resolved.
+- Workspace test compilation then failed on two pre-existing high-half
+  address expectations in the new test: unsuffixed literals passed to
+  `usize::try_from` defaulted to `i32` and triggered
+  `overflowing_literals`. Added explicit `u64` suffixes to both values.
+- Corrected source commit: `414789a42224abe3bb496530316416e054bd38d6`.
+  Fresh CI is pending on this exact source head. The earlier test-build
+  failure remains recorded and is not counted as a pass.
+
+
+#### CI follow-up — direct-map overflow fixture boundary
+
+- The next workspace run compiled the full test targets and executed the kernel
+  suite: **395 passed, 1 failed**. The only failure was the virtual-overflow
+  expectation in `window_rejects_misaligned_empty_and_overflowing_configuration`.
+- The fixture used a one-page window at `u64::MAX - 0xfff`. The implementation
+  correctly accepts that range because its highest translated byte address
+  is exactly representable; the test's expected overflow was wrong.
+- Increased that fixture's length to two pages, making the highest translated
+  page address actually overflow. Production translation logic was unchanged.
+- Corrected test commit: `3a50c7d84ac38b286e8dfbb7aaed5742926c665f`.
+  Fresh full validation is pending; the 395/1 result is recorded as a failed
+  test run, not a pass.
+
+
+#### CI follow-up — workspace test pass and Clippy cleanup
+
+- On head `ba7e608106096b5ae60453e90fce0e3eeac21679`, the kernel/workspace
+  test suite completed with **396 passed, 0 failed**, including the new
+  ownership, foreign-frame, reuse, capacity-exhaustion and real-table tests.
+- The separate Clippy gate still failed on four test-only diagnostics:
+  one `needless_range_loop` and three `drop_non_drop` findings caused by
+  explicit `drop(pool)` calls used to end mutable borrows.
+- Replaced the indexed zero-check with iterator traversal and used lexical
+  scopes to end the pool borrows before touching the underlying allocator.
+  This preserves the test's ownership assertions without suppressing Clippy.
+- Correction commit: `00d665d3b2707d61dd9283f3ae522875b385f9bc`.
+  Fresh workspace, formatting, Clippy, boot-image, VirtIO and security
+  validation is pending on this new head.
+
+
+#### CI follow-up — test/Clippy pass, formatter bot correction
+
+- On the pre-format head `bbca195d8b6b3fa7a88e165dbe514ddcff8958a5`:
+  - workspace compilation passed;
+  - kernel/workspace tests passed (396 kernel tests plus 3 kernel-bin
+    bootstrap tests in the diagnostics run);
+  - the standalone Clippy report passed;
+  - CI diagnostics completed successfully.
+- The quality gate, CI pipeline, VirtIO gate and cloud-security gate stopped
+  at formatting before their downstream steps. No QEMU/VirtIO runtime result
+  is claimed from those skipped jobs.
+- The repository's rustfmt bot applied the exact formatting-only correction
+  in commit `0abee6b3210b16511c7bda1002548a92d7db03cb`. No semantic source
+  changes were made by that bot commit.
+- GitHub reported all runs for the bot-authored head as `action_required`
+  with no jobs created. A new owner-authored documentation commit follows
+  this entry to trigger the full suite against the already-formatted tree.
+  Until that run completes, formatting and all downstream runtime gates are
+  still treated as unverified.
+
+
+### 2026-11-19 — Final validation snapshot for PR #77
+
+- Current PR head at the time of this entry: `e1bec4b4702a7197699289e0ea1ed116edb65ba4`.
+- Passed on this head:
+  - workspace compilation, all workspace tests and formatting;
+  - standalone Clippy;
+  - AWEOS Quality Gate, including package/recovery, persistent-storage,
+    network-runtime, security-focused and release-blocker checks;
+  - UEFI loader validation;
+  - bootable ISO/GPT image generation and QEMU ISO smoke boot;
+  - QEMU exception-injection self-test;
+  - VirtIO block transport detection and QEMU boot with a VirtIO block device;
+  - cloud-security and cloud-release-contract gates;
+  - all four AOSIN CLI/GUI installer matrix jobs (Linux and Windows).
+- The multi-architecture image workflow was still installing its boot-image
+  and emulator tools when checked; no final result is claimed for that job.
+- PR #77 remains open and unmerged. PR #76 was closed as superseded; its
+  branch and commits were preserved. No main-branch changes or force pushes
+  were made.
+- Scope boundary: the new physical table pool passes its host-backed
+  ownership/access/reuse/capacity tests, but it is not yet wired into the
+  live boot memory map. QEMU boot and VirtIO checks validate the existing
+  boot/runtime pipeline, not CR3 activation or process isolation through
+  this new pool. CR3 switching, TLB invalidation and Ring 3 remain open.
+- Next run: finish multi-architecture workflow review, then audit the boot
+  memory-map handoff and design a validated direct-map/allocator integration
+  without activating unverified page tables.

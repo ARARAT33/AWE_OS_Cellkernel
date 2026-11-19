@@ -10,11 +10,11 @@
 //! the `take_ownership` transfer, on failure via `rollback` or `teardown`,
 //! and on drop as a best-effort safety net.
 //!
-//! Explicit non-goal: nothing in this module yet dereferences real physical
-//! frames. A kernel-side `TableFramePool` over the live frame allocator plus
-//! a verified physical-to-virtual mapping is still an open milestone; until
-//! it exists, `build_address_space` must not be called from boot code.
-//! Nothing here fakes that mapping.
+//! This owner is backend-agnostic. `physical_tables` supplies a bounded
+//! physical-frame implementation when the boot path has installed and
+//! verified a writable physical-to-virtual window. That live boot wiring,
+//! CR3 activation and TLB invalidation remain separate milestones; nothing
+//! in this module fakes them.
 
 use super::address_space::AddressSpace;
 use super::frame::Frame;
@@ -32,10 +32,12 @@ pub enum FrameReleaseError {
 
 /// A pool of page-table frames with allocation, release and access.
 ///
-/// The kernel will implement this over the live physical frame allocator once
-/// a verified physical-to-virtual mapping exists. Tests implement it over an
-/// in-memory mirror. Implementations must hand out zeroed, page-aligned
-/// frames and must be able to access every frame they handed out.
+/// Implementations must hand out zeroed, page-aligned frames and track
+/// which frames they allocated. `release` must reject foreign frames and
+/// distinguish a second release; `table` and `table_mut` must expose only
+/// frames that are currently live in this pool. The production physical-frame
+/// backend is provided by `physical_tables`; tests also use an in-memory
+/// mirror.
 pub trait TableFramePool {
     /// Allocate one zeroed page-table frame.
     fn allocate(&mut self) -> Option<Frame>;
