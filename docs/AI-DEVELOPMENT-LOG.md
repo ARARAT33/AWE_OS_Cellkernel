@@ -1199,3 +1199,19 @@ physical frames.
 - Corrected test commit: `3a50c7d84ac38b286e8dfbb7aaed5742926c665f`.
   Fresh full validation is pending; the 395/1 result is recorded as a failed
   test run, not a pass.
+
+
+#### CI follow-up — workspace test pass and Clippy cleanup
+
+- On head `ba7e608106096b5ae60453e90fce0e3eeac21679`, the kernel/workspace
+  test suite completed with **396 passed, 0 failed**, including the new
+  ownership, foreign-frame, reuse, capacity-exhaustion and real-table tests.
+- The separate Clippy gate still failed on four test-only diagnostics:
+  one `needless_range_loop` and three `drop_non_drop` findings caused by
+  explicit `drop(pool)` calls used to end mutable borrows.
+- Replaced the indexed zero-check with iterator traversal and used lexical
+  scopes to end the pool borrows before touching the underlying allocator.
+  This preserves the test's ownership assertions without suppressing Clippy.
+- Correction commit: `00d665d3b2707d61dd9283f3ae522875b385f9bc`.
+  Fresh workspace, formatting, Clippy, boot-image, VirtIO and security
+  validation is pending on this new head.
