@@ -93,7 +93,7 @@ impl DirectMapWindow {
         self.length
     }
 
-    /// The virtual offset added to every physical address.
+    /// The virtual address corresponding to the window's physical base.
     pub const fn virt_offset(&self) -> u64 {
         self.virt_offset
     }
@@ -201,14 +201,26 @@ pub struct PhysicalTablePool<
     records: [FrameRecord; CAP],
 }
 
+impl<'s, S: FramePoolSource> PhysicalTablePool<'s, S, DEFAULT_PHYSICAL_TABLE_POOL_CAPACITY> {
+    /// Construct a pool using the default 256-address ownership ledger.
+    ///
+    /// # Safety
+    /// The caller must guarantee that `window.virt_offset` actually maps the
+    /// whole physical window writable into the current address space.
+    pub unsafe fn new(window: DirectMapWindow, source: &'s mut S) -> Self {
+        // SAFETY: the caller's contract is identical to with_capacity.
+        unsafe { Self::with_capacity(window, source) }
+    }
+}
+
 impl<'s, S: FramePoolSource, const CAP: usize> PhysicalTablePool<'s, S, CAP> {
-    /// Wrap a frame source with a translated window.
+    /// Construct a pool with an explicit ownership-ledger capacity.
     ///
     /// # Safety
     /// The caller must guarantee that `window.virt_offset` actually maps the
     /// whole physical window writable into the current address space. The
     /// pool dereferences through the window on every table access.
-    pub unsafe fn new(window: DirectMapWindow, source: &'s mut S) -> Self {
+    pub unsafe fn with_capacity(window: DirectMapWindow, source: &'s mut S) -> Self {
         Self {
             window,
             source,
@@ -504,6 +516,27 @@ mod tests {
         source
             .try_free_frame(returned)
             .expect("return to free list");
+    }
+
+    #[test]
+    fn ledger_capacity_exhaustion_returns_untracked_frame() {
+        let memory = PhysicalMemory::new();
+        let base = memory.as_u64();
+        let mut source = BitmapFrameAllocator::<1>::new(base, 8);
+        // SAFETY: the identity window maps the backing buffer itself.
+        let mut pool = unsafe {
+            PhysicalTablePool::<_, 1>::with_capacity(identity_window(base), &mut source)
+        };
+
+        let first = pool.allocate().expect("first tracked frame");
+        assert!(pool.allocate().is_none());
+
+        // The second address was returned to the source when the ledger filled.
+        drop(pool);
+        let returned = source.allocate_frame().expect("untracked frame returned");
+        assert_eq!(returned.start, base + PAGE_SIZE);
+        source.try_free_frame(returned).expect("return untracked frame");
+        source.try_free_frame(first).expect("return tracked frame");
     }
 
     #[test]
