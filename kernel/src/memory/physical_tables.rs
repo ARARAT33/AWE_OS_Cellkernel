@@ -524,9 +524,8 @@ mod tests {
         let base = memory.as_u64();
         let mut source = BitmapFrameAllocator::<1>::new(base, 8);
         // SAFETY: the identity window maps the backing buffer itself.
-        let mut pool = unsafe {
-            PhysicalTablePool::<_, 1>::with_capacity(identity_window(base), &mut source)
-        };
+        let mut pool =
+            unsafe { PhysicalTablePool::<_, 1>::with_capacity(identity_window(base), &mut source) };
 
         let first = pool.allocate().expect("first tracked frame");
         assert!(pool.allocate().is_none());
@@ -535,7 +534,9 @@ mod tests {
         drop(pool);
         let returned = source.allocate_frame().expect("untracked frame returned");
         assert_eq!(returned.start, base + PAGE_SIZE);
-        source.try_free_frame(returned).expect("return untracked frame");
+        source
+            .try_free_frame(returned)
+            .expect("return untracked frame");
         source.try_free_frame(first).expect("return tracked frame");
     }
 
