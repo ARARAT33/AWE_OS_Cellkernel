@@ -201,15 +201,15 @@ pub struct PhysicalTablePool<
     records: [FrameRecord; CAP],
 }
 
-impl<S: FramePoolSource, const CAP: usize> PhysicalTablePool<'_, S, CAP> {
+impl<'s, S: FramePoolSource, const CAP: usize> PhysicalTablePool<'s, S, CAP> {
     /// Wrap a frame source with a translated window.
     ///
     /// # Safety
     /// The caller must guarantee that `window.virt_offset` actually maps the
     /// whole physical window writable into the current address space. The
     /// pool dereferences through the window on every table access.
-    pub unsafe fn new(window: DirectMapWindow, source: &mut S) -> PhysicalTablePool<'_, S, CAP> {
-        PhysicalTablePool {
+    pub unsafe fn new(window: DirectMapWindow, source: &'s mut S) -> Self {
+        Self {
             window,
             source,
             records: [FrameRecord::EMPTY; CAP],
@@ -484,7 +484,7 @@ mod tests {
         let base = memory.as_u64();
         let mut source = BitmapFrameAllocator::<1>::new(base, 8);
         // The window covers only the first four frames of the allocator.
-        let window = DirectMapWindow::new(base, 4 * PAGE_SIZE, 0).expect("window");
+        let window = DirectMapWindow::new(base, 4 * PAGE_SIZE, base).expect("window");
         // SAFETY: the identity window maps the buffer itself.
         let mut pool = unsafe { PhysicalTablePool::new(window, &mut source) };
 
