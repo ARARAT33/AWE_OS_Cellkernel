@@ -1,4 +1,12 @@
-#### CI follow-up — no_std test fix (bounded recorder instead of Vec)
+#### 2026-11-19 — Run: checked physical user-copy layer merged
+
+- **Status:** mergedcionado. PR #78 (branch `feat/checked-user-copy-layer-2026-11-19`) merged into `main` as merge commit `37e4c18` (head `3deb489`, 16/16 checks green, 0 failures; Rust workspace tests passed).
+- **Work done:** implemented `kernel/src/memory/user_copy.rs` — `PhysicalAccess` backend trait, `CopyUserError` (`Access/TooLarge/PhysOverflow/Accessor`), `MAX_COPY_BYTES = 1 MiB` cap checked before mapping lookup, and `copy_user_bytes_in/out` which validate the whole range via `AddressSpace::check_user_access` first, then translate and copy page-bounded segments. 6 host tests, including page-boundary roundtrip, validation-before-access, RW->RO cross read, backend fault propagation, fail-closed zero-length/oversize, and 4096+16 per-page segment splitting.
+- **Fix iterations (all caught by CI, none shipped broken):** (1) test used `Vec` which is out of scope in the no_std kernel crate, replaced with `RefCell<[usize; 8]>` recorder; (2) a bot-driven edit briefly dropped one `#[test]` attribute, restored; (3) roundtrip test asserted the wrong second-segment index (0x101f -> 0x100f); (4) fixture RO page was mapped outside the FrameMemory window; (5) write over RO+unmapped pages reports PermissionDenied first because checks walk pages in order — test expectation corrected, production code unchanged.
+- **Honest limits:** this layer is not yet wired into the live boot memory map; no CR3 switching/TLB invalidation; no Ring-3 proof; an Accessor fault after validation can leave the copy partially applied (documented, caller must treat destination as unspecified until `Ok(())`).
+- **Next priorities:** wire the checked user-copy layer into boot memory-map direct-map/allocator integration; supervisor-only kernel mappings + CR3 switching + TLB invalidation in the physical table layer; VirtIO persistence follow-through; real CellNet transport.
+
+## CI follow-up — no_std test fix (bounded recorder instead of Vec)
 
 - The first full test run on PR #78 failed to compile the kernel lib tests with E0433/E0425: the segment-splitting
   regression test used `core::cell::RefCell<Vec<usize>>`, but the kernel crate has no allocator, so `Vec` is not
