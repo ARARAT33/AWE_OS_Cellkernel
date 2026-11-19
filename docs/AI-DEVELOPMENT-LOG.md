@@ -1236,3 +1236,32 @@ physical frames.
   this entry to trigger the full suite against the already-formatted tree.
   Until that run completes, formatting and all downstream runtime gates are
   still treated as unverified.
+
+
+### 2026-11-19 — Final validation snapshot for PR #77
+
+- Current PR head at the time of this entry: `e1bec4b4702a7197699289e0ea1ed116edb65ba4`.
+- Passed on this head:
+  - workspace compilation, all workspace tests and formatting;
+  - standalone Clippy;
+  - AWEOS Quality Gate, including package/recovery, persistent-storage,
+    network-runtime, security-focused and release-blocker checks;
+  - UEFI loader validation;
+  - bootable ISO/GPT image generation and QEMU ISO smoke boot;
+  - QEMU exception-injection self-test;
+  - VirtIO block transport detection and QEMU boot with a VirtIO block device;
+  - cloud-security and cloud-release-contract gates;
+  - all four AOSIN CLI/GUI installer matrix jobs (Linux and Windows).
+- The multi-architecture image workflow was still installing its boot-image
+  and emulator tools when checked; no final result is claimed for that job.
+- PR #77 remains open and unmerged. PR #76 was closed as superseded; its
+  branch and commits were preserved. No main-branch changes or force pushes
+  were made.
+- Scope boundary: the new physical table pool passes its host-backed
+  ownership/access/reuse/capacity tests, but it is not yet wired into the
+  live boot memory map. QEMU boot and VirtIO checks validate the existing
+  boot/runtime pipeline, not CR3 activation or process isolation through
+  this new pool. CR3 switching, TLB invalidation and Ring 3 remain open.
+- Next run: finish multi-architecture workflow review, then audit the boot
+  memory-map handoff and design a validated direct-map/allocator integration
+  without activating unverified page tables.
