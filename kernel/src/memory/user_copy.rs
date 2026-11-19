@@ -332,7 +332,7 @@ mod tests {
     }
 
     #[test]
-        fn user_copy_page_size_matches_the_contract_layer() {
+    fn user_copy_page_size_matches_the_contract_layer() {
         assert_eq!(
             USER_COPY_PAGE_SIZE,
             super::super::address_space::ADDRESS_SPACE_PAGE_SIZE
