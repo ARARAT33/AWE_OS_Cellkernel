@@ -171,11 +171,13 @@ mod tests {
     const R: PageFlags = PageFlags::PRESENT.union(PageFlags::USER);
     const RW: PageFlags = R.union(PageFlags::WRITABLE);
 
-    /// Address space with two RW pages at 0x1000 and one RO page at 0x3000.
+    /// Address space with two RW pages at 0x1000 and one RO page at 0x3000;
+    /// its physical frames sit inside 0x9000..0xc000 so every translated byte
+    /// falls within the FrameMemory window used alongside it.
     fn mixed_space() -> AddressSpace<4> {
         let mut space = AddressSpace::<4>::new(0x5000).unwrap();
         space.map_user(0x1000, 0x9000, 2, RW).unwrap();
-        space.map_user(0x3000, 0xd000, 1, R).unwrap();
+        space.map_user(0x3000, 0xb000, 1, R).unwrap();
         space
     }
 
@@ -227,7 +229,7 @@ mod tests {
         assert_eq!(source[0], access.mem[0xff0]);
         assert_eq!(source[15], access.mem[0xfff]);
         assert_eq!(source[16], access.mem[0x1000]);
-        assert_eq!(source[31], access.mem[0x101f]);
+        assert_eq!(source[31], access.mem[0x100f]);
 
         let mut round = [0u8; 32];
         copy_user_bytes_in(&space, 0x1ff0, &mut round, &mut access).unwrap();
@@ -264,8 +266,9 @@ mod tests {
 
     #[test]
     fn backend_faults_propagate_as_accessor_errors() {
-        let space = mixed_space();
-        // The window only covers the 0x9000..0xb000 frames, not 0xd000.
+        let mut space = AddressSpace::<2>::new(0x5000).unwrap();
+        // 0xd000 lies outside the FrameMemory window 0x9000..0xc000.
+        space.map_user(0x3000, 0xd000, 1, R).unwrap();
         let mut access = FrameMemory::new(0x9000);
         let mut buf = [0u8; 8];
         assert_eq!(
