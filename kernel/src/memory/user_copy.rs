@@ -22,7 +22,7 @@
 //!   partially applied, so a caller must treat its destination buffer as
 //!   unspecified until this layer returns `Ok(())`.
 
-use super::address_space::{AddressSpace, UserCopyError, ADDRESS_SPACE_PAGE_SIZE};
+use super::address_space::{ADDRESS_SPACE_PAGE_SIZE, AddressSpace, UserCopyError};
 
 /// Page size, re-exported from the address-space contract layer for a
 /// self-contained user-copy API.

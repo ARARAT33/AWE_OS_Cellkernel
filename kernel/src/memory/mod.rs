@@ -40,8 +40,8 @@ pub use table_frames::{
     build_address_space,
 };
 pub use user_copy::{
-    MAX_COPY_BYTES, PhysicalAccess, USER_COPY_PAGE_SIZE, copy_user_bytes_in, copy_user_bytes_out,
-    AccessorFault, CopyUserError,
+    AccessorFault, CopyUserError, MAX_COPY_BYTES, PhysicalAccess, USER_COPY_PAGE_SIZE,
+    copy_user_bytes_in, copy_user_bytes_out,
 };
 #[cfg(target_arch = "x86_64")]
 pub use x86_64::activate_bootstrap_identity_map;
