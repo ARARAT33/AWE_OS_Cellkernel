@@ -475,8 +475,7 @@ mod tests {
         let foreign = source.allocate_frame().expect("foreign frame");
         {
             // SAFETY: the identity window maps the backing buffer itself.
-            let mut pool =
-                unsafe { PhysicalTablePool::new(identity_window(base), &mut source) };
+            let mut pool = unsafe { PhysicalTablePool::new(identity_window(base), &mut source) };
 
             assert!(pool.table(foreign).is_none());
             assert!(pool.table_mut(foreign).is_none());
@@ -526,8 +525,9 @@ mod tests {
         let mut source = BitmapFrameAllocator::<1>::new(base, 8);
         let first = {
             // SAFETY: the identity window maps the backing buffer itself.
-            let mut pool =
-                unsafe { PhysicalTablePool::<_, 1>::with_capacity(identity_window(base), &mut source) };
+            let mut pool = unsafe {
+                PhysicalTablePool::<_, 1>::with_capacity(identity_window(base), &mut source)
+            };
 
             let first = pool.allocate().expect("first tracked frame");
             assert!(pool.allocate().is_none());
