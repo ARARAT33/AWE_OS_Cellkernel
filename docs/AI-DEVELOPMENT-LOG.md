@@ -1085,3 +1085,69 @@ physical frames.
   called from boot code until the boot path installs a real window.
 - Validation: pending fresh GitHub Actions on this branch; no pass or merge
   is claimed before the full check set is green.
+
+
+### 2026-11-19 — Physical table-pool ownership and PR #76 CI correction
+
+#### Baseline and failure diagnosis
+
+- Continued on `feat/physical-table-pool-rebased-20261118`, PR #76, from
+  head `b2dbfaa31a632958dbbdcc967c5665d8619327d7`; `main` remained at
+  `bdfaf4dabc18593951c83c26f398e98cecd0ef34`.
+- Inspected all nine workflow runs associated with the PR head. Two
+  completed successfully (multi-architecture image workflow and installer
+  matrix); seven failed. The workspace/Clippy diagnostics identified:
+  - private `PageTableEntry` import from `page_table_build` (E0603);
+  - two mutable-borrow conflicts in the out-of-window test (E0499);
+  - a mutable/immutable borrow conflict in the end-to-end test (E0502);
+  - an unused `TableMemory` import promoted to an error by the Clippy gate.
+- The review also found a security/correctness defect: address-window
+  containment alone allowed table access and release for any in-window
+  frame, including frames allocated by another owner and frames already
+  released by this pool.
+- A further test-fixture defect was found during code inspection:
+  the supposed identity window used virtual base zero. The translation
+  contract requires the actual backing-buffer address as the virtual base;
+  the old fixture would dereference address zero once compilation passed.
+
+#### Implemented on the existing PR branch
+
+- `kernel/src/memory/physical_tables.rs` now maintains a fixed-capacity
+  ownership ledger (default 256 distinct physical addresses):
+  - only frames allocated through this pool can be read, mutated or released;
+  - foreign/in-window frames return `UnknownFrame` and are never freed;
+  - released frames become tombstones, so access is denied and a second
+    release returns `DoubleRelease`;
+  - when the source allocator reuses a released address, its record becomes
+    live again and the frame is zeroed before it is handed out;
+  - ledger exhaustion fails closed and returns a newly allocated frame to
+    the source when possible; a source that returns an already-live frame
+    is not freed, avoiding corruption of the existing owner.
+- Corrected the host test identity mapping to map the backing buffer at its
+  actual virtual address.
+- Fixed the private test import and borrow scopes; the end-to-end test now
+  explicitly releases the frames transferred through `BuiltTables`.
+- Updated `TableFramePool` contract documentation and exported the default
+  ledger-capacity constant.
+- No CR3 activation, TLB invalidation, live boot-map installation, Ring 3
+  entry or production per-process isolation is claimed.
+
+#### Validation
+
+- GitHub Actions on the original PR head failed as listed above; the new
+  ownership and fixture changes have not yet been run by CI.
+- No local Cargo/QEMU execution is available in this GitHub-only session.
+  The PR remains unmerged until fresh workspace, Clippy, QEMU, VirtIO and
+  security workflows pass on the corrected head.
+
+#### Next priorities
+
+1. Validate the ownership ledger and corrected identity mapping on the new
+   PR head; fix every fresh CI failure before considering merge.
+2. Review the direct-map boot contract and implement a real, validated
+   boot-time mapping only after the kernel memory map and allocator ownership
+   rules are proven.
+3. Continue with supervisor-only kernel mappings, per-process CR3 switching,
+   TLB invalidation and checked physical user-copy before Ring 3.
+4. Keep VirtIO durable block I/O and NIC-backed two-node CellNet transport as
+   separate runtime milestones.
