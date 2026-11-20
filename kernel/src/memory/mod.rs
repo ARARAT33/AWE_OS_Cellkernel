@@ -4,6 +4,7 @@ pub mod address;
 pub mod address_space;
 pub mod allocator;
 pub mod boot_mapper;
+pub mod boot_reserve;
 pub mod frame;
 pub mod mapper;
 pub mod page_table_build;
@@ -20,6 +21,10 @@ pub use address::{PhysicalAddress, VirtualAddress};
 pub use address_space::{AddressSpace, UserCopyError, UserMapping, checked_user_range};
 pub use allocator::BumpAllocator;
 pub use boot_mapper::{BootMapError, BootMapper};
+pub use boot_reserve::{
+    BootOwnedRanges, BootReserveError, FrameReserver, MAX_BOOT_OWNED_RANGES, OwnedRange,
+    boot_owned_ranges, reserve_boot_owned_ranges,
+};
 pub use frame::{
     BitmapFrameAllocator, BitmapFrameError, Frame, FrameAllocatorError, PAGE_SIZE,
     PhysicalFrameAllocator, checked_frame_end, frame_at, frame_end,

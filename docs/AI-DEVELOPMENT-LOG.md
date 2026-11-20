@@ -1,3 +1,30 @@
+#### 2026-11-20 — Run: PR #79 merged; boot-owned range reservations started
+
+- **Continuation:** PR #79 (reserved physical frame ranges) was draft with 16/16 green
+  check-runs on its final head. It was marked ready and merged into main as
+  merge commit 2686fbc; the branch and in-progress reserved-range work are live.
+- **Implemented (branch feat/boot-owned-range-reservations-2026-11-20):**
+  new kernel/src/memory/boot_reserve.rs. boot_owned_ranges derives the physical
+  ranges a validated BootInfo owns, in deterministic order: kernel image,
+  BootInfo structure, memory-map descriptor array, framebuffer, ACPI RSDP page.
+  reserve_boot_owned_ranges reserves them on any FrameReserver all-or-nothing:
+  every range is preflighted before any bitmap mutation, so a failed request
+  leaves the allocator untouched. BitmapFrameAllocator gained the non-mutating
+  check_reserve_range and reserve_range was refactored to preflight through it.
+  Host tests cover in-order derivation, zero-field skipping, invalid-boot-info,
+  kernel-image overflow, misaligned and count/pointer-inconsistent memory maps,
+  non-mutating preflight, and reservation/idempotence/atomic-conflict behavior.
+- **Honest limits:** not yet wired into kernel_entry or the live boot memory map;
+  kernel-bin does not yet fill kernel_base/kernel_size from linker symbols, so at
+  boot only the BootInfo, memory-map, framebuffer and RSDP ranges are derivable.
+  Device-tree reservation is intentionally absent: the v1 protocol carries no
+  length for that pointer. No direct map, CR3 switching, TLB invalidation or
+  Ring-3 change is claimed.
+- **Next priorities:** fill kernel_base/kernel_size in kernel-bin boot-info
+  construction from kernel-image linker symbols; wire the bitmap allocator and
+  boot-owned reservation into kernel_entry after memory-map validation; then
+  supervisor-only kernel mappings, per-process CR3 switching and TLB invalidation.
+
 #### 2026-11-20 — Run: reservation-aware bitmap frame allocation
 
 - **Baseline audit:** continued from main head `d781f94344b700021ac5ce9bf2ce13f84426b1f2`. Inspected the workspace manifest, current project/readiness documents, the repository tree, memory/address-space/page-table/user-copy code, x86_64 bootstrap entry, boot memory-map handoff, Cell runtime contract, and the relevant Quality Gate and VirtIO workflows. Main-head Quality Gate, Bootable Image Pipeline, AOSIN installers, Multi-Architecture Images, Cloud Security Gate, CI Pipeline and VirtIO Runtime all completed successfully. The latest scheduled safe-branch audit also completed successfully. The VirtIO workflow proves QEMU device exposure and kernel boot, not block read/write or persistence.
