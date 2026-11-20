@@ -108,3 +108,14 @@ roots, TLB invalidation/shootdown, page-table teardown/reference counting,
 physical checked user-copy, Ring 3 entry, and QEMU user/kernel isolation tests
 remain unimplemented. Keep the memory-isolation and userspace execution gates
 unchecked until those runtime milestones are proven.
+
+
+## Checked user-copy and physical-frame reservation update (2026-11-20)
+
+PR #78 merged the checked physical user-copy contract into `main`. It validates the complete user range before calling a page-bounded `PhysicalAccess` backend and rejects requests above 1 MiB. Its host tests cover page-boundary copies, validation-before-access, backend faults and per-page segmentation. This does not yet provide a live physical-access backend or Ring 3 isolation.
+
+The `PhysicalTablePool` implementation can allocate, zero, access and release owned physical table frames through a caller-supplied `DirectMapWindow`, but the boot path does not yet create that window or instantiate the pool.
+
+The current development proposal `feat/reserved-physical-frames-2026-11-20` adds explicit, bounded-range reservation to `BitmapFrameAllocator`. Its API and tests are pending PR CI; it is not yet merged and does not by itself reserve any boot memory. The next integration must reserve the kernel image, loader/boot metadata, memory-map descriptors, bootstrap page tables and stacks before exposing frames to the physical table pool.
+
+Until that integration and runtime tests exist, keep per-process CR3 switching, TLB invalidation, Ring 3, QEMU user/kernel isolation and production process isolation unchecked.
