@@ -181,21 +181,17 @@ pub fn reserve_boot_owned_ranges<R: FrameReserver>(
 
     // Preflight every range first: reserve is permanent, so a request that
     // cannot be honored must not leave a partial reservation behind.
-    for index in 0..owned.count {
-        let range = owned.ranges[index].unwrap_or(OwnedRange {
-            start: 0,
-            length: 0,
-        });
+    for (index, slot) in owned.ranges.iter().enumerate().take(owned.count) {
+        // Slots below count are always filled by boot_owned_ranges.
+        let range = slot.expect("boot-owned slot below count is filled");
         reserver
             .check_reserve_range(range.start, range.length)
             .map_err(|error| BootReserveError::Reserve { index, error })?;
     }
 
-    for index in 0..owned.count {
-        let range = owned.ranges[index].unwrap_or(OwnedRange {
-            start: 0,
-            length: 0,
-        });
+    for (index, slot) in owned.ranges.iter().enumerate().take(owned.count) {
+        // Slots below count are always filled by boot_owned_ranges.
+        let range = slot.expect("boot-owned slot below count is filled");
         reserver
             .reserve_range(range.start, range.length)
             .map_err(|error| BootReserveError::Reserve { index, error })?;
