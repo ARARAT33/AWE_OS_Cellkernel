@@ -1,3 +1,14 @@
+
+#### CI follow-up — rustfmt bot reformatted boot_reserve.rs
+
+- The suite on the first authored head a5b3ac8/e3af5ba triggered the
+  formatter bot, whose commit 151b159 applied formatting-only changes to
+  kernel/src/memory/boot_reserve.rs. No semantic source change.
+- Bot-authored heads do not trigger Actions in this repository, so this
+  owner-authored entry re-runs the full PR suite against the formatted
+  tree. Until that run completes, all gates remain unverified for this
+  head; the partial runs on earlier heads are recorded as incomplete,
+  not as passes.
 #### 2026-11-20 — Run: PR #79 merged; boot-owned range reservations started
 
 - **Continuation:** PR #79 (reserved physical frame ranges) was draft with 16/16 green
