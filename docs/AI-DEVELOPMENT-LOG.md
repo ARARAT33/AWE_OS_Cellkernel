@@ -1,4 +1,33 @@
 
+#### 2026-11-20 — Run: PR #80 validated and merged-ready; boot-owned ranges green
+
+- **Validation (head 9e6a3d6 / formatted tree):** all 16 PR check-runs
+  passed, including workspace tests, Clippy, QEMU boot/VirtIO and
+  cloud-security gates. The earlier heads of this PR are recorded as
+  failures and are not counted as passes.
+- **CI-caught defects fixed this run (all from bot diagnostics):**
+  (1) `checked_range` returned `(start, end)` while callers stored the
+  second value as a length, inflating every derived boot-owned range by
+  its start address; (2) host tests relied on an empty-slice pointer,
+  which is non-null, so a dangling pointer with a positive descriptor
+  count passed boot validation and derived a bogus map range — the
+  validate-failure test now uses a genuinely null pointer and the
+  zero-field skip test expects the BootInfo struct plus the descriptor
+  array; (3) a transitional commit accidentally stored a placeholder
+  string in boot_reserve.rs, corrected in the immediately following
+  commit on the same branch before any merge.
+- **Status:** PR #80 marked ready and merged once this log head is
+  green. Honest limits unchanged: boot-owned reservation is still not
+  wired into kernel_entry; kernel-bin still fills kernel_base/kernel_size
+  with 0; no CR3 switching, TLB invalidation, VirtIO persistence or
+  NIC-backed CellNet transport yet.
+- **Next priorities:** fill kernel_base/kernel_size in kernel-bin
+  boot-info construction from linker symbols; wire the bitmap allocator
+  and boot-owned reservation into kernel_entry after memory-map
+  validation; then supervisor-only kernel mappings, per-process CR3
+  switching and TLB invalidation.
+
+
 #### CI follow-up — rustfmt bot reformatted boot_reserve.rs
 
 - The suite on the first authored head a5b3ac8/e3af5ba triggered the
@@ -1388,3 +1417,4 @@ physical frames.
 - Next run: finish multi-architecture workflow review, then audit the boot
   memory-map handoff and design a validated direct-map/allocator integration
   without activating unverified page tables.
+
