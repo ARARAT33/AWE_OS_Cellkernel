@@ -67,12 +67,15 @@ That branch is the recovery point for the previous repository state and should n
 
 Prioritize the next missing runtime boundary, not additional feature labels:
 
-1. Wire `TableMemory` to owned physical frames and a verified physical-to-virtual mapping; define rollback, lifetime and teardown.
-2. Ensure each process root receives supervisor-only kernel mappings, then implement safe CR3 switching and TLB invalidation.
-3. Implement physical checked user-copy and QEMU user/kernel isolation tests before any Ring 3 entry.
-4. Implement actual VirtIO block request/completion, read-after-write, flush and power-loss recovery tests.
-5. Connect the network contracts to a real NIC/UDP transport and test two independent nodes, reconnect and partition behavior.
-6. Add real ARM64 and RISC-V builds and runtime tests before claiming those ports.
+1. Complete PR #79 validation for the reservation-aware `BitmapFrameAllocator`; merge only after the exact final head passes the full PR suite.
+2. Derive reservations from the validated boot handoff and linker symbols: kernel image, loader-owned pages, `BootInfo`, memory-map descriptors, bootstrap PML4/PDPT/PD and boot stacks. Keep unknown ownership reserved; never assume a region is free solely because it is addressable.
+3. Construct a `DirectMapWindow` only over physical pages proven reachable in the active page tables, then instantiate `PhysicalTablePool` over the reservation-aware allocator. Add QEMU evidence that allocated table frames are real, zeroed, writable and safely reclaimable.
+4. Build each process root with the supervisor-only kernel mappings preserved; define root/table ownership and teardown before activating a process address space.
+5. Implement a controlled CR3 switch and the matching local TLB invalidation policy; add failure-path and QEMU isolation tests before any Ring 3 entry.
+6. Connect the checked user-copy layer to a verified physical-access backend and test mapped/unmapped, read-only, cross-page and fault cases in QEMU.
+7. Implement actual VirtIO block request/completion, read-after-write, flush and power-loss recovery tests.
+8. Connect the network contracts to a real NIC/UDP transport and test two independent nodes, reconnect and partition behavior.
+9. Add real ARM64 and RISC-V builds and runtime tests before claiming those ports.
 
 ## Long-term objective
 
