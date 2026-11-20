@@ -186,10 +186,18 @@ pub enum BitmapFrameError {
     InvalidAllocator,
     InvalidFrame,
     DoubleFree,
+    EmptyRange,
+    RangeOverflow,
+    RangeOutOfBounds,
+    FrameAlreadyAllocated,
+    ReservedFrame,
 }
 
 pub struct BitmapFrameAllocator<const MAX_BITMAP_WORDS: usize> {
+    /// Set for frames that are either allocated or permanently reserved.
     bitmap: [u64; MAX_BITMAP_WORDS],
+    /// Set only for reserved frames, which must never be returned by free.
+    reserved: [u64; MAX_BITMAP_WORDS],
     base_address: u64,
     total_frames: usize,
     valid: bool,
@@ -205,6 +213,7 @@ impl<const MAX_BITMAP_WORDS: usize> BitmapFrameAllocator<MAX_BITMAP_WORDS> {
         let valid = base_address & (PAGE_SIZE - 1) == 0 && total_frames <= capacity && range_valid;
         Self {
             bitmap: [0u64; MAX_BITMAP_WORDS],
+            reserved: [0u64; MAX_BITMAP_WORDS],
             base_address,
             total_frames,
             valid,
@@ -213,6 +222,66 @@ impl<const MAX_BITMAP_WORDS: usize> BitmapFrameAllocator<MAX_BITMAP_WORDS> {
 
     pub const fn is_valid(&self) -> bool {
         self.valid
+    }
+
+    /// Reserve every 4 KiB frame intersecting the non-empty byte range
+    /// [start, start + length).
+    ///
+    /// Unaligned boundaries are rounded outwards so no partially covered
+    /// frame can be handed to the allocator. The range must be fully inside
+    /// this allocator's managed physical interval. Repeating an existing
+    /// reservation is safe; a range containing a frame already allocated
+    /// through this allocator is rejected without changing any bits.
+    pub fn reserve_range(&mut self, start: u64, length: u64) -> Result<(), BitmapFrameError> {
+        if !self.valid {
+            return Err(BitmapFrameError::InvalidAllocator);
+        }
+        if length == 0 {
+            return Err(BitmapFrameError::EmptyRange);
+        }
+
+        let end = start
+            .checked_add(length)
+            .ok_or(BitmapFrameError::RangeOverflow)?;
+        let managed_bytes = (self.total_frames as u64)
+            .checked_mul(PAGE_SIZE)
+            .ok_or(BitmapFrameError::InvalidAllocator)?;
+        let managed_end = self
+            .base_address
+            .checked_add(managed_bytes)
+            .ok_or(BitmapFrameError::InvalidAllocator)?;
+        if start < self.base_address || end > managed_end {
+            return Err(BitmapFrameError::RangeOutOfBounds);
+        }
+
+        let first_frame = usize::try_from((start - self.base_address) / PAGE_SIZE)
+            .map_err(|_| BitmapFrameError::RangeOutOfBounds)?;
+        let relative_end = end - self.base_address;
+        let last_frame_exclusive = usize::try_from(relative_end.div_ceil(PAGE_SIZE))
+            .map_err(|_| BitmapFrameError::RangeOutOfBounds)?;
+        if first_frame >= last_frame_exclusive || last_frame_exclusive > self.total_frames {
+            return Err(BitmapFrameError::RangeOutOfBounds);
+        }
+
+        // Preflight the complete range first: a conflict must not leave a
+        // partially reserved prefix behind.
+        for frame_idx in first_frame..last_frame_exclusive {
+            let word_idx = frame_idx / 64;
+            let mask = 1u64 << (frame_idx % 64);
+            let allocated = self.bitmap[word_idx] & mask != 0;
+            let reserved = self.reserved[word_idx] & mask != 0;
+            if allocated && !reserved {
+                return Err(BitmapFrameError::FrameAlreadyAllocated);
+            }
+        }
+
+        for frame_idx in first_frame..last_frame_exclusive {
+            let word_idx = frame_idx / 64;
+            let mask = 1u64 << (frame_idx % 64);
+            self.bitmap[word_idx] |= mask;
+            self.reserved[word_idx] |= mask;
+        }
+        Ok(())
     }
 
     pub fn allocate_frame(&mut self) -> Option<Frame> {
@@ -253,6 +322,9 @@ impl<const MAX_BITMAP_WORDS: usize> BitmapFrameAllocator<MAX_BITMAP_WORDS> {
         let word_idx = frame_idx / 64;
         let bit_idx = frame_idx % 64;
         let mask = 1u64 << bit_idx;
+        if self.reserved[word_idx] & mask != 0 {
+            return Err(BitmapFrameError::ReservedFrame);
+        }
         if self.bitmap[word_idx] & mask == 0 {
             return Err(BitmapFrameError::DoubleFree);
         }
@@ -427,5 +499,53 @@ mod tests {
         let mut overflow = BitmapFrameAllocator::<1>::new(u64::MAX - 0xfff, 1);
         assert!(!overflow.is_valid());
         assert!(overflow.allocate_frame().is_none());
+    }
+    #[test]
+    fn bitmap_reservations_round_outwards_and_are_idempotent() {
+        let mut allocator = BitmapFrameAllocator::<1>::new(0x1000, 8);
+        allocator.reserve_range(0x1801, 0x1000).unwrap();
+        allocator.reserve_range(0x1801, 0x1000).unwrap();
+
+        assert_eq!(
+            allocator.try_free_frame(Frame { start: 0x1000 }),
+            Err(BitmapFrameError::ReservedFrame)
+        );
+        assert_eq!(
+            allocator.try_free_frame(Frame { start: 0x2000 }),
+            Err(BitmapFrameError::ReservedFrame)
+        );
+        assert_eq!(allocator.allocate_frame().unwrap().start, 0x3000);
+    }
+
+    #[test]
+    fn bitmap_reservation_conflict_is_atomic() {
+        let mut allocator = BitmapFrameAllocator::<1>::new(0x1000, 8);
+        let allocated = allocator.allocate_frame().unwrap();
+        assert_eq!(allocated.start, 0x1000);
+
+        assert_eq!(
+            allocator.reserve_range(0x1000, 0x2000),
+            Err(BitmapFrameError::FrameAlreadyAllocated)
+        );
+        // The second page was not reserved as a side effect of the conflict.
+        assert_eq!(allocator.allocate_frame().unwrap().start, 0x2000);
+    }
+
+    #[test]
+    fn bitmap_reservation_rejects_empty_overflow_and_out_of_range_inputs() {
+        let mut allocator = BitmapFrameAllocator::<1>::new(0x1000, 8);
+        assert_eq!(
+            allocator.reserve_range(0x1000, 0),
+            Err(BitmapFrameError::EmptyRange)
+        );
+        assert_eq!(
+            allocator.reserve_range(u64::MAX - 1, 4),
+            Err(BitmapFrameError::RangeOverflow)
+        );
+        assert_eq!(
+            allocator.reserve_range(0x8fff, 2),
+            Err(BitmapFrameError::RangeOutOfBounds)
+        );
+        assert_eq!(allocator.allocate_frame().unwrap().start, 0x1000);
     }
 }
