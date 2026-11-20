@@ -24,7 +24,7 @@ use core::mem::{align_of, size_of};
 
 use awe_boot_protocol::validate;
 
-use super::frame::{BitmapFrameError, BitmapFrameAllocator, PAGE_SIZE};
+use super::frame::{BitmapFrameAllocator, BitmapFrameError, PAGE_SIZE};
 use awe_boot_protocol::{BootInfo, MemoryRegion};
 
 /// An allocator that can permanently reserve a physical byte range.
@@ -117,9 +117,8 @@ pub fn boot_owned_ranges(info: &BootInfo) -> Result<BootOwnedRanges, BootReserve
 
     // Kernel image, as reported by the loader or the kernel linker symbols.
     if info.kernel_size > 0 {
-        let (start, length) =
-            checked_range(info.kernel_base, info.kernel_size)
-                .ok_or(BootReserveError::KernelImageOverflow)?;
+        let (start, length) = checked_range(info.kernel_base, info.kernel_size)
+            .ok_or(BootReserveError::KernelImageOverflow)?;
         out.ranges[out.count] = Some(OwnedRange { start, length });
         out.count += 1;
     }
@@ -149,9 +148,8 @@ pub fn boot_owned_ranges(info: &BootInfo) -> Result<BootOwnedRanges, BootReserve
 
     // Framebuffer, when the loader configured one.
     if info.framebuffer_address != 0 && info.framebuffer_size > 0 {
-        let (start, length) =
-            checked_range(info.framebuffer_address, info.framebuffer_size)
-                .ok_or(BootReserveError::FramebufferOverflow)?;
+        let (start, length) = checked_range(info.framebuffer_address, info.framebuffer_size)
+            .ok_or(BootReserveError::FramebufferOverflow)?;
         out.ranges[out.count] = Some(OwnedRange { start, length });
         out.count += 1;
     }
@@ -184,14 +182,20 @@ pub fn reserve_boot_owned_ranges<R: FrameReserver>(
     // Preflight every range first: reserve is permanent, so a request that
     // cannot be honored must not leave a partial reservation behind.
     for index in 0..owned.count {
-        let range = owned.ranges[index].unwrap_or(OwnedRange { start: 0, length: 0 });
+        let range = owned.ranges[index].unwrap_or(OwnedRange {
+            start: 0,
+            length: 0,
+        });
         reserver
             .check_reserve_range(range.start, range.length)
             .map_err(|error| BootReserveError::Reserve { index, error })?;
     }
 
     for index in 0..owned.count {
-        let range = owned.ranges[index].unwrap_or(OwnedRange { start: 0, length: 0 });
+        let range = owned.ranges[index].unwrap_or(OwnedRange {
+            start: 0,
+            length: 0,
+        });
         reserver
             .reserve_range(range.start, range.length)
             .map_err(|error| BootReserveError::Reserve { index, error })?;
@@ -203,7 +207,7 @@ pub fn reserve_boot_owned_ranges<R: FrameReserver>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use awe_boot_protocol::{Architecture, MemoryRegion, MEMORY_REGION_USABLE};
+    use awe_boot_protocol::{Architecture, MEMORY_REGION_USABLE, MemoryRegion};
 
     use crate::memory::frame::Frame;
 
@@ -259,7 +263,10 @@ mod tests {
 
         let map = owned.ranges[2].unwrap();
         assert_eq!(map.start, regions.as_ptr() as u64);
-        assert_eq!(map.length, (regions.len() * size_of::<MemoryRegion>()) as u64);
+        assert_eq!(
+            map.length,
+            (regions.len() * size_of::<MemoryRegion>()) as u64
+        );
 
         let fb = owned.ranges[3].unwrap();
         assert_eq!(fb.start, 0xfd00_0000);
@@ -296,7 +303,10 @@ mod tests {
     fn invalid_boot_info_is_rejected_before_any_derivation() {
         let mut info = BootInfo::empty(Architecture::X86_64);
         info.magic = 0;
-        assert_eq!(boot_owned_ranges(&info), Err(BootReserveError::InvalidBootInfo));
+        assert_eq!(
+            boot_owned_ranges(&info),
+            Err(BootReserveError::InvalidBootInfo)
+        );
     }
 
     #[test]
