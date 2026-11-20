@@ -367,6 +367,10 @@ mod tests {
     #[test]
     fn reservation_removes_reserved_frames_from_allocation() {
         let mut allocator = empty_allocator();
+        // Burn the two lowest frames so the reservations exercise middle-of-
+        // -window frames instead of the first ones.
+        assert_eq!(allocator.allocate_frame().unwrap().start, 0x1000);
+        assert_eq!(allocator.allocate_frame().unwrap().start, 0x2000);
         // The BootInfo range is not reservable in a host test window; these
         // direct trait calls prove reservable ranges stick.
         allocator.reserve_range(0x3000, 0x2800).unwrap();
