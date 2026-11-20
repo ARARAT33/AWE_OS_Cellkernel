@@ -28,6 +28,7 @@ The immediate focus is **engineering the bootable and testable AWE_OS core**, wi
 ## Current implementation evidence (2026-11-20)
 
 - PR #78 (checked physical user-copy layer) is merged into `main`; the current main head is `d781f94344b700021ac5ce9bf2ce13f84426b1f2`.
+- PR #79 adds reservation-aware bitmap frame allocation. Its final code head `a225e73280a27cf4170c377175c24a23e1454d94` passed all 16 PR check-runs, including 405 kernel tests + 3 kernel-bin tests with zero failures; it remains a draft and is not merged. This does not yet reserve any live boot ranges.
 - On that exact main head, the seven latest push workflows completed successfully: Quality Gate, Bootable Image Pipeline, AOSIN installers, Multi-Architecture Images, Cloud Security Gate, CI Pipeline and VirtIO Runtime. The Quality Gate's formatting, workspace check, workspace tests, Clippy and UEFI-loader steps passed.
 - QEMU x86_64 evidence remains: boot protocol validated; kernel reaches `RUNNING`; PIT/timer interrupts drive a 3-kernel-thread preemptive scheduler. The captured run reported `switches=44` and 15 dispatches per thread. This is kernel-thread scheduling evidence, not userspace process isolation.
 - Memory: early x86_64 paging and CR3 bootstrap exist. A bounded `AddressSpace` contract, four-level PML4 → PDPT → PD → PT builder, ownership/rollback layer and `PhysicalTablePool` over real physical frames exist. The physical pool is host-tested but is not instantiated by the live boot path.
@@ -67,7 +68,7 @@ That branch is the recovery point for the previous repository state and should n
 
 Prioritize the next missing runtime boundary, not additional feature labels:
 
-1. Complete PR #79 validation for the reservation-aware `BitmapFrameAllocator`; merge only after the exact final head passes the full PR suite.
+1. Review and merge PR #79 only after confirming its final head remains green; the current tested source head passed 16/16 checks, but the PR remains draft and unmerged.
 2. Derive reservations from the validated boot handoff and linker symbols: kernel image, loader-owned pages, `BootInfo`, memory-map descriptors, bootstrap PML4/PDPT/PD and boot stacks. Keep unknown ownership reserved; never assume a region is free solely because it is addressable.
 3. Construct a `DirectMapWindow` only over physical pages proven reachable in the active page tables, then instantiate `PhysicalTablePool` over the reservation-aware allocator. Add QEMU evidence that allocated table frames are real, zeroed, writable and safely reclaimable.
 4. Build each process root with the supervisor-only kernel mappings preserved; define root/table ownership and teardown before activating a process address space.
