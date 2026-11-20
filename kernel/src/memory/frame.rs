@@ -232,11 +232,7 @@ impl<const MAX_BITMAP_WORDS: usize> BitmapFrameAllocator<MAX_BITMAP_WORDS> {
     /// this allocator's managed physical interval. Repeating an existing
     /// reservation is safe; a range containing a frame already allocated
     /// through this allocator is rejected without changing any bits.
-    pub fn reserve_range(
-        &mut self,
-        start: u64,
-        length: u64,
-    ) -> Result<(), BitmapFrameError> {
+    pub fn reserve_range(&mut self, start: u64, length: u64) -> Result<(), BitmapFrameError> {
         if !self.valid {
             return Err(BitmapFrameError::InvalidAllocator);
         }
@@ -261,8 +257,8 @@ impl<const MAX_BITMAP_WORDS: usize> BitmapFrameAllocator<MAX_BITMAP_WORDS> {
         let first_frame = usize::try_from((start - self.base_address) / PAGE_SIZE)
             .map_err(|_| BitmapFrameError::RangeOutOfBounds)?;
         let relative_end = end - self.base_address;
-        let last_frame_exclusive = relative_end / PAGE_SIZE
-            + if relative_end % PAGE_SIZE == 0 { 0 } else { 1 };
+        let last_frame_exclusive =
+            relative_end / PAGE_SIZE + if relative_end % PAGE_SIZE == 0 { 0 } else { 1 };
         let last_frame_exclusive = usize::try_from(last_frame_exclusive)
             .map_err(|_| BitmapFrameError::RangeOutOfBounds)?;
         if first_frame >= last_frame_exclusive || last_frame_exclusive > self.total_frames {
@@ -554,5 +550,4 @@ mod tests {
         );
         assert_eq!(allocator.allocate_frame().unwrap().start, 0x1000);
     }
-
 }
