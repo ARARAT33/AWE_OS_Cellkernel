@@ -25,19 +25,20 @@ The immediate focus is **engineering the bootable and testable AWE_OS core**, wi
 7. AYUI and first-party userspace
 8. recovery, validation and release evidence
 
-## Current implementation evidence (2026-11-16)
+## Current implementation evidence (2026-11-20)
 
-- PR #71 (per-process address-space contract and x86_64 four-level user page-table builder) is merged into `main` as `991473ee1bd41d7578b5de9df66666a4f19a2730`.
-- The latest validated code head passed **564 tests across 57 test binaries** with zero failures. The nine substantive PR workflows passed; the final main-branch CI, Quality Gate, Cloud Security Gate, boot image, VirtIO QEMU, multi-architecture-image and installer workflows also passed after documentation updates.
-- QEMU x86_64 evidence: boot protocol validated; kernel reaches `RUNNING`; PIT/timer interrupts drive a 3-kernel-thread preemptive scheduler. The captured run reported `switches=44` and 15 dispatches per thread. This is kernel-thread scheduling evidence, not userspace process isolation.
-- Memory: early x86_64 paging and CR3 bootstrap exist. A bounded `AddressSpace` contract and four-level PML4 → PDPT → PD → PT builder now exist, but the builder is currently exercised through a test-only `TableMemory` backend.
-- Storage: bounded block-device, GPT, VFS, journaling and RAM-disk contracts/tests exist. QEMU exposes VirtIO PCI, but actual VirtIO block request/completion, read-after-write and durable persistence are not yet proven.
-- Networking: protocol/transport contracts exist; a real NIC-backed network path and multi-node CellNet runtime are not yet proven.
-- Architecture: current boot-image workflows build `x86_64-unknown-none` and `x86_64-unknown-uefi` only. ARM64 and RISC-V are not yet validated.
+- PR #78 (checked physical user-copy layer) is merged into `main`; the current main head is `d781f94344b700021ac5ce9bf2ce13f84426b1f2`.
+- On that exact main head, the seven latest push workflows completed successfully: Quality Gate, Bootable Image Pipeline, AOSIN installers, Multi-Architecture Images, Cloud Security Gate, CI Pipeline and VirtIO Runtime. The Quality Gate's formatting, workspace check, workspace tests, Clippy and UEFI-loader steps passed.
+- QEMU x86_64 evidence remains: boot protocol validated; kernel reaches `RUNNING`; PIT/timer interrupts drive a 3-kernel-thread preemptive scheduler. The captured run reported `switches=44` and 15 dispatches per thread. This is kernel-thread scheduling evidence, not userspace process isolation.
+- Memory: early x86_64 paging and CR3 bootstrap exist. A bounded `AddressSpace` contract, four-level PML4 → PDPT → PD → PT builder, ownership/rollback layer and `PhysicalTablePool` over real physical frames exist. The physical pool is host-tested but is not instantiated by the live boot path.
+- The checked physical user-copy helper now exists: it validates the full user range before invoking a page-bounded `PhysicalAccess` backend and caps a request at 1 MiB. It is not yet connected to a live boot direct map or a production physical-access backend.
+- Storage: bounded block-device, GPT, VFS, journaling and RAM-disk contracts/tests exist. QEMU exposes VirtIO PCI and boots with the device attached, but actual VirtIO block request/completion, read-after-write and durable persistence are not proven.
+- Networking: protocol/transport contracts exist; a real NIC-backed network path and multi-node CellNet runtime are not proven.
+- Architecture: current boot-image workflows build `x86_64-unknown-none` and `x86_64-unknown-uefi` only. ARM64 and RISC-V are not runtime-validated.
 
 ### Explicitly not complete
 
-No live frame-backed `TableMemory` backend, per-process CR3 switching, TLB invalidation/shootdown, page-table teardown/reference counting, physical checked user-copy, Ring 3 entry or QEMU user/kernel isolation runtime is enabled. The scheduler remains single-core and kernel-thread-only. Do not describe the OS as having production process isolation, persistent VirtIO storage, a production network stack, or ARM64/RISC-V support.
+The live boot path still does not construct a reservation-aware frame allocator from the boot memory map, install a verified direct-map window for the physical table pool, or instantiate that pool. Per-process CR3 switching, TLB invalidation/shootdown, integrated page-table lifetime/reclamation, Ring 3 entry and QEMU user/kernel isolation are not enabled. The scheduler remains single-core and kernel-thread-only. The checked user-copy helper is a contract over a supplied backend, not proof of live user-memory isolation. VirtIO device presence and successful boot do not prove block I/O or durable storage. Do not describe the OS as having production process isolation, persistent VirtIO storage, a production network stack, or ARM64/RISC-V support.
 
 ## Project-state rules
 
