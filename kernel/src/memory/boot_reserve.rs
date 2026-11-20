@@ -57,7 +57,10 @@ pub struct OwnedRange {
 pub const MAX_BOOT_OWNED_RANGES: usize = 5;
 
 /// The fixed set of boot-owned ranges derived from a BootInfo.
-#[derive(Clone, Copy)]
+///
+/// Derives equality and formatting so the derivation tests can compare the
+/// whole Result directly.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BootOwnedRanges {
     pub ranges: [Option<OwnedRange>; MAX_BOOT_OWNED_RANGES],
     pub count: usize,
