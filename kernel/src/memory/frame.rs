@@ -257,9 +257,7 @@ impl<const MAX_BITMAP_WORDS: usize> BitmapFrameAllocator<MAX_BITMAP_WORDS> {
         let first_frame = usize::try_from((start - self.base_address) / PAGE_SIZE)
             .map_err(|_| BitmapFrameError::RangeOutOfBounds)?;
         let relative_end = end - self.base_address;
-        let last_frame_exclusive =
-            relative_end / PAGE_SIZE + if relative_end % PAGE_SIZE == 0 { 0 } else { 1 };
-        let last_frame_exclusive = usize::try_from(last_frame_exclusive)
+        let last_frame_exclusive = usize::try_from(relative_end.div_ceil(PAGE_SIZE))
             .map_err(|_| BitmapFrameError::RangeOutOfBounds)?;
         if first_frame >= last_frame_exclusive || last_frame_exclusive > self.total_frames {
             return Err(BitmapFrameError::RangeOutOfBounds);
