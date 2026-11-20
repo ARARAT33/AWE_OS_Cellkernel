@@ -224,15 +224,13 @@ impl<const MAX_BITMAP_WORDS: usize> BitmapFrameAllocator<MAX_BITMAP_WORDS> {
         self.valid
     }
 
-    /// Reserve every 4 KiB frame intersecting the non-empty byte range
-    /// [start, start + length).
+    /// Validate a reservation request without mutating any bitmap state.
     ///
-    /// Unaligned boundaries are rounded outwards so no partially covered
-    /// frame can be handed to the allocator. The range must be fully inside
-    /// this allocator's managed physical interval. Repeating an existing
-    /// reservation is safe; a range containing a frame already allocated
-    /// through this allocator is rejected without changing any bits.
-    pub fn reserve_range(&mut self, start: u64, length: u64) -> Result<(), BitmapFrameError> {
+    /// This is the preflight half of reserve_range: the same empty, overflow,
+    /// bounds and already-allocated checks, but no bit is set. Use it when a
+    /// set of reservations must be validated as a whole before any of them
+    /// is committed.
+    pub fn check_reserve_range(&self, start: u64, length: u64) -> Result<(), BitmapFrameError> {
         if !self.valid {
             return Err(BitmapFrameError::InvalidAllocator);
         }
@@ -263,8 +261,6 @@ impl<const MAX_BITMAP_WORDS: usize> BitmapFrameAllocator<MAX_BITMAP_WORDS> {
             return Err(BitmapFrameError::RangeOutOfBounds);
         }
 
-        // Preflight the complete range first: a conflict must not leave a
-        // partially reserved prefix behind.
         for frame_idx in first_frame..last_frame_exclusive {
             let word_idx = frame_idx / 64;
             let mask = 1u64 << (frame_idx % 64);
@@ -274,6 +270,50 @@ impl<const MAX_BITMAP_WORDS: usize> BitmapFrameAllocator<MAX_BITMAP_WORDS> {
                 return Err(BitmapFrameError::FrameAlreadyAllocated);
             }
         }
+        Ok(())
+    }
+
+    /// Reserve every 4 KiB frame intersecting the non-empty byte range
+    /// [start, start + length).
+    ///
+    /// Unaligned boundaries are rounded outwards so no partially covered
+    /// frame can be handed to the allocator. The range must be fully inside
+    /// this allocator's managed physical interval. Repeating an existing
+    /// reservation is safe; a range containing a frame already allocated
+    /// through this allocator is rejected without changing any bits.
+    pub fn reserve_range(&mut self, start: u64, length: u64) -> Result<(), BitmapFrameError> {
+        if !self.valid {
+            return Err(BitmapFrameError::InvalidAllocator);
+        }
+        if length == 0 {
+            return Err(BitmapFrameError::EmptyRange);
+        }
+
+        let end = start
+            .checked_add(length)
+            .ok_or(BitmapFrameError::RangeOverflow)?;
+        let managed_bytes = (self.total_frames as u64)
+            .checked_mul(PAGE_SIZE)
+            .ok_or(BitmapFrameError::InvalidAllocator)?;
+        let managed_end = self
+            .base_address
+            .checked_add(managed_bytes)
+            .ok_or(BitmapFrameError::InvalidAllocator)?;
+        if start < self.base_address || end > managed_end {
+            return Err(BitmapFrameError::RangeOutOfBounds);
+        }
+
+        // Preflight the complete range first: a conflict must not leave a
+        // partially reserved prefix behind. check_reserve_range performs the
+        // identical empty, overflow, bounds and allocated-frame validation
+        // without touching any bitmap state.
+        self.check_reserve_range(start, length)?;
+
+        let first_frame = usize::try_from((start - self.base_address) / PAGE_SIZE)
+            .map_err(|_| BitmapFrameError::RangeOutOfBounds)?;
+        let relative_end = end - self.base_address;
+        let last_frame_exclusive = usize::try_from(relative_end.div_ceil(PAGE_SIZE))
+            .map_err(|_| BitmapFrameError::RangeOutOfBounds)?;
 
         for frame_idx in first_frame..last_frame_exclusive {
             let word_idx = frame_idx / 64;

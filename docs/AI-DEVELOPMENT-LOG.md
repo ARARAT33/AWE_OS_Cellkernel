@@ -1,3 +1,70 @@
+
+#### 2026-11-20 — Run: PR #80 validated and merged-ready; boot-owned ranges green
+
+- **Validation (head 9e6a3d6 / formatted tree):** all 16 PR check-runs
+  passed, including workspace tests, Clippy, QEMU boot/VirtIO and
+  cloud-security gates. The earlier heads of this PR are recorded as
+  failures and are not counted as passes.
+- **CI-caught defects fixed this run (all from bot diagnostics):**
+  (1) `checked_range` returned `(start, end)` while callers stored the
+  second value as a length, inflating every derived boot-owned range by
+  its start address; (2) host tests relied on an empty-slice pointer,
+  which is non-null, so a dangling pointer with a positive descriptor
+  count passed boot validation and derived a bogus map range — the
+  validate-failure test now uses a genuinely null pointer and the
+  zero-field skip test expects the BootInfo struct plus the descriptor
+  array; (3) a transitional commit accidentally stored a placeholder
+  string in boot_reserve.rs, corrected in the immediately following
+  commit on the same branch before any merge.
+- **Status:** PR #80 marked ready and merged once this log head is
+  green. Honest limits unchanged: boot-owned reservation is still not
+  wired into kernel_entry; kernel-bin still fills kernel_base/kernel_size
+  with 0; no CR3 switching, TLB invalidation, VirtIO persistence or
+  NIC-backed CellNet transport yet.
+- **Next priorities:** fill kernel_base/kernel_size in kernel-bin
+  boot-info construction from linker symbols; wire the bitmap allocator
+  and boot-owned reservation into kernel_entry after memory-map
+  validation; then supervisor-only kernel mappings, per-process CR3
+  switching and TLB invalidation.
+
+
+#### CI follow-up — rustfmt bot reformatted boot_reserve.rs
+
+- The suite on the first authored head a5b3ac8/e3af5ba triggered the
+  formatter bot, whose commit 151b159 applied formatting-only changes to
+  kernel/src/memory/boot_reserve.rs. No semantic source change.
+- Bot-authored heads do not trigger Actions in this repository, so this
+  owner-authored entry re-runs the full PR suite against the formatted
+  tree. Until that run completes, all gates remain unverified for this
+  head; the partial runs on earlier heads are recorded as incomplete,
+  not as passes.
+#### 2026-11-20 — Run: PR #79 merged; boot-owned range reservations started
+
+- **Continuation:** PR #79 (reserved physical frame ranges) was draft with 16/16 green
+  check-runs on its final head. It was marked ready and merged into main as
+  merge commit 2686fbc; the branch and in-progress reserved-range work are live.
+- **Implemented (branch feat/boot-owned-range-reservations-2026-11-20):**
+  new kernel/src/memory/boot_reserve.rs. boot_owned_ranges derives the physical
+  ranges a validated BootInfo owns, in deterministic order: kernel image,
+  BootInfo structure, memory-map descriptor array, framebuffer, ACPI RSDP page.
+  reserve_boot_owned_ranges reserves them on any FrameReserver all-or-nothing:
+  every range is preflighted before any bitmap mutation, so a failed request
+  leaves the allocator untouched. BitmapFrameAllocator gained the non-mutating
+  check_reserve_range and reserve_range was refactored to preflight through it.
+  Host tests cover in-order derivation, zero-field skipping, invalid-boot-info,
+  kernel-image overflow, misaligned and count/pointer-inconsistent memory maps,
+  non-mutating preflight, and reservation/idempotence/atomic-conflict behavior.
+- **Honest limits:** not yet wired into kernel_entry or the live boot memory map;
+  kernel-bin does not yet fill kernel_base/kernel_size from linker symbols, so at
+  boot only the BootInfo, memory-map, framebuffer and RSDP ranges are derivable.
+  Device-tree reservation is intentionally absent: the v1 protocol carries no
+  length for that pointer. No direct map, CR3 switching, TLB invalidation or
+  Ring-3 change is claimed.
+- **Next priorities:** fill kernel_base/kernel_size in kernel-bin boot-info
+  construction from kernel-image linker symbols; wire the bitmap allocator and
+  boot-owned reservation into kernel_entry after memory-map validation; then
+  supervisor-only kernel mappings, per-process CR3 switching and TLB invalidation.
+
 #### 2026-11-20 — Run: reservation-aware bitmap frame allocation
 
 - **Baseline audit:** continued from main head `d781f94344b700021ac5ce9bf2ce13f84426b1f2`. Inspected the workspace manifest, current project/readiness documents, the repository tree, memory/address-space/page-table/user-copy code, x86_64 bootstrap entry, boot memory-map handoff, Cell runtime contract, and the relevant Quality Gate and VirtIO workflows. Main-head Quality Gate, Bootable Image Pipeline, AOSIN installers, Multi-Architecture Images, Cloud Security Gate, CI Pipeline and VirtIO Runtime all completed successfully. The latest scheduled safe-branch audit also completed successfully. The VirtIO workflow proves QEMU device exposure and kernel boot, not block read/write or persistence.
@@ -1350,3 +1417,4 @@ physical frames.
 - Next run: finish multi-architecture workflow review, then audit the boot
   memory-map handoff and design a validated direct-map/allocator integration
   without activating unverified page tables.
+
