@@ -1,5 +1,18 @@
 
 
+#### Validation completion — PR #81 exact head `17b54cc64eb07bec95aa3922597c4f934808efc0`
+
+- **Result:** all **15/15 check-runs passed**, with zero failed or pending checks. PR #81 remains a draft; no merge or main-branch update was performed.
+- **Workspace Build & Validation:** passed `cargo check --workspace --all-targets`, `cargo test --workspace`, `cargo fmt --all -- --check`, boot-image build and artifact verification. The new frame-reservation, batch-atomicity, live-allocator integration and linker-range tests all passed.
+- **Clippy / Quality Gate:** passed with `-D warnings`; no lint suppressions were added.
+- **Bootable Image Pipeline:** both jobs passed. The ISO boot smoke test reached `AWEOS: kernel is alive`; the exception-injection QEMU self-test passed.
+- **VirtIO Runtime:** passed. QEMU exposed a `virtio-blk-pci` device and the kernel reached RUNNING; this is device-presence/boot evidence only, not block I/O or persistence evidence.
+- **Other gates:** UEFI loader, Multi-Architecture Images, Cloud Security, Cloud Release Contract, CI Diagnostics and all four AOSIN installer jobs passed.
+- **First-attempt failures:** the initial branch head failed formatting and Clippy due to rustfmt differences and unnecessary `unsafe` around immutable linker symbols. Both were corrected; the final tested head is clean.
+- **Next:** keep PR #81 unmerged pending review, then prioritize a verified direct-map window and live `PhysicalTablePool` instantiation with QEMU allocation/zeroing/reclamation evidence.
+
+
+
 #### CI follow-up — PR #81 first validation pass
 
 - The first PR workflow set correctly caught two issues before merge: rustfmt differences in `boot_reserve.rs` and the linker-bound test, plus two `clippy::unused_unsafe` diagnostics around `addr_of!` of the immutable linker symbols.
