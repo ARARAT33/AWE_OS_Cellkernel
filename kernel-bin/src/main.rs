@@ -14,6 +14,27 @@ use aweos_kernel::memory::activate_bootstrap_identity_map;
 use aweos_kernel::memory::x86_64::{BOOTSTRAP_LEAF_FLAGS, BOOTSTRAP_TABLE_FLAGS};
 
 #[cfg(not(test))]
+unsafe extern "C" {
+    static __kernel_start: u8;
+    static __kernel_end: u8;
+}
+
+fn checked_kernel_image_range(start: u64, end: u64) -> Option<(u64, u64)> {
+    let size = end.checked_sub(start)?;
+    if size == 0 {
+        return None;
+    }
+    Some((start, size))
+}
+
+#[cfg(not(test))]
+fn linked_kernel_image_range() -> Option<(u64, u64)> {
+    let start = unsafe { core::ptr::addr_of!(__kernel_start) as u64 };
+    let end = unsafe { core::ptr::addr_of!(__kernel_end) as u64 };
+    checked_kernel_image_range(start, end)
+}
+
+#[cfg(not(test))]
 const MULTIBOOT1_BOOTLOADER_MAGIC: u32 = 0x2BAD_B002;
 #[cfg(not(test))]
 const MULTIBOOT2_BOOTLOADER_MAGIC: u32 = 0x36D7_6289;
@@ -245,6 +266,16 @@ mod bootstrap_paging_tests {
     }
 
     #[test]
+    fn linked_kernel_image_bounds_return_a_checked_nonzero_length() {
+        assert_eq!(
+            super::checked_kernel_image_range(0x10_0000, 0x12_3000),
+            Some((0x10_0000, 0x23_000))
+        );
+        assert_eq!(super::checked_kernel_image_range(0x10_0000, 0x10_0000), None);
+        assert_eq!(super::checked_kernel_image_range(0x20_0000, 0x10_0000), None);
+    }
+
+    #[test]
     fn multiboot1_memory_map_entry_size_is_bounded_by_remaining_bytes() {
         assert!(multiboot1_mmap_entry_valid(20, 24));
         assert!(multiboot1_mmap_entry_valid(24, 28));
@@ -299,7 +330,7 @@ pub extern "C" fn rust_main(boot_magic: u32, boot_info_addr: u64) -> ! {
 
     serial_write(b"AWEOS CellKernel\r\n");
 
-    let info = if boot_magic == MULTIBOOT1_BOOTLOADER_MAGIC {
+    let mut info = if boot_magic == MULTIBOOT1_BOOTLOADER_MAGIC {
         serial_write(b"AWEOS boot: x86_64 Multiboot1 entry\r\n");
         if boot_info_addr == 0 {
             serial_write(b"AWEOS: invalid Multiboot handoff\r\n");
@@ -317,6 +348,14 @@ pub extern "C" fn rust_main(boot_magic: u32, boot_info_addr: u64) -> ! {
         serial_write(b"AWEOS boot: x86_64 Direct/PVH entry\r\n");
         fallback_boot_info()
     };
+
+    let Some((kernel_base, kernel_size)) = linked_kernel_image_range() else {
+        serial_write(b"AWEOS: invalid linker kernel-image bounds\r\n");
+        halt_forever();
+    };
+    info.kernel_base = kernel_base;
+    info.kernel_size = kernel_size;
+    serial_write(b"AWEOS: kernel image range supplied to memory manager\r\n");
 
     match kernel_entry(&info) {
         KernelBootStatus::Ready => {
@@ -346,6 +385,10 @@ pub extern "C" fn rust_main(boot_magic: u32, boot_info_addr: u64) -> ! {
         }
         KernelBootStatus::InvalidMemoryMap => {
             serial_write(b"AWEOS: invalid or unsafe physical memory map\r\n");
+            halt_forever();
+        }
+        KernelBootStatus::BootReservationFailed => {
+            serial_write(b"AWEOS: boot-owned physical range reservation failed\r\n");
             halt_forever();
         }
     }
