@@ -35,6 +35,23 @@ pub trait FrameReserver {
     fn check_reserve_range(&self, start: u64, length: u64) -> Result<(), BitmapFrameError>;
     /// Reserve every 4 KiB frame intersecting [start, start + length).
     fn reserve_range(&mut self, start: u64, length: u64) -> Result<(), BitmapFrameError>;
+
+    /// Preflight and commit a batch. The default implementation is suitable
+    /// for allocators whose individual commits cannot fail after preflight.
+    fn reserve_ranges(
+        &mut self,
+        ranges: &[OwnedRange],
+    ) -> Result<(), (usize, BitmapFrameError)> {
+        for (index, range) in ranges.iter().enumerate() {
+            self.check_reserve_range(range.start, range.length)
+                .map_err(|error| (index, error))?;
+        }
+        for (index, range) in ranges.iter().enumerate() {
+            self.reserve_range(range.start, range.length)
+                .map_err(|error| (index, error))?;
+        }
+        Ok(())
+    }
 }
 
 impl<const N: usize> FrameReserver for BitmapFrameAllocator<N> {
@@ -54,6 +71,23 @@ impl FrameReserver for PhysicalFrameAllocator {
 
     fn reserve_range(&mut self, start: u64, length: u64) -> Result<(), BitmapFrameError> {
         PhysicalFrameAllocator::reserve_range(self, start, length)
+    }
+
+    fn reserve_ranges(
+        &mut self,
+        ranges: &[OwnedRange],
+    ) -> Result<(), (usize, BitmapFrameError)> {
+        if ranges.len() > MAX_BOOT_OWNED_RANGES {
+            return Err((
+                MAX_BOOT_OWNED_RANGES,
+                BitmapFrameError::ReservationCapacityExceeded,
+            ));
+        }
+        let mut raw = [(0u64, 0u64); MAX_BOOT_OWNED_RANGES];
+        for (index, range) in ranges.iter().enumerate() {
+            raw[index] = (range.start, range.length);
+        }
+        PhysicalFrameAllocator::reserve_ranges(self, &raw[..ranges.len()])
     }
 }
 
@@ -194,23 +228,14 @@ pub fn reserve_boot_owned_ranges<R: FrameReserver>(
 ) -> Result<usize, BootReserveError> {
     let owned = boot_owned_ranges(info)?;
 
-    // Preflight every range first: reserve is permanent, so a request that
-    // cannot be honored must not leave a partial reservation behind.
+    let mut ranges = [OwnedRange { start: 0, length: 0 }; MAX_BOOT_OWNED_RANGES];
     for (index, slot) in owned.ranges.iter().enumerate().take(owned.count) {
         // Slots below count are always filled by boot_owned_ranges.
-        let range = slot.expect("boot-owned slot below count is filled");
-        reserver
-            .check_reserve_range(range.start, range.length)
-            .map_err(|error| BootReserveError::Reserve { index, error })?;
+        ranges[index] = slot.expect("boot-owned slot below count is filled");
     }
-
-    for (index, slot) in owned.ranges.iter().enumerate().take(owned.count) {
-        // Slots below count are always filled by boot_owned_ranges.
-        let range = slot.expect("boot-owned slot below count is filled");
-        reserver
-            .reserve_range(range.start, range.length)
-            .map_err(|error| BootReserveError::Reserve { index, error })?;
-    }
+    reserver
+        .reserve_ranges(&ranges[..owned.count])
+        .map_err(|(index, error)| BootReserveError::Reserve { index, error })?;
 
     Ok(owned.count)
 }
