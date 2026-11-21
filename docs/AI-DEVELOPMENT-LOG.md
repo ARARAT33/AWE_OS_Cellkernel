@@ -1,3 +1,32 @@
+#### 2026-11-21 — Run 12: PR #81 merged; boot-owned ranges now reserved in the live kernel path
+
+- **Merge:** PR #81 (head 491c746a25bde426ed31823454aa4fb0b7bccb72,
+  16/16 check-runs passed on that exact head, mergeable_state clean) was
+  marked ready for review and merged into main as merge commit
+  42c4e4d1a166d42c5a8b3f7382bb6840ece13e22. No force push and no
+  branch deletion were performed.
+- **What landed in main:**
+  - Bounded reservation ledger on the live monotonic `PhysicalFrameAllocator`:
+    batch preflighted reservations, skip of every 4 KiB frame intersecting a
+    reserved byte range, idempotent containment, rejection of reservations
+    after allocation begins.
+  - `boot_owned_ranges` / `reserve_boot_owned_ranges` wired into `kernel_entry`
+    before the first frame allocation; reservation failure returns the distinct
+    fatal `KernelBootStatus::BootReservationFailed` instead of continuing.
+  - Linker-defined `__kernel_start` / `__kernel_end` bounds; `kernel-bin`
+    populates `BootInfo.kernel_base/kernel_size` from those symbols.
+  - Host regression tests for intersecting-frame exclusion, idempotent
+    reservations, late-reservation rejection, live-allocator boot reservation
+    and checked linker-bound arithmetic.
+- **Honest limits (unchanged, not claimed):** no direct-map window, no
+  `PhysicalTablePool` instantiation in the live boot path, no CR3 switching,
+  TLB invalidation, Ring 3, QEMU user/kernel isolation, persistent VirtIO I/O
+  or NIC-backed CellNet transport.
+- **Next run priorities:** build a direct-map window only from mappings proven
+  active in QEMU, instantiate the physical table pool over frames reserved by
+  the new ledger, and add QEMU evidence that table frames are allocated,
+  zeroed, mapped and safely reclaimed.
+
 
 
 #### Validation completion — PR #81 exact head `17b54cc64eb07bec95aa3922597c4f934808efc0`
