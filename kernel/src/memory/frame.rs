@@ -208,24 +208,54 @@ impl PhysicalFrameAllocator {
         Ok(())
     }
 
+    /// Atomically reserve a batch of physical byte ranges. Capacity and
+    /// lifecycle checks are completed for the whole batch before the ledger
+    /// is changed, preserving the boot handoff's all-or-nothing contract.
+    pub fn reserve_ranges(
+        &mut self,
+        ranges: &[(u64, u64)],
+    ) -> Result<(), (usize, BitmapFrameError)> {
+        let mut additions = [None; MAX_PHYSICAL_RESERVED_RANGES];
+        let mut addition_count = 0usize;
+
+        for (index, (start, length)) in ranges.iter().copied().enumerate() {
+            self.check_reserve_range(start, length)
+                .map_err(|error| (index, error))?;
+            let end = start
+                .checked_add(length)
+                .ok_or((index, BitmapFrameError::RangeOverflow))?;
+
+            let already_covered = self.reserved_ranges[..self.reserved_count]
+                .iter()
+                .flatten()
+                .any(|range| start >= range.start && end <= range.end)
+                || additions[..addition_count]
+                    .iter()
+                    .flatten()
+                    .any(|range: &ReservedPhysicalRange| start >= range.start && end <= range.end);
+
+            if !already_covered {
+                if self.reserved_count + addition_count >= MAX_PHYSICAL_RESERVED_RANGES {
+                    return Err((index, BitmapFrameError::ReservationCapacityExceeded));
+                }
+                additions[addition_count] = Some(ReservedPhysicalRange { start, end });
+                addition_count += 1;
+            }
+        }
+
+        for range in additions[..addition_count].iter().flatten() {
+            self.reserved_ranges[self.reserved_count] = Some(*range);
+            self.reserved_count += 1;
+        }
+        Ok(())
+    }
+
     /// Permanently exclude every 4 KiB frame intersecting the byte range.
     /// This allocator is monotonic, so reservations are accepted only before
     /// the first frame is handed out.
     pub fn reserve_range(&mut self, start: u64, length: u64) -> Result<(), BitmapFrameError> {
-        self.check_reserve_range(start, length)?;
-        let end = start
-            .checked_add(length)
-            .ok_or(BitmapFrameError::RangeOverflow)?;
-        if self.reserved_ranges[..self.reserved_count]
-            .iter()
-            .flatten()
-            .any(|range| start >= range.start && end <= range.end)
-        {
-            return Ok(());
-        }
-        self.reserved_ranges[self.reserved_count] = Some(ReservedPhysicalRange { start, end });
-        self.reserved_count += 1;
-        Ok(())
+        self.reserve_ranges(&[(start, length)])
+            .map_err(|(_, error)| error)
     }
 
     fn frame_intersects_reservation(&self, frame_start: u64) -> bool {
@@ -546,6 +576,25 @@ mod tests {
         assert_eq!(allocator.allocate().unwrap().start, 0x1000);
         assert_eq!(allocator.allocate().unwrap().start, 0x4000);
         assert_eq!(allocator.allocate().unwrap().start, 0x5000);
+    }
+
+    #[test]
+    fn physical_allocator_batch_reservation_is_atomic_on_capacity_failure() {
+        let mut allocator = PhysicalFrameAllocator::empty();
+        let mut ranges = [(0u64, 0u64); MAX_PHYSICAL_RESERVED_RANGES + 1];
+        for (index, range) in ranges.iter_mut().enumerate() {
+            *range = (0x1000 + (index as u64 * 0x2000), 0x1000);
+        }
+
+        assert_eq!(
+            allocator.reserve_ranges(&ranges),
+            Err((
+                MAX_PHYSICAL_RESERVED_RANGES,
+                BitmapFrameError::ReservationCapacityExceeded
+            ))
+        );
+        // The failed batch committed nothing.
+        assert_eq!(allocator.reserve_range(0x1000, 0x1000), Ok(()));
     }
 
     #[test]
