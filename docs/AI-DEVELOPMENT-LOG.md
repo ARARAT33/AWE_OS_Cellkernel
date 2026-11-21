@@ -1,5 +1,14 @@
 
 
+#### CI follow-up — PR #81 first validation pass
+
+- The first PR workflow set correctly caught two issues before merge: rustfmt differences in `boot_reserve.rs` and the linker-bound test, plus two `clippy::unused_unsafe` diagnostics around `addr_of!` of the immutable linker symbols.
+- Corrected the formatting and removed the unnecessary unsafe blocks; no lint suppression was added.
+- The first CI attempt is recorded as **failed**, not passed. The workspace test job was stopped at the formatting gate, and Clippy failed on the two unnecessary unsafe blocks. A fresh full workflow run is required for the corrected head.
+- Main-head baseline successes remain separate from this branch's validation.
+
+
+
 #### 2026-11-21 — Run 11: wire boot-owned reservations into the live boot path
 
 - **Baseline:** continued from `main` at `b16abe9c55135240393b9689d0cab54504de0681`, after PR #80 merged. The previous run had derived boot-owned ranges but explicitly left them disconnected from `kernel_entry`.
