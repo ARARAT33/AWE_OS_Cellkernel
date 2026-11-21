@@ -29,8 +29,8 @@ fn checked_kernel_image_range(start: u64, end: u64) -> Option<(u64, u64)> {
 
 #[cfg(not(test))]
 fn linked_kernel_image_range() -> Option<(u64, u64)> {
-    let start = unsafe { core::ptr::addr_of!(__kernel_start) as u64 };
-    let end = unsafe { core::ptr::addr_of!(__kernel_end) as u64 };
+    let start = core::ptr::addr_of!(__kernel_start) as u64;
+    let end = core::ptr::addr_of!(__kernel_end) as u64;
     checked_kernel_image_range(start, end)
 }
 
@@ -271,8 +271,14 @@ mod bootstrap_paging_tests {
             super::checked_kernel_image_range(0x10_0000, 0x12_3000),
             Some((0x10_0000, 0x23_000))
         );
-        assert_eq!(super::checked_kernel_image_range(0x10_0000, 0x10_0000), None);
-        assert_eq!(super::checked_kernel_image_range(0x20_0000, 0x10_0000), None);
+        assert_eq!(
+            super::checked_kernel_image_range(0x10_0000, 0x10_0000),
+            None
+        );
+        assert_eq!(
+            super::checked_kernel_image_range(0x20_0000, 0x10_0000),
+            None
+        );
     }
 
     #[test]
