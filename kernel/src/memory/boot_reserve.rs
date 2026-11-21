@@ -24,7 +24,9 @@ use core::mem::{align_of, size_of};
 
 use awe_boot_protocol::validate;
 
-use super::frame::{BitmapFrameAllocator, BitmapFrameError, PAGE_SIZE};
+use super::frame::{
+    BitmapFrameAllocator, BitmapFrameError, PAGE_SIZE, PhysicalFrameAllocator,
+};
 use awe_boot_protocol::{BootInfo, MemoryRegion};
 
 /// An allocator that can permanently reserve a physical byte range.
@@ -42,6 +44,16 @@ impl<const N: usize> FrameReserver for BitmapFrameAllocator<N> {
 
     fn reserve_range(&mut self, start: u64, length: u64) -> Result<(), BitmapFrameError> {
         BitmapFrameAllocator::<N>::reserve_range(self, start, length)
+    }
+}
+
+impl FrameReserver for PhysicalFrameAllocator {
+    fn check_reserve_range(&self, start: u64, length: u64) -> Result<(), BitmapFrameError> {
+        PhysicalFrameAllocator::check_reserve_range(self, start, length)
+    }
+
+    fn reserve_range(&mut self, start: u64, length: u64) -> Result<(), BitmapFrameError> {
+        PhysicalFrameAllocator::reserve_range(self, start, length)
     }
 }
 
@@ -298,6 +310,25 @@ mod tests {
             reserve_boot_owned_ranges(&mut allocator, &info),
             Err(BootReserveError::Reserve { index: 0, .. })
         ));
+    }
+
+    #[test]
+    fn boot_owned_ranges_are_reserved_in_the_live_physical_allocator() {
+        let regions = [MemoryRegion {
+            base: 0x1000,
+            length: 0x10_000,
+            kind: MEMORY_REGION_USABLE,
+            reserved: 0,
+        }];
+        let info = info_with(&regions, 0x3000, 0x2000);
+        let mut allocator =
+            unsafe { PhysicalFrameAllocator::try_from_boot_info(&info) }.unwrap();
+
+        assert_eq!(reserve_boot_owned_ranges(&mut allocator, &info), Ok(3));
+        assert_eq!(allocator.allocate().unwrap().start, 0x1000);
+        assert_eq!(allocator.allocate().unwrap().start, 0x2000);
+        // The kernel image [0x3000, 0x5000) is never handed out.
+        assert_eq!(allocator.allocate().unwrap().start, 0x5000);
     }
 
     #[test]
