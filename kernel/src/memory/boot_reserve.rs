@@ -24,9 +24,7 @@ use core::mem::{align_of, size_of};
 
 use awe_boot_protocol::validate;
 
-use super::frame::{
-    BitmapFrameAllocator, BitmapFrameError, PAGE_SIZE, PhysicalFrameAllocator,
-};
+use super::frame::{BitmapFrameAllocator, BitmapFrameError, PAGE_SIZE, PhysicalFrameAllocator};
 use awe_boot_protocol::{BootInfo, MemoryRegion};
 
 /// An allocator that can permanently reserve a physical byte range.
@@ -38,10 +36,7 @@ pub trait FrameReserver {
 
     /// Preflight and commit a batch. The default implementation is suitable
     /// for allocators whose individual commits cannot fail after preflight.
-    fn reserve_ranges(
-        &mut self,
-        ranges: &[OwnedRange],
-    ) -> Result<(), (usize, BitmapFrameError)> {
+    fn reserve_ranges(&mut self, ranges: &[OwnedRange]) -> Result<(), (usize, BitmapFrameError)> {
         for (index, range) in ranges.iter().enumerate() {
             self.check_reserve_range(range.start, range.length)
                 .map_err(|error| (index, error))?;
@@ -73,10 +68,7 @@ impl FrameReserver for PhysicalFrameAllocator {
         PhysicalFrameAllocator::reserve_range(self, start, length)
     }
 
-    fn reserve_ranges(
-        &mut self,
-        ranges: &[OwnedRange],
-    ) -> Result<(), (usize, BitmapFrameError)> {
+    fn reserve_ranges(&mut self, ranges: &[OwnedRange]) -> Result<(), (usize, BitmapFrameError)> {
         if ranges.len() > MAX_BOOT_OWNED_RANGES {
             return Err((
                 MAX_BOOT_OWNED_RANGES,
@@ -228,7 +220,10 @@ pub fn reserve_boot_owned_ranges<R: FrameReserver>(
 ) -> Result<usize, BootReserveError> {
     let owned = boot_owned_ranges(info)?;
 
-    let mut ranges = [OwnedRange { start: 0, length: 0 }; MAX_BOOT_OWNED_RANGES];
+    let mut ranges = [OwnedRange {
+        start: 0,
+        length: 0,
+    }; MAX_BOOT_OWNED_RANGES];
     for (index, slot) in owned.ranges.iter().enumerate().take(owned.count) {
         // Slots below count are always filled by boot_owned_ranges.
         ranges[index] = slot.expect("boot-owned slot below count is filled");
@@ -346,8 +341,7 @@ mod tests {
             reserved: 0,
         }];
         let info = info_with(&regions, 0x3000, 0x2000);
-        let mut allocator =
-            unsafe { PhysicalFrameAllocator::try_from_boot_info(&info) }.unwrap();
+        let mut allocator = unsafe { PhysicalFrameAllocator::try_from_boot_info(&info) }.unwrap();
 
         assert_eq!(reserve_boot_owned_ranges(&mut allocator, &info), Ok(3));
         assert_eq!(allocator.allocate().unwrap().start, 0x1000);
