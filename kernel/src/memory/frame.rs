@@ -14,6 +14,15 @@ pub struct Frame {
 }
 
 pub const PAGE_SIZE: u64 = 4096;
+/// Fixed reservation ledger for boot-owned physical ranges. The v1 boot
+/// protocol currently derives at most five ranges.
+pub const MAX_PHYSICAL_RESERVED_RANGES: usize = 8;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct ReservedPhysicalRange {
+    start: u64,
+    end: u64,
+}
 
 pub const fn frame_at(address: u64) -> Frame {
     Frame {
@@ -49,6 +58,9 @@ pub struct PhysicalFrameAllocator {
     region_index: u32,
     cursor: u64,
     end: u64,
+    reserved_ranges: [Option<ReservedPhysicalRange>; MAX_PHYSICAL_RESERVED_RANGES],
+    reserved_count: usize,
+    allocations_started: bool,
 }
 
 impl PhysicalFrameAllocator {
@@ -59,6 +71,9 @@ impl PhysicalFrameAllocator {
             region_index: 0,
             cursor: 0,
             end: 0,
+            reserved_ranges: [None; MAX_PHYSICAL_RESERVED_RANGES],
+            reserved_count: 0,
+            allocations_started: false,
         }
     }
 
@@ -121,6 +136,9 @@ impl PhysicalFrameAllocator {
             region_index: 0,
             cursor: 0,
             end: 0,
+            reserved_ranges: [None; MAX_PHYSICAL_RESERVED_RANGES],
+            reserved_count: 0,
+            allocations_started: false,
         };
         allocator.select_next_region();
         Ok(allocator)
@@ -164,16 +182,80 @@ impl PhysicalFrameAllocator {
         self.end = 0;
     }
 
+    /// Check a physical byte range before reserving it. Reservations must be
+    /// installed before the first allocation; exact/contained repeats remain
+    /// idempotent so the boot handoff can be safely revalidated.
+    pub fn check_reserve_range(&self, start: u64, length: u64) -> Result<(), BitmapFrameError> {
+        if length == 0 {
+            return Err(BitmapFrameError::EmptyRange);
+        }
+        let end = start
+            .checked_add(length)
+            .ok_or(BitmapFrameError::RangeOverflow)?;
+        if self.reserved_ranges[..self.reserved_count]
+            .iter()
+            .flatten()
+            .any(|range| start >= range.start && end <= range.end)
+        {
+            return Ok(());
+        }
+        if self.allocations_started {
+            return Err(BitmapFrameError::ReservationAfterAllocation);
+        }
+        if self.reserved_count >= MAX_PHYSICAL_RESERVED_RANGES {
+            return Err(BitmapFrameError::ReservationCapacityExceeded);
+        }
+        Ok(())
+    }
+
+    /// Permanently exclude every 4 KiB frame intersecting the byte range.
+    /// This allocator is monotonic, so reservations are accepted only before
+    /// the first frame is handed out.
+    pub fn reserve_range(&mut self, start: u64, length: u64) -> Result<(), BitmapFrameError> {
+        self.check_reserve_range(start, length)?;
+        let end = start
+            .checked_add(length)
+            .ok_or(BitmapFrameError::RangeOverflow)?;
+        if self.reserved_ranges[..self.reserved_count]
+            .iter()
+            .flatten()
+            .any(|range| start >= range.start && end <= range.end)
+        {
+            return Ok(());
+        }
+        self.reserved_ranges[self.reserved_count] = Some(ReservedPhysicalRange { start, end });
+        self.reserved_count += 1;
+        Ok(())
+    }
+
+    fn frame_intersects_reservation(&self, frame_start: u64) -> bool {
+        let Some(frame_end) = frame_start.checked_add(PAGE_SIZE) else {
+            return true;
+        };
+        self.reserved_ranges[..self.reserved_count]
+            .iter()
+            .flatten()
+            .any(|range| range.start < frame_end && frame_start < range.end)
+    }
+
     pub fn allocate(&mut self) -> Option<Frame> {
-        if self.cursor == 0 || self.cursor >= self.end {
-            self.select_next_region();
+        loop {
+            if self.cursor == 0 || self.cursor >= self.end {
+                self.select_next_region();
+            }
+            if self.cursor == 0 {
+                return None;
+            }
+
+            let start = self.cursor;
+            self.cursor = self.cursor.checked_add(PAGE_SIZE).unwrap_or(0);
+            if self.frame_intersects_reservation(start) {
+                continue;
+            }
+
+            self.allocations_started = true;
+            return Some(Frame { start });
         }
-        if self.cursor == 0 {
-            return None;
-        }
-        let frame = Frame { start: self.cursor };
-        self.cursor = self.cursor.checked_add(PAGE_SIZE).unwrap_or(0);
-        Some(frame)
     }
 
     pub fn remaining_in_current_region(&self) -> u64 {
@@ -191,6 +273,8 @@ pub enum BitmapFrameError {
     RangeOutOfBounds,
     FrameAlreadyAllocated,
     ReservedFrame,
+    ReservationAfterAllocation,
+    ReservationCapacityExceeded,
 }
 
 pub struct BitmapFrameAllocator<const MAX_BITMAP_WORDS: usize> {
@@ -441,6 +525,47 @@ mod tests {
         assert_eq!(allocator.allocate().unwrap().start, 0x5000);
         assert_eq!(allocator.allocate().unwrap().start, 0x6000);
         assert!(allocator.allocate().is_none());
+    }
+
+    #[test]
+    fn physical_allocator_skips_every_frame_intersecting_a_reservation() {
+        let regions = [MemoryRegion {
+            base: 0x1000,
+            length: 0x8000,
+            kind: MEMORY_REGION_USABLE,
+            reserved: 0,
+        }];
+        let info = boot_info(&regions);
+        let mut allocator = unsafe { PhysicalFrameAllocator::try_from_boot_info(&info) }.unwrap();
+
+        // [0x2800, 0x4000) intersects frames 0x2000 and 0x3000.
+        allocator.reserve_range(0x2800, 0x1800).unwrap();
+        // A fully covered reservation is idempotent.
+        allocator.reserve_range(0x3000, 0x1000).unwrap();
+
+        assert_eq!(allocator.allocate().unwrap().start, 0x1000);
+        assert_eq!(allocator.allocate().unwrap().start, 0x4000);
+        assert_eq!(allocator.allocate().unwrap().start, 0x5000);
+    }
+
+    #[test]
+    fn physical_allocator_rejects_new_reservations_after_allocation() {
+        let regions = [MemoryRegion {
+            base: 0x1000,
+            length: 0x4000,
+            kind: MEMORY_REGION_USABLE,
+            reserved: 0,
+        }];
+        let info = boot_info(&regions);
+        let mut allocator = unsafe { PhysicalFrameAllocator::try_from_boot_info(&info) }.unwrap();
+
+        assert_eq!(allocator.allocate().unwrap().start, 0x1000);
+        assert_eq!(
+            allocator.reserve_range(0x2000, 0x1000),
+            Err(BitmapFrameError::ReservationAfterAllocation)
+        );
+        // Rejected reservation did not skip or consume the next frame.
+        assert_eq!(allocator.allocate().unwrap().start, 0x2000);
     }
 
     #[test]
