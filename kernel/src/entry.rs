@@ -3,7 +3,7 @@
 use awe_boot_protocol::{BootInfo, validate};
 
 use crate::boot_phase::{BootPhase, BootProgress};
-use crate::memory::PhysicalFrameAllocator;
+use crate::memory::{PhysicalFrameAllocator, reserve_boot_owned_ranges};
 
 #[repr(u8)]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -14,6 +14,7 @@ pub enum KernelBootStatus {
     NoCpu = 3,
     NoUsableMemory = 4,
     InvalidMemoryMap = 5,
+    BootReservationFailed = 6,
 }
 
 pub struct KernelContext {
@@ -59,6 +60,10 @@ pub fn kernel_entry(info: &BootInfo) -> KernelBootStatus {
         Ok(allocator) => allocator,
         Err(_) => return KernelBootStatus::InvalidMemoryMap,
     };
+    let _reserved_range_count = match reserve_boot_owned_ranges(&mut frames, info) {
+        Ok(count) => count,
+        Err(_) => return KernelBootStatus::BootReservationFailed,
+    };
     if frames.allocate().is_none() {
         return KernelBootStatus::NoUsableMemory;
     }
@@ -67,9 +72,13 @@ pub fn kernel_entry(info: &BootInfo) -> KernelBootStatus {
     {
         use crate::arch::x86_64::gdt::init_gdt;
         use crate::arch::x86_64::interrupts::init_pic;
-        use crate::arch::x86_64::serial_write_str;
+        use crate::arch::x86_64::{serial_write_str, serial_write_u64};
         use crate::memory::allocator::init_kernel_heap;
         use crate::platform::pit::Pit;
+
+        serial_write_str("AWEOS: boot-owned physical ranges reserved = ");
+        serial_write_u64(_reserved_range_count as u64);
+        serial_write_str("\r\n");
 
         static mut KERNEL_STACK: [u8; 65536] = [0; 65536];
 

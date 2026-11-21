@@ -110,12 +110,19 @@ remain unimplemented. Keep the memory-isolation and userspace execution gates
 unchecked until those runtime milestones are proven.
 
 
-## Checked user-copy and physical-frame reservation update (2026-11-20)
+## Checked user-copy and live boot-owned frame reservation update (2026-11-21)
 
 PR #78 merged the checked physical user-copy contract into `main`. It validates the complete user range before calling a page-bounded `PhysicalAccess` backend and rejects requests above 1 MiB. Its host tests cover page-boundary copies, validation-before-access, backend faults and per-page segmentation. This does not yet provide a live physical-access backend or Ring 3 isolation.
 
-The `PhysicalTablePool` implementation can allocate, zero, access and release owned physical table frames through a caller-supplied `DirectMapWindow`, but the boot path does not yet create that window or instantiate the pool.
+PR #79 (reservation-aware bitmap frame allocation) and PR #80 (boot-owned range derivation and all-or-nothing reservation) are merged into `main`.
 
-PR #79 (`feat/reserved-physical-frames-2026-11-20`) adds explicit, bounded-range reservation to `BitmapFrameAllocator` and passed all 16 PR check-runs on source head `a225e73280a27cf4170c377175c24a23e1454d94`; the PR remains draft and unmerged. The Quality Gate and CI Diagnostics each reported 405 kernel tests plus 3 kernel-bin tests with zero failures. This is still only an allocator primitive: it does not reserve any actual boot memory until the boot handoff integration supplies and validates those ranges. The next integration must reserve the kernel image, loader/boot metadata, memory-map descriptors, bootstrap page tables and stacks before exposing frames to the physical table pool.
+PR #81 (`feat/live-boot-memory-reservations-2026-11-21`) connects the reservation helper to the monotonic `PhysicalFrameAllocator` used by `kernel_entry`. It adds a bounded reservation ledger, atomic batch preflight/commit, frame skipping for every page intersecting a boot-owned range, and a distinct fatal boot status on reservation failure. The x86_64 Multiboot/PVH image now exports `__kernel_start` and `__kernel_end`; the kernel binary copies those checked bounds into `BootInfo.kernel_base/kernel_size` before entering the kernel.
 
-Until that integration and runtime tests exist, keep per-process CR3 switching, TLB invalidation, Ring 3, QEMU user/kernel isolation and production process isolation unchecked.
+The exact PR #81 head `17b54cc64eb07bec95aa3922597c4f934808efc0` passed **15/15 GitHub check-runs**. This includes `cargo check --workspace --all-targets`, `cargo test --workspace`, formatting, Clippy, the UEFI loader build, the bootable ISO QEMU smoke test, the exception-injection self-test, the VirtIO runtime workflow, the multi-architecture image workflow, the Cloud Security/Release checks and all four AOSIN installer jobs. The new allocator/reservation regression tests passed. PR #81 remains a draft and is not merged.
+
+The QEMU VirtIO workflow confirms that a VirtIO PCI device is exposed and that the kernel reaches RUNNING. It does **not** demonstrate block request/completion, read-after-write, flush or durable persistence.
+
+This is still not full physical memory management. The live allocator is monotonic, is only probed once during kernel entry, and is not yet retained as a global allocator. The `PhysicalTablePool` implementation can allocate, zero, access and release owned physical table frames through a caller-supplied `DirectMapWindow`, but the boot path does not yet create that window or instantiate the pool. PR #81 does not add CR3 switching, TLB invalidation, Ring 3, QEMU user/kernel isolation or production process isolation.
+
+Until those runtime milestones exist, keep per-process CR3 switching, TLB invalidation, Ring 3, QEMU user/kernel isolation and production process isolation unchecked.
+

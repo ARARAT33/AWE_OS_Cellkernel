@@ -1,4 +1,42 @@
 
+
+#### Validation completion — PR #81 exact head `17b54cc64eb07bec95aa3922597c4f934808efc0`
+
+- **Result:** all **15/15 check-runs passed**, with zero failed or pending checks. PR #81 remains a draft; no merge or main-branch update was performed.
+- **Workspace Build & Validation:** passed `cargo check --workspace --all-targets`, `cargo test --workspace`, `cargo fmt --all -- --check`, boot-image build and artifact verification. The new frame-reservation, batch-atomicity, live-allocator integration and linker-range tests all passed.
+- **Clippy / Quality Gate:** passed with `-D warnings`; no lint suppressions were added.
+- **Bootable Image Pipeline:** both jobs passed. The ISO boot smoke test reached `AWEOS: kernel is alive`; the exception-injection QEMU self-test passed.
+- **VirtIO Runtime:** passed. QEMU exposed a `virtio-blk-pci` device and the kernel reached RUNNING; this is device-presence/boot evidence only, not block I/O or persistence evidence.
+- **Other gates:** UEFI loader, Multi-Architecture Images, Cloud Security, Cloud Release Contract, CI Diagnostics and all four AOSIN installer jobs passed.
+- **First-attempt failures:** the initial branch head failed formatting and Clippy due to rustfmt differences and unnecessary `unsafe` around immutable linker symbols. Both were corrected; the final tested head is clean.
+- **Next:** keep PR #81 unmerged pending review, then prioritize a verified direct-map window and live `PhysicalTablePool` instantiation with QEMU allocation/zeroing/reclamation evidence.
+
+
+
+#### CI follow-up — PR #81 first validation pass
+
+- The first PR workflow set correctly caught two issues before merge: rustfmt differences in `boot_reserve.rs` and the linker-bound test, plus two `clippy::unused_unsafe` diagnostics around `addr_of!` of the immutable linker symbols.
+- Corrected the formatting and removed the unnecessary unsafe blocks; no lint suppression was added.
+- The first CI attempt is recorded as **failed**, not passed. The workspace test job was stopped at the formatting gate, and Clippy failed on the two unnecessary unsafe blocks. A fresh full workflow run is required for the corrected head.
+- Main-head baseline successes remain separate from this branch's validation.
+
+
+
+#### 2026-11-21 — Run 11: wire boot-owned reservations into the live boot path
+
+- **Baseline:** continued from `main` at `b16abe9c55135240393b9689d0cab54504de0681`, after PR #80 merged. The previous run had derived boot-owned ranges but explicitly left them disconnected from `kernel_entry`.
+- **Repository audit:** the default branch has 30 Cargo workspace members and 11 GitHub Actions workflows. The current main-head runs for the workspace CI, Quality Gate, Bootable Image Pipeline (including exception-injection QEMU self-test), VirtIO Runtime, Cloud Security Gate, Multi-Architecture Images and all four AOSIN installer jobs completed successfully. The latest PR #80 validation reported 16/16 checks green. These are the baseline results, not validation of this new branch.
+- **Implemented on `feat/live-boot-memory-reservations-2026-11-21`:**
+  - Extended the live monotonic `PhysicalFrameAllocator` with a bounded reservation ledger. It now rejects new reservations after allocation begins and skips every 4 KiB frame intersecting a reserved byte range; repeated fully-contained reservations are idempotent.
+  - Implemented the existing `FrameReserver` contract for `PhysicalFrameAllocator`, so `reserve_boot_owned_ranges` can operate on the allocator actually used by `kernel_entry`.
+  - Wired boot-owned range derivation/reservation into `kernel_entry` before the first frame allocation. Reservation failure now returns a distinct fatal boot status instead of silently continuing.
+  - Added linker-defined `__kernel_start` / `__kernel_end` bounds and populate `BootInfo.kernel_base/kernel_size` from those symbols in the Multiboot/PVH kernel binary, covering the kernel image, boot page tables, boot stacks and in-image memory-map storage.
+  - Added regression tests for intersecting-frame exclusion, idempotent reservations, late-reservation rejection, boot-owned reservation through the live allocator, and checked linker-bound arithmetic.
+- **Files changed:** `kernel/src/memory/frame.rs`, `kernel/src/memory/boot_reserve.rs`, `kernel/src/entry.rs`, `kernel-bin/src/main.rs`, `kernel-bin/linker.ld`, and this log.
+- **Validation:** pending PR CI on the exact branch head. No local Rust/QEMU run is claimed in this environment. The prior main-head green runs are not counted as validation of this change.
+- **Remaining limits:** the live allocator is still monotonic (no frame release), and this change does not construct a direct map or instantiate `PhysicalTablePool`. The linker range is for the current x86_64 Multiboot/PVH image; other boot/architecture loaders must populate their own image bounds. No CR3 switching, TLB invalidation, Ring 3, persistent VirtIO I/O or NIC-backed CellNet transport is claimed.
+- **Next priority:** after this branch is validated, construct a direct-map window only from mappings proven active, instantiate the physical table pool over reserved frames, and add QEMU evidence that table frames are allocated, zeroed, mapped and safely reclaimed.
+
 #### 2026-11-20 — Run: PR #80 validated and merged-ready; boot-owned ranges green
 
 - **Validation (head 9e6a3d6 / formatted tree):** all 16 PR check-runs
