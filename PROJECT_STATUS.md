@@ -2,7 +2,7 @@
 
 **Project track:** AWE development project #2  
 **Status:** Active development / preserved for continued work  
-**Date:** 2026-11-16  
+**Date:** 2026-11-21  
 **Primary branch:** `main`  
 **Preserved snapshot:** `archive/pre-restructure-2026-08-27`
 
@@ -25,21 +25,24 @@ The immediate focus is **engineering the bootable and testable AWE_OS core**, wi
 7. AYUI and first-party userspace
 8. recovery, validation and release evidence
 
-## Current implementation evidence (2026-11-20)
+## Current implementation evidence (2026-11-21)
 
-- PR #78 (checked physical user-copy layer) is merged into `main`; the current main head is `d781f94344b700021ac5ce9bf2ce13f84426b1f2`.
-- PR #79 adds reservation-aware bitmap frame allocation. Its final code head `a225e73280a27cf4170c377175c24a23e1454d94` passed all 16 PR check-runs, including 405 kernel tests + 3 kernel-bin tests with zero failures; it remains a draft and is not merged. This does not yet reserve any live boot ranges.
-- On that exact main head, the seven latest push workflows completed successfully: Quality Gate, Bootable Image Pipeline, AOSIN installers, Multi-Architecture Images, Cloud Security Gate, CI Pipeline and VirtIO Runtime. The Quality Gate's formatting, workspace check, workspace tests, Clippy and UEFI-loader steps passed.
-- QEMU x86_64 evidence remains: boot protocol validated; kernel reaches `RUNNING`; PIT/timer interrupts drive a 3-kernel-thread preemptive scheduler. The captured run reported `switches=44` and 15 dispatches per thread. This is kernel-thread scheduling evidence, not userspace process isolation.
+- PR #78 (checked physical user-copy layer) is merged into `main`.
+- PR #79 (reservation-aware bitmap frame allocation) and PR #80 (boot-owned range derivation and all-or-nothing reservation) are both merged into `main`. The current `main` head is `b16abe9c55135240393b9689d0cab54504de0681`.
+- PR #81, `feat/live-boot-memory-reservations-2026-11-21`, is still a draft and is **not merged**. Its exact head `17b54cc64eb07bec95aa3922597c4f934808efc0` passed **15/15 check-runs** (0 failures), including workspace check/tests/format, Clippy, UEFI loader, Multi-Architecture Images, Bootable Image Pipeline, exception-injection QEMU self-test, VirtIO Runtime, Cloud Security/Release and all four AOSIN installer jobs.
+- The PR #81 workspace test output explicitly passed the new physical-reservation tests: intersecting-frame exclusion, atomic capacity failure, rejection of late reservations, live-allocator boot-owned reservation, and checked kernel-image bounds.
+- QEMU evidence on the PR #81 head: the bootable ISO smoke test reached `AWEOS: kernel is alive`; the exception-injection self-test passed. The VirtIO runtime workflow also passed its test suite and confirmed a VirtIO PCI device is visible while the kernel reaches RUNNING. That does **not** prove block read/write, flush or durable persistence.
+- QEMU x86_64 evidence from the previous scheduler milestone remains: the kernel reaches RUNNING and PIT/timer interrupts drive a 3-kernel-thread preemptive scheduler. This is kernel-thread scheduling evidence, not userspace process isolation.
 - Memory: early x86_64 paging and CR3 bootstrap exist. A bounded `AddressSpace` contract, four-level PML4 → PDPT → PD → PT builder, ownership/rollback layer and `PhysicalTablePool` over real physical frames exist. The physical pool is host-tested but is not instantiated by the live boot path.
-- The checked physical user-copy helper now exists: it validates the full user range before invoking a page-bounded `PhysicalAccess` backend and caps a request at 1 MiB. It is not yet connected to a live boot direct map or a production physical-access backend.
+- PR #81 adds a bounded reservation ledger to the live monotonic `PhysicalFrameAllocator`, wires boot-owned range reservation into `kernel_entry` before its first frame probe, and obtains the kernel image bounds from linker symbols. The allocator is still local/monotonic and is not yet connected to `PhysicalTablePool`.
+- The checked physical user-copy helper exists: it validates the full user range before invoking a page-bounded `PhysicalAccess` backend and caps a request at 1 MiB. It is not yet connected to a live boot direct map or a production physical-access backend.
 - Storage: bounded block-device, GPT, VFS, journaling and RAM-disk contracts/tests exist. QEMU exposes VirtIO PCI and boots with the device attached, but actual VirtIO block request/completion, read-after-write and durable persistence are not proven.
 - Networking: protocol/transport contracts exist; a real NIC-backed network path and multi-node CellNet runtime are not proven.
-- Architecture: current boot-image workflows build `x86_64-unknown-none` and `x86_64-unknown-uefi` only. ARM64 and RISC-V are not runtime-validated.
+- Architecture: current boot-image workflows build x86_64 BIOS/Multiboot and UEFI artifacts. ARM64 and RISC-V are not runtime-validated.
 
 ### Explicitly not complete
 
-The live boot path still does not construct a reservation-aware frame allocator from the boot memory map, install a verified direct-map window for the physical table pool, or instantiate that pool. Per-process CR3 switching, TLB invalidation/shootdown, integrated page-table lifetime/reclamation, Ring 3 entry and QEMU user/kernel isolation are not enabled. The scheduler remains single-core and kernel-thread-only. The checked user-copy helper is a contract over a supplied backend, not proof of live user-memory isolation. VirtIO device presence and successful boot do not prove block I/O or durable storage. Do not describe the OS as having production process isolation, persistent VirtIO storage, a production network stack, or ARM64/RISC-V support.
+PR #81 now constructs the live monotonic `PhysicalFrameAllocator`, derives and batch-reserves the kernel image, BootInfo structure, memory-map descriptors, framebuffer and RSDP page, and performs that reservation before the first frame probe. The x86_64 Multiboot/PVH kernel image range comes from linker-defined bounds. This path passed the PR QEMU boot smoke test. The allocator is still discarded after the probe: it has no frame release/reclamation and is not yet the global allocator or the backing store for `PhysicalTablePool`. No verified direct-map window is installed for the pool. Per-process CR3 switching, TLB invalidation/shootdown, integrated page-table lifetime/reclamation, Ring 3 entry and QEMU user/kernel isolation are not enabled. The scheduler remains single-core and kernel-thread-only. The checked user-copy helper is a contract over a supplied backend, not proof of live user-memory isolation. VirtIO PCI visibility and successful boot do not prove block I/O or durable storage. Do not describe the OS as having production process isolation, persistent VirtIO storage, a production network stack, or ARM64/RISC-V support.
 
 ## Project-state rules
 
@@ -68,10 +71,10 @@ That branch is the recovery point for the previous repository state and should n
 
 Prioritize the next missing runtime boundary, not additional feature labels:
 
-1. Review and merge PR #79 only after confirming its final head remains green; the current tested source head passed 16/16 checks, but the PR remains draft and unmerged.
-2. Derive reservations from the validated boot handoff and linker symbols: kernel image, loader-owned pages, `BootInfo`, memory-map descriptors, bootstrap PML4/PDPT/PD and boot stacks. Keep unknown ownership reserved; never assume a region is free solely because it is addressable.
-3. Construct a `DirectMapWindow` only over physical pages proven reachable in the active page tables, then instantiate `PhysicalTablePool` over the reservation-aware allocator. Add QEMU evidence that allocated table frames are real, zeroed, writable and safely reclaimable.
-4. Build each process root with the supervisor-only kernel mappings preserved; define root/table ownership and teardown before activating a process address space.
+1. Review PR #81 before merge; its current draft head passed 15/15 checks, but it remains unmerged and must not be treated as part of `main`.
+2. Design a `DirectMapWindow` only over physical pages proven reachable in the active page tables. Do not assume that an identity mapping or an addressable physical range is a permanent direct map.
+3. Instantiate `PhysicalTablePool` using the reservation-aware allocator; prove that table frames are allocated, zeroed, mapped, owned and safely released, with rollback tests.
+4. Build each process root with supervisor-only kernel mappings preserved; define root/table ownership and teardown before activating a process address space.
 5. Implement a controlled CR3 switch and the matching local TLB invalidation policy; add failure-path and QEMU isolation tests before any Ring 3 entry.
 6. Connect the checked user-copy layer to a verified physical-access backend and test mapped/unmapped, read-only, cross-page and fault cases in QEMU.
 7. Implement actual VirtIO block request/completion, read-after-write, flush and power-loss recovery tests.
