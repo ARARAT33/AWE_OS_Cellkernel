@@ -69,7 +69,11 @@ pub fn kernel_entry(info: &BootInfo) -> KernelBootStatus {
     // table-frame arena through the boot reservation ledger and prove that
     // a real PhysicalTablePool allocates, zeroes, maps, releases and
     // reclaims page-table frames over it. Production builds do not run it.
-    #[cfg(all(feature = "kernel-selftest", target_arch = "x86_64", target_os = "none"))]
+    #[cfg(all(
+        feature = "kernel-selftest",
+        target_arch = "x86_64",
+        target_os = "none"
+    ))]
     crate::memory::table_arena::boot_table_pool_probe(&mut frames);
 
     if frames.allocate().is_none() {
