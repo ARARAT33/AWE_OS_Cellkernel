@@ -32,11 +32,24 @@ use super::table_frames::FrameReleaseError;
 /// while keeping the reserved range at 64 KiB.
 pub const BOOT_TABLE_ARENA_FRAMES: usize = 16;
 
+/// The greatest number of frames a TableArena can track. The allocation
+/// bitmap is a fixed-size array, so a generic arena cannot exceed this
+/// bound; larger arenas must come as future work that buys real
+/// allocation-free storage for the bitmap.
+pub const TABLE_ARENA_MAX_FRAMES: usize = 128;
+
+/// Fixed bitmap storage for one TableArena. Non-generic on purpose: a
+/// stable-rust const generic may not be used inside an array-length
+/// expression.
+const TABLE_ARENA_BITMAP_WORDS: usize = TABLE_ARENA_MAX_FRAMES / 64;
+
 /// Fail-closed construction errors for a TableArena.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum TableArenaError {
     /// A zero-page arena cannot hold any table.
     ZeroFrames,
+    /// The requested arena exceeds TABLE_ARENA_MAX_FRAMES.
+    TooManyFrames,
     /// The arena byte length overflows u64.
     LengthOverflow,
     /// The underlying direct-map window rejected the configuration.
@@ -51,17 +64,21 @@ pub enum TableArenaError {
 pub struct TableArena<const PAGES: usize> {
     phys_base: u64,
     window: DirectMapWindow,
-    allocated: [u64; (PAGES + 63) / 64],
+    allocated: [u64; TABLE_ARENA_BITMAP_WORDS],
     allocated_count: usize,
 }
 
 impl<const PAGES: usize> TableArena<PAGES> {
     /// Open an arena at phys_base. The virtual mapping of the returned
-    /// window is the caller's safety contract; construction only validates
-    /// shape (alignment, non-zero length, overflow).
+    /// window is the caller-provided safety contract; construction only
+    /// validates shape (alignment, non-zero length, overflow) and the
+    /// fixed bitmap bound.
     pub fn open(phys_base: u64, virt_offset: u64) -> Result<Self, TableArenaError> {
         if PAGES == 0 {
             return Err(TableArenaError::ZeroFrames);
+        }
+        if PAGES > TABLE_ARENA_MAX_FRAMES {
+            return Err(TableArenaError::TooManyFrames);
         }
         let bytes = (PAGES as u64)
             .checked_mul(PAGE_SIZE)
@@ -71,7 +88,7 @@ impl<const PAGES: usize> TableArena<PAGES> {
         Ok(Self {
             phys_base,
             window,
-            allocated: [0u64; (PAGES + 63) / 64],
+            allocated: [0u64; TABLE_ARENA_BITMAP_WORDS],
             allocated_count: 0,
         })
     }
@@ -183,47 +200,33 @@ mod live_probe {
         use crate::arch::x86_64::{serial_write_str, serial_write_u64};
 
         let Some(base) = allocator.peek_next_frame().map(|frame| frame.start) else {
-            serial_write_str(
-                "AWEOS: [cell:tables] skip: no frame available
-",
-            );
+            serial_write_str("AWEOS: [cell:tables] skip: no frame available\n");
             return;
         };
         let Some(bytes) = (BOOT_TABLE_ARENA_FRAMES as u64).checked_mul(PAGE_SIZE) else {
-            serial_write_str(
-                "AWEOS: [cell:tables] skip: arena length overflow
-",
-            );
+            serial_write_str("AWEOS: [cell:tables] skip: arena length overflow\n");
             return;
         };
         if base >= PROVEN_IDENTITY_LIMIT {
             serial_write_str(
-                "AWEOS: [cell:tables] skip: candidate outside the proven 1 GiB identity map
-",
+                "AWEOS: [cell:tables] skip: candidate outside the proven 1 GiB identity map\n",
             );
             return;
         }
         if allocator.range_intersects_reservation(base, bytes) {
             serial_write_str(
-                "AWEOS: [cell:tables] skip: candidate intersects a boot-owned range
-",
+                "AWEOS: [cell:tables] skip: candidate intersects a boot-owned range\n",
             );
             return;
         }
         if reserve_table_arena(allocator, base, BOOT_TABLE_ARENA_FRAMES).is_err() {
-            serial_write_str(
-                "AWEOS: [cell:tables] skip: arena reservation failed
-",
-            );
+            serial_write_str("AWEOS: [cell:tables] skip: arena reservation failed\n");
             return;
         }
         let mut arena = match TableArena::<BOOT_TABLE_ARENA_FRAMES>::open(base, base) {
             Ok(arena) => arena,
             Err(_) => {
-                serial_write_str(
-                    "AWEOS: [cell:tables] skip: arena window rejected
-",
-                );
+                serial_write_str("AWEOS: [cell:tables] skip: arena window rejected\n");
                 return;
             }
         };
@@ -235,23 +238,14 @@ mod live_probe {
 
         serial_write_str("AWEOS: [cell:tables] arena phys=0x");
         serial_write_u64(base);
-        serial_write_str(
-            " frames=16 window=identity
-",
-        );
+        serial_write_str(" frames=16 window=identity\n");
 
         let Some(frame) = pool.allocate() else {
-            serial_write_str(
-                "AWEOS: [cell:tables] FAIL: first allocation
-",
-            );
+            serial_write_str("AWEOS: [cell:tables] FAIL: first allocation\n");
             return;
         };
         let Some(table) = pool.table_mut(frame) else {
-            serial_write_str(
-                "AWEOS: [cell:tables] FAIL: table access
-",
-            );
+            serial_write_str("AWEOS: [cell:tables] FAIL: table access\n");
             return;
         };
         table.set(0, PageTableEntry::new(base, PageFlags::PRESENT));
@@ -279,10 +273,7 @@ mod live_probe {
             None => false,
         };
 
-        serial_write_str(
-            "AWEOS: [cell:tables] allocated=1 zeroed=yes
-",
-        );
+        serial_write_str("AWEOS: [cell:tables] allocated=1 zeroed=yes\n");
         serial_write_str("AWEOS: [cell:tables] write/readback=");
         serial_write_u64(readback as u64);
         serial_write_str(" released=");
@@ -291,20 +282,11 @@ mod live_probe {
         serial_write_u64(foreign_rejected as u64);
         serial_write_str(" reused-and-rezeroed=");
         serial_write_u64(rebuilt as u64);
-        serial_write_str(
-            "
-",
-        );
+        serial_write_str("\n");
         if readback && released && rebuilt {
-            serial_write_str(
-                "AWEOS: [cell:tables] probe result: PASS
-",
-            );
+            serial_write_str("AWEOS: [cell:tables] probe result: PASS\n");
         } else {
-            serial_write_str(
-                "AWEOS: [cell:tables] probe result: FAIL
-",
-            );
+            serial_write_str("AWEOS: [cell:tables] probe result: FAIL\n");
         }
     }
 }
@@ -381,6 +363,16 @@ mod tests {
         assert_eq!(
             TableArena::<4>::open(u64::MAX - 0xfff, 0).err(),
             Some(TableArenaError::Window(DirectMapError::Overflow))
+        );
+    }
+
+    #[test]
+    fn arena_rejects_arenas_larger_than_the_fixed_bitmap() {
+        let memory = PhysicalMemory::new();
+        let base = memory.as_u64();
+        assert_eq!(
+            TableArena::<{ TABLE_ARENA_MAX_FRAMES + 1 }>::open(base, base).err(),
+            Some(TableArenaError::TooManyFrames)
         );
     }
 
@@ -544,7 +536,11 @@ mod tests {
         for (index, range) in ranges.iter_mut().enumerate() {
             *range = (0x1000 + (index as u64 * 0x1000), 0x1000);
         }
-        allocator.reserve_ranges(&ranges).unwrap();
+        // BitmapFrameAllocator only exposes the single-range reserve_range
+        // API; reserving frame by frame fills the whole bitmap.
+        for (_, range) in ranges.iter() {
+            allocator.reserve_range(range.0, range.1).unwrap();
+        }
         // The bitmap is fully reserved; nothing is left for a new arena and
         // the conflicting request reserves nothing new.
         assert_eq!(
