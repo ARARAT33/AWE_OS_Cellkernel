@@ -29,7 +29,15 @@ jobs:
 
           repo_json="$(gh api "repos/$GH_REPO")"
           auto_merge_enabled="$(jq -r '.allow_auto_merge // false' <<<"$repo_json")"
-          mapfile -t branches < <(gh api --paginate "repos/$GH_REPO/branches?per_page=100" --jq '.[].name')
+
+          # Capture the API result in this shell so a failed paginated request
+          # is not hidden by process substitution under strict error handling.
+          branch_names="$(gh api --paginate "repos/$GH_REPO/branches?per_page=100" --jq '.[].name')"
+          branches=()
+          if [[ -n "$branch_names" ]]; then
+            mapfile -t branches <<<"$branch_names"
+          fi
+
           prs_json="$(gh pr list --repo "$GH_REPO" --state open --limit 500 --json number,headRefName,baseRefName,isDraft)"
 
           untracked=()
@@ -43,15 +51,15 @@ jobs:
 
           {
             echo "### Safe branch integration audit"
-            echo "- Default branch: `$DEFAULT_BRANCH`"
-            echo "- Branches discovered: ${#branches[@]}"
-            echo "- Open pull requests: $(jq 'length' <<<"$prs_json")"
-            echo "- Branches without an open PR: ${#untracked[@]}"
+            printf -- '- Default branch: %s\n' "$DEFAULT_BRANCH"
+            printf -- '- Branches discovered: %s\n' "${#branches[@]}"
+            printf -- '- Open pull requests: %s\n' "$(jq 'length' <<<"$prs_json")"
+            printf -- '- Branches without an open PR: %s\n' "${#untracked[@]}"
             if [[ ${#untracked[@]} -gt 0 ]]; then
               echo
               echo "#### Branches awaiting an explicit PR proposal"
               for branch in "${untracked[@]}"; do
-                echo "- `$branch`"
+                printf -- '- %s\n' "$branch"
               done
             fi
           } >> "$GITHUB_STEP_SUMMARY"
@@ -79,8 +87,8 @@ jobs:
             if [[ "$count" -gt 0 && "$all_passed" == "true" ]]; then
               echo "All reported checks passed for PR #$number; requesting GitHub auto-merge."
               gh pr merge "$number" --repo "$GH_REPO" --merge --auto
-              echo "- PR #$number (`$head`): all reported checks passed; auto-merge requested." >> "$GITHUB_STEP_SUMMARY"
+              printf -- '- PR #%s (%s): all reported checks passed; auto-merge requested.\n' "$number" "$head" >> "$GITHUB_STEP_SUMMARY"
             else
-              echo "- PR #$number (`$head`): left untouched (missing, pending or failing checks)." >> "$GITHUB_STEP_SUMMARY"
+              printf -- '- PR #%s (%s): left untouched (missing, pending or failing checks).\n' "$number" "$head" >> "$GITHUB_STEP_SUMMARY"
             fi
           done < <(jq -r '.[] | [.number, .headRefName, .baseRefName, (.isDraft|tostring)] | @tsv' <<<"$prs_json")
