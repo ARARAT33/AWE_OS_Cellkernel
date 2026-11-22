@@ -9,7 +9,7 @@
   - Handled an empty branch response explicitly so it does not become a one-element empty array.
   - Kept the existing conservative policy: no PRs are created automatically, and no PR is merged unless repository auto-merge is enabled and all reported checks succeed.
 - **Files changed:** .github/workflows/branch-integration.yml, docs/AI-DEVELOPMENT-LOG.md.
-- **Validation:** source was reviewed against the failing run's exact log. A local shell syntax/summary-rendering check is pending; PR Actions validation is pending. The green main CI result is baseline evidence only and is not claimed as validation of this branch.
+- **Validation:** local Bash syntax check passed for the targeted summary-rendering harness. A functional rendering test with `main`, `archive/...` and `feat/...` branch names passed and emitted the literal names without attempting to execute them. The full workflow has not yet run on this branch; PR Actions validation is pending. The green main CI result is baseline evidence only and is not claimed as validation of this branch.
 - **Kernel scope:** no kernel runtime changes were made in this run. No direct-map, page-table-pool, CR3, TLB, Ring 3, persistent storage or NIC-backed networking capability is newly claimed.
 - **Next priorities:** validate this workflow fix; then resume the kernel memory path by proving the active identity/direct-map bounds in QEMU, connecting an ownership-tracked allocator to PhysicalTablePool, and testing table-frame allocation, zeroing, mapping and reclamation before enabling any address-space activation.
 
