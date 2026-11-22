@@ -1,3 +1,16 @@
+#### 2026-11-22 — Run 13: live PhysicalTablePool over a reserved TableArena (evidence-probe boot integration)
+
+- **Continuation:** built on main `9d5cf91d` (after the PR #81/82 memory-reservation track) and the Run 12 next priorities. Branch: `feat/table-arena-live-source-2026-11-22`. No force push, no branch deletion; PRs #83 and #64 untouched.
+- **Implemented (`kernel/src/memory/table_arena.rs`, new):**
+  - `reserve_table_arena(&mut frames, count)` reserves an arena of N table frames through the bounded boot-owned reservation ledger (bounded slots, all-or-nothing, reservation rejected if it conflicts with live allocations or boot ranges) **before** the first frame allocation.
+  - The arena is a real `FramePoolSource`: its own bitmap supports true `allocate`/`release`, so a released table frame becomes reclaimable and re-allocatable zeroed, unlike the monotonic main allocator. Typed errors: exhaustion, double release, unknown release, reservation conflict (`TableArenaError`).
+- **Live allocator additions (`kernel/src/memory/frame.rs`):** non-mutating `peek_next_frame()` for the probe and `range_intersects_reservation()` diagnostics. Monotonic allocation semantics untouched.
+- **Boot integration (`kernel/src/entry.rs`):** immediately before the first `frames.allocate()` in `kernel_entry`, a `#[cfg(all(feature = "kernel-selftest", target_arch = "x86_64", target_os = "none"))]` call runs `crate::memory::table_arena::boot_table_pool_probe(&mut frames)`. Production boot builds contain no such code path. The probe reserves a small arena, builds a real `PhysicalTablePool` over it through the existing `DirectMapWindow` mapping, prints the `AWEOS: [cell:tables] ...` evidence lines, releases table frames and proves the reclaimed frame is re-allocated and re-zeroed.
+- **Tests:** 6 new host tests (arena alloc order/exhaustion; release/double-release/unknown errors; pool-over-arena zero + modify + release + rezero against real frames; live-allocator conflict rejection; error propagation). The existing `PhysicalFrameAllocator` test suite is unchanged.
+- **Validation:** CI is pending on PR #84 ([head 722e16b](https://github.com/ARARAT33/AWE_OS_Cellkernel/pull/84)). **No pass believed or claimed this run; build success is not counted as runtime proof.**
+- **Honest limits (unchanged, not claimed):** no CR3 switching, TLB invalidation, per-process address spaces, Ring 3, direct-map window sourced from QEMU-verified mappings on other paths, virtio-udev VirtIO I/O or NIC-backed CellNet.
+- **Next run priorities:** review PR #84 CI diagnostics; fix any findings; only after every check is green on the final head, mark ready and merge with an expected-head-SHA compare-and-swap; then continue per-process page-table roots + checked user-copy.
+
 #### 2026-11-21 — Run 12: PR #81 merged; boot-owned ranges now reserved in the live kernel path
 
 - **Merge:** PR #81 (head 491c746a25bde426ed31823454aa4fb0b7bccb72,
@@ -1484,4 +1497,5 @@ physical frames.
 - Next run: finish multi-architecture workflow review, then audit the boot
   memory-map handoff and design a validated direct-map/allocator integration
   without activating unverified page tables.
+
 
