@@ -64,6 +64,14 @@ pub fn kernel_entry(info: &BootInfo) -> KernelBootStatus {
         Ok(count) => count,
         Err(_) => return KernelBootStatus::BootReservationFailed,
     };
+
+    // QEMU evidence probe (kernel-selftest builds only): reserve a small
+    // table-frame arena through the boot reservation ledger and prove that
+    // a real PhysicalTablePool allocates, zeroes, maps, releases and
+    // reclaims page-table frames over it. Production builds do not run it.
+    #[cfg(all(feature = "kernel-selftest", target_arch = "x86_64", target_os = "none"))]
+    crate::memory::table_arena::boot_table_pool_probe(&mut frames);
+
     if frames.allocate().is_none() {
         return KernelBootStatus::NoUsableMemory;
     }
@@ -228,8 +236,8 @@ extern "C" fn diagnostics_service_thread() -> ! {
 /// Enter a user-mode bootstrap context.
 ///
 /// # Safety
-/// The active page tables must map `user_rip` and the stack containing
-/// `user_rsp` as user-accessible, while every kernel mapping remains
+/// The active page tables must map user_rip and the stack containing
+/// user_rsp as user-accessible, while every kernel mapping remains
 /// supervisor-only. The caller must also have installed a valid syscall
 /// entry and kernel stack. The current boot path deliberately does not call
 /// this helper until a per-process address-space builder exists.
@@ -330,7 +338,7 @@ mod tests {
             architecture: Architecture::X86_64,
             cpu_count: 1,
             memory_regions: regions.as_ptr(),
-            memory_region_count: regions.len() as u32,
+            memory_region_count: 2,
             framebuffer_address: 0,
             framebuffer_size: 0,
             framebuffer_width: 0,
