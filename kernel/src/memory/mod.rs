@@ -12,6 +12,7 @@ pub mod paging;
 pub mod physical;
 pub mod physical_tables;
 pub mod region;
+pub mod table_arena;
 pub mod table_frames;
 pub mod user_copy;
 #[cfg(target_arch = "x86_64")]
@@ -40,6 +41,7 @@ pub use physical_tables::{
     PhysicalTablePool,
 };
 pub use region::{Region, RegionKind};
+pub use table_arena::{BOOT_TABLE_ARENA_FRAMES, TableArena, TableArenaError, reserve_table_arena};
 pub use table_frames::{
     BuiltTables, DEFAULT_OWNED_CAPACITY, FrameReleaseError, OwnedTableFrames, TableFramePool,
     build_address_space,

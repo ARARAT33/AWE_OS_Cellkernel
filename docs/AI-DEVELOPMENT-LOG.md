@@ -1,3 +1,27 @@
+## 2026-11-22 — Run 13 (CI follow-up): reservation-intersection test fixture corrected, PR #84 fully green
+
+- **CI repair completed.** The single remaining test failure, `kernel::memory::frame::tests::reservation_intersection_report_is_conservative` at `kernel/src/memory/frame.rs:678` (426 passed / 1 failed), was a bad test fixture, not a production defect: it reserved `[0x2000, 0x3000)` but asserted that the adjacent range `[0x3000, 0x4000)` intersects it. The fixture now reserves `[0x2000, 0x3800)` (`reserve_range(0x2000, 0x1800)`), which genuinely covers frame 0x3000; all assertions (intersect at 0x3000, no intersect at 0x4000, overflow reported as intersecting) are coherent. The overflow short-circuit in `range_intersects_reservation` is unchanged and exercised by the test.
+- **Files changed this follow-up:** `kernel/src/memory/frame.rs` (test fixture only). No production code paths and no workspace structure were touched.
+- **Real CI results on this repo during Run 13:**
+  - Head `7fd8fffc` (before fixture fix): `Rust workspace`, `virtio-block-contract-and-qemu`, `cloud-security`, `cargo failure diagnostics` failed on the single test above; UEFI loader, exception-injection-selftest, build-and-smoke-test-image, all four AOSIN installers, Workspace clippy and rustfmt passed.
+  - Head `f5977317` (after fixture fix): **all 16 check runs completed with conclusion `success`**, including `Rust workspace` (full `cargo test -p aweos-kernel --lib` suite), `virtio-block-contract-and-qemu`, `cloud-security`, `Workspace Build & Validation`, `Build Multi-Arch Boot Images` and `cloud-release-contract` no longer skipped. Verified via the PR #84 check-run API on head SHA `f59773176fe00277291b989e92b614f554ba673d`.
+- **Honest limits:** this run adds no CR3/TLB behavior, no ring-3 transition, and no VirtIO block I/O beyond what earlier runs established; the TableArena is a boot-time reservation and the probe evidence path remains QEMU-boot-gated.
+- **Next priorities:** per-process page-table roots, checked user-space copy primitives, extending the table-arena probe into a persistent post-boot pool handoff.
+
+---
+#### 2026-11-22 — Run 13: live PhysicalTablePool over a reserved TableArena (evidence-probe boot integration)
+
+- **Continuation:** built on main `9d5cf91d` (after the PR #81/82 memory-reservation track) and the Run 12 next priorities. Branch: `feat/table-arena-live-source-2026-11-22`. No force push, no branch deletion; PRs #83 and #64 untouched.
+- **Implemented (`kernel/src/memory/table_arena.rs`, new):**
+  - `reserve_table_arena(&mut frames, count)` reserves an arena of N table frames through the bounded boot-owned reservation ledger (bounded slots, all-or-nothing, reservation rejected if it conflicts with live allocations or boot ranges) **before** the first frame allocation.
+  - The arena is a real `FramePoolSource`: its own bitmap supports true `allocate`/`release`, so a released table frame becomes reclaimable and re-allocatable zeroed, unlike the monotonic main allocator. Typed errors: exhaustion, double release, unknown release, reservation conflict (`TableArenaError`).
+- **Live allocator additions (`kernel/src/memory/frame.rs`):** non-mutating `peek_next_frame()` for the probe and `range_intersects_reservation()` diagnostics. Monotonic allocation semantics untouched.
+- **Boot integration (`kernel/src/entry.rs`):** immediately before the first `frames.allocate()` in `kernel_entry`, a `#[cfg(all(feature = "kernel-selftest", target_arch = "x86_64", target_os = "none"))]` call runs `crate::memory::table_arena::boot_table_pool_probe(&mut frames)`. Production boot builds contain no such code path. The probe reserves a small arena, builds a real `PhysicalTablePool` over it through the existing `DirectMapWindow` mapping, prints the `AWEOS: [cell:tables] ...` evidence lines, releases table frames and proves the reclaimed frame is re-allocated and re-zeroed.
+- **Tests:** 6 new host tests (arena alloc order/exhaustion; release/double-release/unknown errors; pool-over-arena zero + modify + release + rezero against real frames; live-allocator conflict rejection; error propagation). The existing `PhysicalFrameAllocator` test suite is unchanged.
+- **Validation:** CI is pending on PR #84 ([head 722e16b](https://github.com/ARARAT33/AWE_OS_Cellkernel/pull/84)). **No pass believed or claimed this run; build success is not counted as runtime proof.**
+- **Honest limits (unchanged, not claimed):** no CR3 switching, TLB invalidation, per-process address spaces, Ring 3, direct-map window sourced from QEMU-verified mappings on other paths, virtio-udev VirtIO I/O or NIC-backed CellNet.
+- **Next run priorities:** review PR #84 CI diagnostics; fix any findings; only after every check is green on the final head, mark ready and merge with an expected-head-SHA compare-and-swap; then continue per-process page-table roots + checked user-copy.
+
 #### 2026-11-21 — Run 12: PR #81 merged; boot-owned ranges now reserved in the live kernel path
 
 - **Merge:** PR #81 (head 491c746a25bde426ed31823454aa4fb0b7bccb72,
@@ -1484,4 +1508,5 @@ physical frames.
 - Next run: finish multi-architecture workflow review, then audit the boot
   memory-map handoff and design a validated direct-map/allocator integration
   without activating unverified page tables.
+
 

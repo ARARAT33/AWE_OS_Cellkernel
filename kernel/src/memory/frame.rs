@@ -182,6 +182,34 @@ impl PhysicalFrameAllocator {
         self.end = 0;
     }
 
+    /// Preview the frame the next allocate() call would hand out, without
+    /// consuming it. This allocator cannot rewind, so the preview is purely
+    /// observational: it must not be treated as an allocation, only used
+    /// for fail-closed decisions such as arena placement.
+    pub fn peek_next_frame(&mut self) -> Option<Frame> {
+        if self.cursor == 0 || self.cursor >= self.end {
+            self.select_next_region();
+        }
+        if self.cursor == 0 {
+            None
+        } else {
+            Some(Frame { start: self.cursor })
+        }
+    }
+
+    /// Conservative check: whether any 4 KiB frame intersecting
+    /// [start, start + length) is excluded by an installed reservation.
+    /// An overflowing request is reported as intersecting, never free.
+    pub fn range_intersects_reservation(&self, start: u64, length: u64) -> bool {
+        let Some(end) = start.checked_add(length) else {
+            return true;
+        };
+        self.reserved_ranges[..self.reserved_count]
+            .iter()
+            .flatten()
+            .any(|range| range.start < end && start < range.end)
+    }
+
     /// Check a physical byte range before reserving it. Reservations must be
     /// installed before the first allocation; exact/contained repeats remain
     /// idempotent so the boot handoff can be safely revalidated.
@@ -615,6 +643,43 @@ mod tests {
         );
         // Rejected reservation did not skip or consume the next frame.
         assert_eq!(allocator.allocate().unwrap().start, 0x2000);
+    }
+
+    #[test]
+    fn peek_next_frame_previews_without_consuming() {
+        let regions = [MemoryRegion {
+            base: 0x1000,
+            length: 0x4000,
+            kind: MEMORY_REGION_USABLE,
+            reserved: 0,
+        }];
+        let info = boot_info(&regions);
+        let mut allocator = unsafe { PhysicalFrameAllocator::try_from_boot_info(&info) }.unwrap();
+        assert_eq!(allocator.peek_next_frame().unwrap().start, 0x1000);
+        assert_eq!(allocator.peek_next_frame().unwrap().start, 0x1000);
+        assert_eq!(allocator.allocate().unwrap().start, 0x1000);
+        assert_eq!(allocator.peek_next_frame().unwrap().start, 0x2000);
+        assert_eq!(allocator.allocate().unwrap().start, 0x2000);
+    }
+
+    #[test]
+    fn reservation_intersection_report_is_conservative() {
+        let regions = [MemoryRegion {
+            base: 0x1000,
+            length: 0x8000,
+            kind: MEMORY_REGION_USABLE,
+            reserved: 0,
+        }];
+        let info = boot_info(&regions);
+        let mut allocator = unsafe { PhysicalFrameAllocator::try_from_boot_info(&info) }.unwrap();
+        assert!(!allocator.range_intersects_reservation(0x1000, 0x2000));
+        // [0x2000, 0x3800) intersects frames 0x2000 through 0x3000.
+        allocator.reserve_range(0x2000, 0x1800).unwrap();
+        assert!(allocator.range_intersects_reservation(0x1000, 0x2000));
+        assert!(allocator.range_intersects_reservation(0x3000, 0x1000));
+        assert!(!allocator.range_intersects_reservation(0x4000, 0x1000));
+        // An overflowing request is reported as intersecting, never free.
+        assert!(allocator.range_intersects_reservation(u64::MAX, 1));
     }
 
     #[test]
