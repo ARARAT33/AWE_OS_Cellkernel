@@ -1,3 +1,18 @@
+#### 2026-11-22 — Run 13: repair safe-branch audit summary rendering
+
+- **Baseline:** continued from main at 9d5cf91dc27a653f3fed0b06a52699ef7c37b3da. The previous run's memory milestone is already merged; the next kernel priority remains a verified direct-map window and live physical page-table pool.
+- **Repository/CI audit:** inspected the current default branch, open pull requests, recent commits, workflow runs and job logs. Main workspace CI run #602 (2026-11-21) completed successfully, including workspace check/tests/format and boot-image artifact generation. Safe branch integration audit run #16 (2026-11-22) was marked successful by Actions, but its log showed shell errors such as 'main: command not found' and branch names being executed as commands.
+- **Root cause:** Markdown backticks were placed inside double-quoted echo strings. Bash treated the backtick-delimited branch/default-branch names as command substitutions. Because those substitutions were nested in echo, their failures did not fail the job, leaving a misleading green audit result and malformed summary.
+- **Implemented on fix/branch-audit-markdown-escaping-2026-11-22:**
+  - Replaced backtick-bearing echo lines with printf format strings, keeping branch/default-branch values literal in the summary.
+  - Captured paginated branch API output in a command substitution before populating the array. With set -euo pipefail, an API failure now propagates instead of being hidden by process substitution.
+  - Handled an empty branch response explicitly so it does not become a one-element empty array.
+  - Kept the existing conservative policy: no PRs are created automatically, and no PR is merged unless repository auto-merge is enabled and all reported checks succeed.
+- **Files changed:** .github/workflows/branch-integration.yml, docs/AI-DEVELOPMENT-LOG.md.
+- **Validation:** source was reviewed against the failing run's exact log. A local shell syntax/summary-rendering check is pending; PR Actions validation is pending. The green main CI result is baseline evidence only and is not claimed as validation of this branch.
+- **Kernel scope:** no kernel runtime changes were made in this run. No direct-map, page-table-pool, CR3, TLB, Ring 3, persistent storage or NIC-backed networking capability is newly claimed.
+- **Next priorities:** validate this workflow fix; then resume the kernel memory path by proving the active identity/direct-map bounds in QEMU, connecting an ownership-tracked allocator to PhysicalTablePool, and testing table-frame allocation, zeroing, mapping and reclamation before enabling any address-space activation.
+
 #### 2026-11-21 — Run 12: PR #81 merged; boot-owned ranges now reserved in the live kernel path
 
 - **Merge:** PR #81 (head 491c746a25bde426ed31823454aa4fb0b7bccb72,
