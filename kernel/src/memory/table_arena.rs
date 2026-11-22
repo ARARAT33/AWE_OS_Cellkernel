@@ -160,11 +160,15 @@ pub fn reserve_table_arena<R: FrameReserver>(
     Ok(bytes)
 }
 
-#[cfg(all(feature = "kernel-selftest", target_arch = "x86_64", target_os = "none"))]
+#[cfg(all(
+    feature = "kernel-selftest",
+    target_arch = "x86_64",
+    target_os = "none"
+))]
 mod live_probe {
     use super::super::frame::{PAGE_SIZE, PhysicalFrameAllocator};
-    use super::super::physical_tables::{DirectMapWindow, PhysicalTablePool};
     use super::super::paging::{PageFlags, PageTableEntry};
+    use super::super::physical_tables::{DirectMapWindow, PhysicalTablePool};
     use super::{BOOT_TABLE_ARENA_FRAMES, TableArena, reserve_table_arena};
 
     const PROBE_LEDGER: usize = 8;
@@ -188,11 +192,15 @@ mod live_probe {
             return;
         };
         if base >= PROVEN_IDENTITY_LIMIT {
-            serial_write_str("AWEOS: [cell:tables] skip: candidate outside the proven 1 GiB identity map\r\n");
+            serial_write_str(
+                "AWEOS: [cell:tables] skip: candidate outside the proven 1 GiB identity map\r\n",
+            );
             return;
         }
         if allocator.range_intersects_reservation(base, bytes) {
-            serial_write_str("AWEOS: [cell:tables] skip: candidate intersects a boot-owned range\r\n");
+            serial_write_str(
+                "AWEOS: [cell:tables] skip: candidate intersects a boot-owned range\r\n",
+            );
             return;
         }
         if reserve_table_arena(allocator, base, BOOT_TABLE_ARENA_FRAMES).is_err() {
@@ -243,8 +251,10 @@ mod live_probe {
             None => false,
         };
 
-        serial_write_str("AWEOS: [cell:tables] allocated=1 zeroed=yes
-");
+        serial_write_str(
+            "AWEOS: [cell:tables] allocated=1 zeroed=yes
+",
+        );
         serial_write_str("AWEOS: [cell:tables] write/readback=");
         serial_write_u64(readback as u64);
         serial_write_str(" released=");
@@ -255,16 +265,24 @@ mod live_probe {
         serial_write_u64(rebuilt as u64);
         serial_write_str("\r\n");
         if readback && released && rebuilt {
-            serial_write_str("AWEOS: [cell:tables] probe result: PASS
-");
+            serial_write_str(
+                "AWEOS: [cell:tables] probe result: PASS
+",
+            );
         } else {
-            serial_write_str("AWEOS: [cell:tables] probe result: FAIL
-");
+            serial_write_str(
+                "AWEOS: [cell:tables] probe result: FAIL
+",
+            );
         }
     }
 }
 
-#[cfg(all(feature = "kernel-selftest", target_arch = "x86_64", target_os = "none"))]
+#[cfg(all(
+    feature = "kernel-selftest",
+    target_arch = "x86_64",
+    target_os = "none"
+))]
 pub use live_probe::boot_table_pool_probe;
 
 #[cfg(test)]
@@ -385,7 +403,9 @@ mod tests {
             Err(FrameReleaseError::UnknownFrame)
         );
         assert_eq!(
-            arena.free_frame(Frame { start: base - PAGE_SIZE }),
+            arena.free_frame(Frame {
+                start: base - PAGE_SIZE
+            }),
             Err(FrameReleaseError::UnknownFrame)
         );
         assert_eq!(
@@ -476,7 +496,10 @@ mod tests {
         // A successful arena reservation sticks: reserved frames are never
         // freed or handed out by the source allocator.
         let base = 0x1000;
-        assert_eq!(reserve_table_arena(&mut allocator, base, 2), Ok(2 * PAGE_SIZE));
+        assert_eq!(
+            reserve_table_arena(&mut allocator, base, 2),
+            Ok(2 * PAGE_SIZE)
+        );
         assert_eq!(
             allocator.try_free_frame(Frame { start: base }),
             Err(BitmapFrameError::ReservedFrame)
