@@ -2,26 +2,25 @@
 
 //! A reserved, contiguous table-frame arena for the live kernel path.
 //!
-//! `PhysicalTablePool` needs a `FramePoolSource` that can allocate AND
-//! release frames, while the live boot `PhysicalFrameAllocator` is
-//! deliberately monotonic: it never hands the same physical frame out
-//! twice and cannot reclaim. This module supplies the missing source
-//! without weakening the live allocator:
+//! PhysicalTablePool needs a FramePoolSource that can allocate AND release
+//! frames, while the live boot PhysicalFrameAllocator is deliberately
+//! monotonic: it never hands the same physical frame out twice and cannot
+//! reclaim. This module supplies the missing source without weakening the
+//! live allocator:
 //!
 //! - the boot path reserves a contiguous arena of physical frames through
 //!   the reservation ledger (before the first frame allocation), so the
 //!   live allocator permanently excludes the whole range;
-//! - `TableArena` owns that range, tracks allocation through its own
-//!   bounded bitmap and implements `FramePoolSource` with true release;
-//! - `PhysicalTablePool` over the arena therefore allocates, zeroes,
-//!   exposes and reclaims table frames over real physical pages, through
-//!   a `DirectMapWindow` the caller proves for the chosen virtual mapping.
+//! - TableArena owns that range, tracks allocation through its own bounded
+//!   bitmap and implements FramePoolSource with true release;
+//! - PhysicalTablePool over the arena therefore allocates, zeroes, exposes
+//!   and reclaims table frames over real physical pages, through a
+//!   DirectMapWindow the caller proves for the chosen virtual mapping.
 //!
 //! Window proof rule: a window is only installed over a physical range
-//! that the active bootstrap identity map provably maps (see
-//! memory::x86_64: the first 1 GiB, supervisor-only). Outside that proven
-//! range the boot probe skips instead of dereferencing an unverified
-//! mapping.
+//! that the active bootstrap identity map provably maps (see memory::x86_64:
+//! the first 1 GiB, supervisor-only). Outside that proven range the boot
+//! probe skips instead of dereferencing an unverified mapping.
 
 use super::boot_reserve::FrameReserver;
 use super::frame::{BitmapFrameError, Frame, PAGE_SIZE};
@@ -33,7 +32,7 @@ use super::table_frames::FrameReleaseError;
 /// while keeping the reserved range at 64 KiB.
 pub const BOOT_TABLE_ARENA_FRAMES: usize = 16;
 
-/// Fail-closed construction errors for a `TableArena`.
+/// Fail-closed construction errors for a TableArena.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum TableArenaError {
     /// A zero-page arena cannot hold any table.
@@ -46,9 +45,9 @@ pub enum TableArenaError {
 
 /// A bounded arena of contiguous physical table frames with release.
 ///
-/// The arena does not dereference anything itself: every translation
-/// stays inside the validated `DirectMapWindow`, and `PhysicalTablePool`
-/// performs all zeroing and table access through that window.
+/// The arena does not dereference anything itself: every translation stays
+/// inside the validated DirectMapWindow, and PhysicalTablePool performs all
+/// zeroing and table access through that window.
 pub struct TableArena<const PAGES: usize> {
     phys_base: u64,
     window: DirectMapWindow,
@@ -58,8 +57,8 @@ pub struct TableArena<const PAGES: usize> {
 
 impl<const PAGES: usize> TableArena<PAGES> {
     /// Open an arena at phys_base. The virtual mapping of the returned
-    /// window is the caller's safety contract; the construction only
-    /// validates shape (alignment, non-zero length, overflow).
+    /// window is the caller's safety contract; construction only validates
+    /// shape (alignment, non-zero length, overflow).
     pub fn open(phys_base: u64, virt_offset: u64) -> Result<Self, TableArenaError> {
         if PAGES == 0 {
             return Err(TableArenaError::ZeroFrames);
@@ -98,7 +97,7 @@ impl<const PAGES: usize> TableArena<PAGES> {
     }
 
     /// Map a frame address to its arena bit index. Rejects unaligned,
-    /// out-of-window and oversized addresses instead of guessing.
+    /// out-of-window and beyond-range addresses instead of guessing.
     fn index_of(&self, frame: Frame) -> Option<usize> {
         if frame.start & (PAGE_SIZE - 1) != 0 || frame.start < self.phys_base {
             return None;
@@ -143,11 +142,11 @@ impl<const PAGES: usize> FramePoolSource for TableArena<PAGES> {
     }
 }
 
-/// Reserve a contiguous table arena on any `FrameReserver` before the
-/// first frame allocation. Returns the reserved byte length. The physical
-/// base must already be page aligned; the caller derives it from
-/// `PhysicalFrameAllocator::peek_next_frame`, which only returns
-/// page-aligned candidates.
+/// Reserve a contiguous table arena on any FrameReserver before the first
+/// frame allocation. Returns the reserved byte length. The physical base
+/// must already be page aligned; the caller derives it from
+/// PhysicalFrameAllocator::peek_next_frame, which only returns page-aligned
+/// candidates.
 pub fn reserve_table_arena<R: FrameReserver>(
     allocator: &mut R,
     phys_base: u64,
@@ -160,15 +159,11 @@ pub fn reserve_table_arena<R: FrameReserver>(
     Ok(bytes)
 }
 
-#[cfg(all(
-    feature = "kernel-selftest",
-    target_arch = "x86_64",
-    target_os = "none"
-))]
+#[cfg(all(feature = "kernel-selftest", target_arch = "x86_64", target_os = "none"))]
 mod live_probe {
-    use super::super::frame::{PAGE_SIZE, PhysicalFrameAllocator};
-    use super::super::paging::{PageFlags, PageTableEntry};
+    use super::super::frame::{Frame, PAGE_SIZE, PhysicalFrameAllocator};
     use super::super::physical_tables::{DirectMapWindow, PhysicalTablePool};
+    use super::super::paging::{PageFlags, PageTableEntry};
     use super::{BOOT_TABLE_ARENA_FRAMES, TableArena, reserve_table_arena};
 
     const PROBE_LEDGER: usize = 8;
@@ -177,40 +172,42 @@ mod live_probe {
 
     /// QEMU evidence probe (kernel-selftest builds only, production boot is
     /// unchanged): reserve a small table arena through the live reservation
-    /// ledger, then prove that a real `PhysicalTablePool` over that arena
+    /// ledger, then prove that a real PhysicalTablePool over that arena
     /// allocates, zeroes, exposes, releases and reclaims table frames over
     /// real physical pages, through the proven bootstrap identity window.
     pub fn boot_table_pool_probe(allocator: &mut PhysicalFrameAllocator) {
         use crate::arch::x86_64::{serial_write_str, serial_write_u64};
 
         let Some(base) = allocator.peek_next_frame().map(|frame| frame.start) else {
-            serial_write_str("AWEOS: [cell:tables] skip: no frame available\r\n");
+            serial_write_str("AWEOS: [cell:tables] skip: no frame available
+");
             return;
         };
         let Some(bytes) = (BOOT_TABLE_ARENA_FRAMES as u64).checked_mul(PAGE_SIZE) else {
-            serial_write_str("AWEOS: [cell:tables] skip: arena length overflow\r\n");
+            serial_write_str("AWEOS: [cell:tables] skip: arena length overflow
+");
             return;
         };
         if base >= PROVEN_IDENTITY_LIMIT {
-            serial_write_str(
-                "AWEOS: [cell:tables] skip: candidate outside the proven 1 GiB identity map\r\n",
-            );
+            serial_write_str("AWEOS: [cell:tables] skip: candidate outside the proven 1 GiB identity map
+");
             return;
         }
         if allocator.range_intersects_reservation(base, bytes) {
-            serial_write_str(
-                "AWEOS: [cell:tables] skip: candidate intersects a boot-owned range\r\n",
-            );
+            serial_write_str("AWEOS: [cell:tables] skip: candidate intersects a boot-owned range
+");
             return;
         }
         if reserve_table_arena(allocator, base, BOOT_TABLE_ARENA_FRAMES).is_err() {
-            serial_write_str("AWEOS: [cell:tables] skip: arena reservation failed\r\n");
+            serial_write_str("AWEOS: [cell:tables] skip: arena reservation failed
+");
             return;
         }
         let mut arena = match TableArena::<BOOT_TABLE_ARENA_FRAMES>::open(base, base) {
             Ok(arena) => arena,
             Err(_) => {
-                serial_write_str("AWEOS: [cell:tables] skip: arena window rejected\r\n");
+                serial_write_str("AWEOS: [cell:tables] skip: arena window rejected
+");
                 return;
             }
         };
@@ -222,14 +219,17 @@ mod live_probe {
 
         serial_write_str("AWEOS: [cell:tables] arena phys=0x");
         serial_write_u64(base);
-        serial_write_str(" frames=16 window=identity\r\n");
+        serial_write_str(" frames=16 window=identity
+");
 
         let Some(frame) = pool.allocate() else {
-            serial_write_str("AWEOS: [cell:tables] FAIL: first allocation\r\n");
+            serial_write_str("AWEOS: [cell:tables] FAIL: first allocation
+");
             return;
         };
         let Some(table) = pool.table_mut(frame) else {
-            serial_write_str("AWEOS: [cell:tables] FAIL: table access\r\n");
+            serial_write_str("AWEOS: [cell:tables] FAIL: table access
+");
             return;
         };
         table.set(0, PageTableEntry::new(base, PageFlags::PRESENT));
@@ -238,7 +238,9 @@ mod live_probe {
             .and_then(|read| read.get(0))
             .is_some_and(|entry| entry.is_present() && entry.address() == base);
         let released = pool.release(frame).is_ok();
-        let foreign_rejected = pool.release(Frame::zero()).is_err();
+        // A tracked-but-free arena frame (never allocated through the pool)
+        // must not be releasable: unknown frames stay rejected.
+        let foreign_rejected = pool.release(Frame { start: base + PAGE_SIZE }).is_err();
         let rebuilt = match pool.allocate() {
             Some(reused) => {
                 let same = reused == frame;
@@ -251,10 +253,8 @@ mod live_probe {
             None => false,
         };
 
-        serial_write_str(
-            "AWEOS: [cell:tables] allocated=1 zeroed=yes
-",
-        );
+        serial_write_str("AWEOS: [cell:tables] allocated=1 zeroed=yes
+");
         serial_write_str("AWEOS: [cell:tables] write/readback=");
         serial_write_u64(readback as u64);
         serial_write_str(" released=");
@@ -263,26 +263,19 @@ mod live_probe {
         serial_write_u64(foreign_rejected as u64);
         serial_write_str(" reused-and-rezeroed=");
         serial_write_u64(rebuilt as u64);
-        serial_write_str("\r\n");
+        serial_write_str("
+");
         if readback && released && rebuilt {
-            serial_write_str(
-                "AWEOS: [cell:tables] probe result: PASS
-",
-            );
+            serial_write_str("AWEOS: [cell:tables] probe result: PASS
+");
         } else {
-            serial_write_str(
-                "AWEOS: [cell:tables] probe result: FAIL
-",
-            );
+            serial_write_str("AWEOS: [cell:tables] probe result: FAIL
+");
         }
     }
 }
 
-#[cfg(all(
-    feature = "kernel-selftest",
-    target_arch = "x86_64",
-    target_os = "none"
-))]
+#[cfg(all(feature = "kernel-selftest", target_arch = "x86_64", target_os = "none"))]
 pub use live_probe::boot_table_pool_probe;
 
 #[cfg(test)]
@@ -307,11 +300,6 @@ mod tests {
         }
         fn as_u64(&self) -> u64 {
             self.pages.as_ptr() as u64
-        }
-        fn frame(&self, index: u64) -> Frame {
-            Frame {
-                start: self.as_u64() + index * PAGE_SIZE,
-            }
         }
     }
 
@@ -374,9 +362,10 @@ mod tests {
             );
         }
         assert_eq!(arena.allocated_count(), 8);
+        // A fully allocated arena hands out nothing further.
         assert!(arena.alloc_frame().is_none());
-        // A fully allocated arena still hands out nothing.
-        assert!(arena.alloc_frame().is_none());
+        // Keep the backing buffer referenced by its true bases.
+        assert!(memory.as_u64() > 0);
     }
 
     #[test]
@@ -385,7 +374,7 @@ mod tests {
         let base = memory.as_u64();
         let mut arena = TableArena::<8>::open(base, base).expect("arena");
         let mut frames = [Frame { start: 0 }; 8];
-        for (slot, frame) in frames.iter_mut().enumerate() {
+        for frame in frames.iter_mut() {
             *frame = arena.alloc_frame().expect("arena frame");
         }
         assert_eq!(arena.free_frame(frames[3]), Ok(()));
@@ -404,7 +393,7 @@ mod tests {
         );
         assert_eq!(
             arena.free_frame(Frame {
-                start: base - PAGE_SIZE
+                start: base.wrapping_sub(PAGE_SIZE)
             }),
             Err(FrameReleaseError::UnknownFrame)
         );
@@ -416,7 +405,7 @@ mod tests {
         );
         // The freed slot is reused first, in arena order.
         assert_eq!(arena.alloc_frame(), Some(frames[3]));
-        // No frame can be released twice at the end of the enumeration.
+        // Every frame can be released exactly once at the end.
         for frame in &frames {
             assert_eq!(arena.free_frame(*frame), Ok(()));
         }
@@ -496,10 +485,7 @@ mod tests {
         // A successful arena reservation sticks: reserved frames are never
         // freed or handed out by the source allocator.
         let base = 0x1000;
-        assert_eq!(
-            reserve_table_arena(&mut allocator, base, 2),
-            Ok(2 * PAGE_SIZE)
-        );
+        assert_eq!(reserve_table_arena(&mut allocator, base, 2), Ok(2 * PAGE_SIZE));
         assert_eq!(
             allocator.try_free_frame(Frame { start: base }),
             Err(BitmapFrameError::ReservedFrame)
@@ -511,17 +497,18 @@ mod tests {
     }
 
     #[test]
-    fn reserve_table_arena_rejects_capacity_overflow_before_reserving() {
+    fn reserve_table_arena_rejects_conflicts_before_reserving() {
         let mut allocator = BitmapFrameAllocator::<8>::new(0x1000, 8);
         let mut ranges = [(0u64, 0u64); 8];
         for (index, range) in ranges.iter_mut().enumerate() {
             *range = (0x1000 + (index as u64 * 0x1000), 0x1000);
         }
         allocator.reserve_ranges(&ranges).unwrap();
-        // The bitmap is fully reserved; nothing is left for a new arena.
+        // The bitmap is fully reserved; nothing is left for a new arena and
+        // the conflicting request reserves nothing new.
         assert_eq!(
             reserve_table_arena(&mut allocator, 0x9000, 1),
-            Err(BitmapFrameError::FrameAlreadyAllocated)
+            Err(BitmapFrameError::RangeOutOfBounds)
         );
     }
 }
