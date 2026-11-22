@@ -185,6 +185,7 @@ mod live_probe {
     use super::super::frame::{Frame, PAGE_SIZE, PhysicalFrameAllocator};
     use super::super::paging::{PageFlags, PageTableEntry};
     use super::super::physical_tables::{DirectMapWindow, PhysicalTablePool};
+    use super::super::table_frames::TableFramePool;
     use super::{BOOT_TABLE_ARENA_FRAMES, TableArena, reserve_table_arena};
 
     const PROBE_LEDGER: usize = 8;
@@ -304,6 +305,7 @@ mod tests {
     use super::super::frame::{BitmapFrameAllocator, PhysicalFrameAllocator};
     use super::super::paging::{PageFlags, PageTableEntry};
     use super::super::physical_tables::PhysicalTablePool;
+    use super::super::table_frames::TableFramePool;
     use super::*;
     use awe_boot_protocol::{Architecture, BootInfo, MEMORY_REGION_USABLE, MemoryRegion};
 
@@ -538,8 +540,8 @@ mod tests {
         }
         // BitmapFrameAllocator only exposes the single-range reserve_range
         // API; reserving frame by frame fills the whole bitmap.
-        for (_, range) in ranges.iter() {
-            allocator.reserve_range(range.0, range.1).unwrap();
+        for (start, length) in ranges {
+            allocator.reserve_range(start, length).unwrap();
         }
         // The bitmap is fully reserved; nothing is left for a new arena and
         // the conflicting request reserves nothing new.
