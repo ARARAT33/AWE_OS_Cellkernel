@@ -673,7 +673,8 @@ mod tests {
         let info = boot_info(&regions);
         let mut allocator = unsafe { PhysicalFrameAllocator::try_from_boot_info(&info) }.unwrap();
         assert!(!allocator.range_intersects_reservation(0x1000, 0x2000));
-        allocator.reserve_range(0x2000, 0x1000).unwrap();
+        // [0x2000, 0x3800) intersects frames 0x2000 through 0x3000.
+        allocator.reserve_range(0x2000, 0x1800).unwrap();
         assert!(allocator.range_intersects_reservation(0x1000, 0x2000));
         assert!(allocator.range_intersects_reservation(0x3000, 0x1000));
         assert!(!allocator.range_intersects_reservation(0x4000, 0x1000));
