@@ -1,3 +1,14 @@
+## 2026-11-22 — Run 13 (CI follow-up): reservation-intersection test fixture corrected, PR #84 fully green
+
+- **CI repair completed.** The single remaining test failure, `kernel::memory::frame::tests::reservation_intersection_report_is_conservative` at `kernel/src/memory/frame.rs:678` (426 passed / 1 failed), was a bad test fixture, not a production defect: it reserved `[0x2000, 0x3000)` but asserted that the adjacent range `[0x3000, 0x4000)` intersects it. The fixture now reserves `[0x2000, 0x3800)` (`reserve_range(0x2000, 0x1800)`), which genuinely covers frame 0x3000; all assertions (intersect at 0x3000, no intersect at 0x4000, overflow reported as intersecting) are coherent. The overflow short-circuit in `range_intersects_reservation` is unchanged and exercised by the test.
+- **Files changed this follow-up:** `kernel/src/memory/frame.rs` (test fixture only). No production code paths and no workspace structure were touched.
+- **Real CI results on this repo during Run 13:**
+  - Head `7fd8fffc` (before fixture fix): `Rust workspace`, `virtio-block-contract-and-qemu`, `cloud-security`, `cargo failure diagnostics` failed on the single test above; UEFI loader, exception-injection-selftest, build-and-smoke-test-image, all four AOSIN installers, Workspace clippy and rustfmt passed.
+  - Head `f5977317` (after fixture fix): **all 16 check runs completed with conclusion `success`**, including `Rust workspace` (full `cargo test -p aweos-kernel --lib` suite), `virtio-block-contract-and-qemu`, `cloud-security`, `Workspace Build & Validation`, `Build Multi-Arch Boot Images` and `cloud-release-contract` no longer skipped. Verified via the PR #84 check-run API on head SHA `f59773176fe00277291b989e92b614f554ba673d`.
+- **Honest limits:** this run adds no CR3/TLB behavior, no ring-3 transition, and no VirtIO block I/O beyond what earlier runs established; the TableArena is a boot-time reservation and the probe evidence path remains QEMU-boot-gated.
+- **Next priorities:** per-process page-table roots, checked user-space copy primitives, extending the table-arena probe into a persistent post-boot pool handoff.
+
+---
 #### 2026-11-22 — Run 13: live PhysicalTablePool over a reserved TableArena (evidence-probe boot integration)
 
 - **Continuation:** built on main `9d5cf91d` (after the PR #81/82 memory-reservation track) and the Run 12 next priorities. Branch: `feat/table-arena-live-source-2026-11-22`. No force push, no branch deletion; PRs #83 and #64 untouched.
