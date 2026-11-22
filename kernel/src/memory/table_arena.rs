@@ -159,11 +159,15 @@ pub fn reserve_table_arena<R: FrameReserver>(
     Ok(bytes)
 }
 
-#[cfg(all(feature = "kernel-selftest", target_arch = "x86_64", target_os = "none"))]
+#[cfg(all(
+    feature = "kernel-selftest",
+    target_arch = "x86_64",
+    target_os = "none"
+))]
 mod live_probe {
     use super::super::frame::{Frame, PAGE_SIZE, PhysicalFrameAllocator};
-    use super::super::physical_tables::{DirectMapWindow, PhysicalTablePool};
     use super::super::paging::{PageFlags, PageTableEntry};
+    use super::super::physical_tables::{DirectMapWindow, PhysicalTablePool};
     use super::{BOOT_TABLE_ARENA_FRAMES, TableArena, reserve_table_arena};
 
     const PROBE_LEDGER: usize = 8;
@@ -179,35 +183,47 @@ mod live_probe {
         use crate::arch::x86_64::{serial_write_str, serial_write_u64};
 
         let Some(base) = allocator.peek_next_frame().map(|frame| frame.start) else {
-            serial_write_str("AWEOS: [cell:tables] skip: no frame available
-");
+            serial_write_str(
+                "AWEOS: [cell:tables] skip: no frame available
+",
+            );
             return;
         };
         let Some(bytes) = (BOOT_TABLE_ARENA_FRAMES as u64).checked_mul(PAGE_SIZE) else {
-            serial_write_str("AWEOS: [cell:tables] skip: arena length overflow
-");
+            serial_write_str(
+                "AWEOS: [cell:tables] skip: arena length overflow
+",
+            );
             return;
         };
         if base >= PROVEN_IDENTITY_LIMIT {
-            serial_write_str("AWEOS: [cell:tables] skip: candidate outside the proven 1 GiB identity map
-");
+            serial_write_str(
+                "AWEOS: [cell:tables] skip: candidate outside the proven 1 GiB identity map
+",
+            );
             return;
         }
         if allocator.range_intersects_reservation(base, bytes) {
-            serial_write_str("AWEOS: [cell:tables] skip: candidate intersects a boot-owned range
-");
+            serial_write_str(
+                "AWEOS: [cell:tables] skip: candidate intersects a boot-owned range
+",
+            );
             return;
         }
         if reserve_table_arena(allocator, base, BOOT_TABLE_ARENA_FRAMES).is_err() {
-            serial_write_str("AWEOS: [cell:tables] skip: arena reservation failed
-");
+            serial_write_str(
+                "AWEOS: [cell:tables] skip: arena reservation failed
+",
+            );
             return;
         }
         let mut arena = match TableArena::<BOOT_TABLE_ARENA_FRAMES>::open(base, base) {
             Ok(arena) => arena,
             Err(_) => {
-                serial_write_str("AWEOS: [cell:tables] skip: arena window rejected
-");
+                serial_write_str(
+                    "AWEOS: [cell:tables] skip: arena window rejected
+",
+                );
                 return;
             }
         };
@@ -219,17 +235,23 @@ mod live_probe {
 
         serial_write_str("AWEOS: [cell:tables] arena phys=0x");
         serial_write_u64(base);
-        serial_write_str(" frames=16 window=identity
-");
+        serial_write_str(
+            " frames=16 window=identity
+",
+        );
 
         let Some(frame) = pool.allocate() else {
-            serial_write_str("AWEOS: [cell:tables] FAIL: first allocation
-");
+            serial_write_str(
+                "AWEOS: [cell:tables] FAIL: first allocation
+",
+            );
             return;
         };
         let Some(table) = pool.table_mut(frame) else {
-            serial_write_str("AWEOS: [cell:tables] FAIL: table access
-");
+            serial_write_str(
+                "AWEOS: [cell:tables] FAIL: table access
+",
+            );
             return;
         };
         table.set(0, PageTableEntry::new(base, PageFlags::PRESENT));
@@ -240,7 +262,11 @@ mod live_probe {
         let released = pool.release(frame).is_ok();
         // A tracked-but-free arena frame (never allocated through the pool)
         // must not be releasable: unknown frames stay rejected.
-        let foreign_rejected = pool.release(Frame { start: base + PAGE_SIZE }).is_err();
+        let foreign_rejected = pool
+            .release(Frame {
+                start: base + PAGE_SIZE,
+            })
+            .is_err();
         let rebuilt = match pool.allocate() {
             Some(reused) => {
                 let same = reused == frame;
@@ -253,8 +279,10 @@ mod live_probe {
             None => false,
         };
 
-        serial_write_str("AWEOS: [cell:tables] allocated=1 zeroed=yes
-");
+        serial_write_str(
+            "AWEOS: [cell:tables] allocated=1 zeroed=yes
+",
+        );
         serial_write_str("AWEOS: [cell:tables] write/readback=");
         serial_write_u64(readback as u64);
         serial_write_str(" released=");
@@ -263,19 +291,29 @@ mod live_probe {
         serial_write_u64(foreign_rejected as u64);
         serial_write_str(" reused-and-rezeroed=");
         serial_write_u64(rebuilt as u64);
-        serial_write_str("
-");
+        serial_write_str(
+            "
+",
+        );
         if readback && released && rebuilt {
-            serial_write_str("AWEOS: [cell:tables] probe result: PASS
-");
+            serial_write_str(
+                "AWEOS: [cell:tables] probe result: PASS
+",
+            );
         } else {
-            serial_write_str("AWEOS: [cell:tables] probe result: FAIL
-");
+            serial_write_str(
+                "AWEOS: [cell:tables] probe result: FAIL
+",
+            );
         }
     }
 }
 
-#[cfg(all(feature = "kernel-selftest", target_arch = "x86_64", target_os = "none"))]
+#[cfg(all(
+    feature = "kernel-selftest",
+    target_arch = "x86_64",
+    target_os = "none"
+))]
 pub use live_probe::boot_table_pool_probe;
 
 #[cfg(test)]
@@ -485,7 +523,10 @@ mod tests {
         // A successful arena reservation sticks: reserved frames are never
         // freed or handed out by the source allocator.
         let base = 0x1000;
-        assert_eq!(reserve_table_arena(&mut allocator, base, 2), Ok(2 * PAGE_SIZE));
+        assert_eq!(
+            reserve_table_arena(&mut allocator, base, 2),
+            Ok(2 * PAGE_SIZE)
+        );
         assert_eq!(
             allocator.try_free_frame(Frame { start: base }),
             Err(BitmapFrameError::ReservedFrame)
