@@ -31,7 +31,7 @@ The immediate focus is **engineering the bootable and testable AWE_OS core**, wi
 - Current main head: `a1248b8974919a970f329d6a72ae5cefc228f749` (merge of PR #84).
 - PR #84 exact head `4f189c916b491a199ab0edef48d478c3ddbe6df4` passed **16/16 GitHub check-runs**. The main-head workspace CI, Quality Gate, Bootable Image Pipeline, VirtIO Runtime, Cloud Security Gate, Multi-Architecture Images, AOSIN installers and scheduled branch-integration audit also completed successfully on 2026-11-22/23.
 - The live `PhysicalFrameAllocator` reserves boot-owned ranges before its first allocation. The `kernel-selftest` x86_64 boot path can reserve a 16-frame table arena below the proven 1 GiB bootstrap identity map and exercise a real `PhysicalTablePool` over those pages: allocation, zeroing, table read/write, release, foreign-frame rejection and reuse/rezeroing. PR #85 also adds a non-allocating contiguous-run preview that skips reserved ranges, so the probe does not mistake the first boot-owned page for a usable arena start.
-- Evidence boundary: the self-test code path is built by the dedicated `selftest` kernel image, but before Run 14 the QEMU exception test checked only exception/IST milestones and kernel liveness; it did not assert the table-pool marker. PR #84's green CI must not be described as proof that the table-pool probe passed at runtime until the new marker assertion passes.
+- Runtime evidence added in PR #85: the QEMU exception-injection self-test passed on code head `d4b65c1341129735516a05910c143e82b6fe0b48` with assertions for both `[cell:tables] probe result: PASS` and `foreign-rejected=1`. This validates the bounded self-test arena path only. The latest formatter follow-up `0ea2fbb` is formatting-only; the full CI suite must still pass on the latest PR head before merge.
 - QEMU x86_64 evidence from the scheduler milestone remains: PIT/timer interrupts drive a three-kernel-thread preemptive scheduler. These are ring-0 threads sharing the kernel address space, not isolated userspace processes.
 - Memory: early x86_64 paging and CR3 bootstrap exist. A bounded `AddressSpace` contract, four-level PML4 → PDPT → PD → PT builder, ownership/rollback primitives, and a physical table pool over real frames exist. The pool's current boot integration is a validation probe, not a retained production allocator.
 - The checked user-copy helper validates a complete user range before page-bounded access through a supplied `PhysicalAccess` backend and caps each request at 1 MiB. It is not connected to a verified live user-memory backend.
@@ -70,16 +70,15 @@ That branch is the recovery point for the previous repository state and should n
 
 Prioritize the next missing runtime boundary, not additional feature labels:
 
-1. Make the QEMU self-test assert the live `[cell:tables]` probe result and foreign-frame rejection; keep the marker required for the runtime test to pass.
-2. Harden `reserve_table_arena` so invalid size, alignment and overflow requests fail before mutating the reservation ledger.
-3. Retain a bounded table-frame pool only after defining a permanent, QEMU-proven direct-map window and allocator lifetime; do not silently promote the self-test arena to production memory management.
+1. Complete the full CI matrix on the latest PR #85 head; retain the QEMU table-pool PASS and foreign-frame rejection assertions, and merge only after every required check is green.
+2. Keep the current `TableArena` as a bounded self-test resource. Define a permanent, QEMU-proven direct-map window and allocator lifetime before retaining a production table-frame pool.
+3. Resolve the lower-half bootstrap identity-map conflict with user mappings by defining the kernel's permanent higher-half mapping strategy.
 4. Build each process root with supervisor-only kernel mappings preserved; define root/table ownership and teardown before activating a process address space.
-5. Resolve the lower-half bootstrap identity-map conflict with user mappings by defining the kernel's permanent higher-half mapping strategy.
-6. Implement a controlled CR3 switch and matching local TLB invalidation policy; add failure-path and QEMU isolation tests before any Ring 3 entry.
-7. Connect checked user-copy to a verified physical-access backend and test mapped/unmapped, read-only, cross-page and fault cases in QEMU.
-8. Implement actual VirtIO block request/completion, read-after-write, flush and power-loss recovery tests.
-9. Connect the network contracts to a real NIC/UDP transport and test two independent nodes, reconnect and partition behavior.
-10. Add real ARM64 and RISC-V builds and runtime tests before claiming those ports.
+5. Implement a controlled CR3 switch and matching local TLB invalidation policy; add failure-path and QEMU isolation tests before any Ring 3 entry.
+6. Connect checked user-copy to a verified physical-access backend and test mapped/unmapped, read-only, cross-page and fault cases in QEMU.
+7. Implement actual VirtIO block request/completion, read-after-write, flush and power-loss recovery tests.
+8. Connect the network contracts to a real NIC/UDP transport and test two independent nodes, reconnect and partition behavior.
+9. Add real ARM64 and RISC-V builds and runtime tests before claiming those ports.
 
 ## Long-term objective
 

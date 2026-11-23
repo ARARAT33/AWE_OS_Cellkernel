@@ -137,8 +137,10 @@ PR #84 is now merged into `main` at merge commit
 A QEMU self-test build includes a boot-time probe over the bootstrap identity
 mapping. PR #85 adds a contiguous unreserved-run preview and makes the QEMU
 exception test require the probe's PASS marker plus foreign-frame rejection.
-Treat the probe as implemented but not runtime-certified until that updated
-QEMU test passes on the exact PR head.
+The QEMU exception-injection self-test passed on code head
+`d4b65c1341129735516a05910c143e82b6fe0b48` with both assertions satisfied.
+This is runtime evidence for the bounded self-test arena only, not for a
+persistent production allocator or process address-space isolation.
 
 This does not supersede the remaining isolation gates: the arena is reserved
 only for the self-test probe, the allocator/pool is not retained as a
