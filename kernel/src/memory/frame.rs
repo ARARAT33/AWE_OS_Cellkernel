@@ -182,19 +182,45 @@ impl PhysicalFrameAllocator {
         self.end = 0;
     }
 
-    /// Preview the frame the next allocate() call would hand out, without
-    /// consuming it. This allocator cannot rewind, so the preview is purely
-    /// observational: it must not be treated as an allocation, only used
-    /// for fail-closed decisions such as arena placement.
+    /// Preview a contiguous run of `frame_count` unreserved frames without
+    /// allocating them. The cursor may advance past permanently reserved
+    /// ranges or regions too short for the requested run, but the allocator
+    /// remains in its pre-allocation state and the returned frames are still
+    /// available to the next allocate() calls until a reservation is made.
+    pub fn peek_contiguous_frames(&mut self, frame_count: usize) -> Option<Frame> {
+        if frame_count == 0 {
+            return None;
+        }
+        let bytes = u64::try_from(frame_count).ok()?.checked_mul(PAGE_SIZE)?;
+        loop {
+            if self.cursor == 0 || self.cursor >= self.end {
+                self.select_next_region();
+            }
+            if self.cursor == 0 {
+                return None;
+            }
+
+            let start = self.cursor;
+            let run_end = start.checked_add(bytes)?;
+            if run_end > self.end {
+                // This usable region is too short; continue with the next one.
+                self.cursor = self.end;
+                continue;
+            }
+            if self.range_intersects_reservation(start, bytes) {
+                // Move by one page so a later candidate can begin just after
+                // the reservation while preserving a contiguous run.
+                self.cursor = self.cursor.checked_add(PAGE_SIZE).unwrap_or(0);
+                continue;
+            }
+            return Some(Frame { start });
+        }
+    }
+
+    /// Preview the next frame that allocate() would return, skipping any
+    /// installed reservation without consuming the frame.
     pub fn peek_next_frame(&mut self) -> Option<Frame> {
-        if self.cursor == 0 || self.cursor >= self.end {
-            self.select_next_region();
-        }
-        if self.cursor == 0 {
-            None
-        } else {
-            Some(Frame { start: self.cursor })
-        }
+        self.peek_contiguous_frames(1)
     }
 
     /// Conservative check: whether any 4 KiB frame intersecting
@@ -660,6 +686,28 @@ mod tests {
         assert_eq!(allocator.allocate().unwrap().start, 0x1000);
         assert_eq!(allocator.peek_next_frame().unwrap().start, 0x2000);
         assert_eq!(allocator.allocate().unwrap().start, 0x2000);
+    }
+
+    #[test]
+    fn peek_contiguous_frames_skips_reservations_without_allocating() {
+        let regions = [MemoryRegion {
+            base: 0x1000,
+            length: 0x10000,
+            kind: MEMORY_REGION_USABLE,
+            reserved: 0,
+        }];
+        let info = boot_info(&regions);
+        let mut allocator = unsafe { PhysicalFrameAllocator::try_from_boot_info(&info) }.unwrap();
+        allocator.reserve_range(0x2000, 0x3000).unwrap();
+
+        // The requested four-page run must start after the three reserved
+        // pages; previewing it twice must not consume the first free frame.
+        assert_eq!(
+            allocator.peek_contiguous_frames(4).unwrap().start,
+            0x5000
+        );
+        assert_eq!(allocator.peek_next_frame().unwrap().start, 0x5000);
+        assert_eq!(allocator.allocate().unwrap().start, 0x5000);
     }
 
     #[test]

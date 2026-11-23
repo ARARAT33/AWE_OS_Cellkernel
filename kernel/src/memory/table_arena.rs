@@ -177,8 +177,8 @@ impl<const PAGES: usize> FramePoolSource for TableArena<PAGES> {
 /// Reserve a contiguous table arena on any FrameReserver before the first
 /// frame allocation. Returns the reserved byte length. The physical base
 /// must already be page aligned; the caller derives it from
-/// PhysicalFrameAllocator::peek_next_frame, which only returns page-aligned
-/// candidates.
+/// PhysicalFrameAllocator::peek_contiguous_frames, which returns a page-aligned
+/// run outside every installed reservation.
 pub fn reserve_table_arena<R: FrameReserver>(
     allocator: &mut R,
     phys_base: u64,
@@ -232,7 +232,10 @@ mod live_probe {
     pub fn boot_table_pool_probe(allocator: &mut PhysicalFrameAllocator) {
         use crate::arch::x86_64::{serial_write_str, serial_write_u64};
 
-        let Some(base) = allocator.peek_next_frame().map(|frame| frame.start) else {
+        let Some(base) = allocator
+            .peek_contiguous_frames(BOOT_TABLE_ARENA_FRAMES)
+            .map(|frame| frame.start)
+        else {
             serial_write_str("AWEOS: [cell:tables] skip: no frame available\n");
             return;
         };

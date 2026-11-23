@@ -135,9 +135,10 @@ PR #84 is now merged into `main` at merge commit
 `TableArena` that implements the frame-pool source used by
 `PhysicalTablePool`, including release/reuse and zero-before-reuse behavior.
 A QEMU self-test build includes a boot-time probe over the bootstrap identity
-mapping, but the QEMU exception test had not yet asserted the probe's PASS
-marker. Treat the probe as implemented but not runtime-certified until the
-new assertion is part of the test and passes.
+mapping. PR #85 adds a contiguous unreserved-run preview and makes the QEMU
+exception test require the probe's PASS marker plus foreign-frame rejection.
+Treat the probe as implemented but not runtime-certified until that updated
+QEMU test passes on the exact PR head.
 
 This does not supersede the remaining isolation gates: the arena is reserved
 only for the self-test probe, the allocator/pool is not retained as a
