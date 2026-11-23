@@ -126,3 +126,25 @@ This is still not full physical memory management. The live allocator is monoton
 
 Until those runtime milestones exist, keep per-process CR3 switching, TLB invalidation, Ring 3, QEMU user/kernel isolation and production process isolation unchecked.
 
+
+
+## Superseding memory-path evidence (2026-11-23)
+
+PR #84 is now merged into `main` at merge commit
+`a1248b8974919a970f329d6a72ae5cefc228f749`. It adds a bounded
+`TableArena` that implements the frame-pool source used by
+`PhysicalTablePool`, including release/reuse and zero-before-reuse behavior.
+A QEMU self-test build includes a boot-time probe over the bootstrap identity
+mapping, but the QEMU exception test had not yet asserted the probe's PASS
+marker. Treat the probe as implemented but not runtime-certified until the
+new assertion is part of the test and passes.
+
+This does not supersede the remaining isolation gates: the arena is reserved
+only for the self-test probe, the allocator/pool is not retained as a
+production global memory manager, no per-process CR3 switch or TLB
+shootdown is active, Ring 3 remains deferred, and the checked user-copy
+backend is not wired to a verified live user-memory mapping. The kernel still
+uses a lower-half bootstrap identity map, so user mappings in the same PML4
+region require a deliberate kernel higher-half mapping design before process
+isolation can be activated.
+

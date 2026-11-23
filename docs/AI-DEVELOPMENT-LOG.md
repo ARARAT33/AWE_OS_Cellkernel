@@ -1,3 +1,21 @@
+## 2026-11-23 — Run 14: harden TableArena reservation preflight and require QEMU probe evidence
+
+- **Baseline audit:** continued from main `a1248b8974919a970f329d6a72ae5cefc228f749` after PR #84 merged. The latest main-head CI family (workspace, Quality Gate, boot image, VirtIO, Cloud Security, Multi-Architecture and AOSIN installers) completed successfully; scheduled branch integration audit run #19 also succeeded. PR #84's exact head passed 16/16 check-runs. Open draft PRs #83 (branch-audit quoting) and #64 (initd restart policy) were preserved.
+- **Repository reality check:** the `TableArena` / `PhysicalTablePool` code is present, but the QEMU exception self-test did not yet assert the `[cell:tables]` probe marker. A successful exception-injection test therefore did not independently prove the table-pool probe. The normal production boot path still does not retain this pool.
+- **Implemented on `fix/table-arena-reservation-contract-2026-11-23`:**
+  - Added `TableArenaReserveError` and preflight validation for zero frames, arena bitmap capacity, page alignment and physical-end overflow **before** calling the allocator's mutating reservation method. This prevents invalid arena shapes from permanently consuming frames and then failing later in `TableArena::open`.
+  - Wrapped genuine allocator failures separately as `Reservation(BitmapFrameError)`, preserving their original reason.
+  - Added a regression test that submits misaligned, oversized, zero-length and overflowing requests and proves the allocator still returns its original first frame.
+  - Tightened the in-kernel probe's PASS condition to include foreign-frame rejection, not merely readback/release/reuse.
+  - Extended the QEMU exception self-test to require both `[cell:tables] probe result: PASS` and `foreign-rejected=1` in the serial log.
+  - Refreshed `PROJECT_STATUS.md` and appended a superseding memory-path note to `PRODUCT_READINESS.md` so the merged PR #84 state and remaining limits are not misreported.
+- **Files changed:** `kernel/src/memory/table_arena.rs`, `kernel/src/memory/mod.rs`, `tests/product-core/src/lib.rs`, `PROJECT_STATUS.md`, `PRODUCT_READINESS.md`, and this log.
+- **Validation:** no local Rust/QEMU toolchain is available in this execution environment. Changes are committed to a dedicated branch and submitted as a draft PR; the PR CI/QEMU results must be checked on the exact final head before this work is called validated. The prior main-head green checks are baseline evidence only, not validation of this branch.
+- **Unresolved:** the `TableArena` remains a bounded validation arena, not a persistent production allocator; no production direct map, per-process CR3 activation, TLB shootdown, Ring 3, user/kernel isolation, durable VirtIO block I/O or NIC-backed multi-node CellNet is claimed.
+- **Next priorities:** review the QEMU serial log for the required table-pool marker; after it passes, define the higher-half kernel mapping and persistent direct-map/allocator lifetime before attempting per-process roots, CR3/TLB work and live checked user-copy.
+
+---
+
 ## 2026-11-22 — Run 13 (CI follow-up): reservation-intersection test fixture corrected, PR #84 fully green
 
 - **CI repair completed.** The single remaining test failure, `kernel::memory::frame::tests::reservation_intersection_report_is_conservative` at `kernel/src/memory/frame.rs:678` (426 passed / 1 failed), was a bad test fixture, not a production defect: it reserved `[0x2000, 0x3000)` but asserted that the adjacent range `[0x3000, 0x4000)` intersects it. The fixture now reserves `[0x2000, 0x3800)` (`reserve_range(0x2000, 0x1800)`), which genuinely covers frame 0x3000; all assertions (intersect at 0x3000, no intersect at 0x4000, overflow reported as intersecting) are coherent. The overflow short-circuit in `range_intersects_reservation` is unchanged and exercised by the test.

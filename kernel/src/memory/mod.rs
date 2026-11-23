@@ -41,7 +41,10 @@ pub use physical_tables::{
     PhysicalTablePool,
 };
 pub use region::{Region, RegionKind};
-pub use table_arena::{BOOT_TABLE_ARENA_FRAMES, TableArena, TableArenaError, reserve_table_arena};
+pub use table_arena::{
+    BOOT_TABLE_ARENA_FRAMES, TableArena, TableArenaError, TableArenaReserveError,
+    reserve_table_arena,
+};
 pub use table_frames::{
     BuiltTables, DEFAULT_OWNED_CAPACITY, FrameReleaseError, OwnedTableFrames, TableFramePool,
     build_address_space,
