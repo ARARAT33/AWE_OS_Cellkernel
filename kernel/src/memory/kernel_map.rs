@@ -17,7 +17,7 @@
 //! activation work cannot silently corrupt the user half (PML4 indexes
 //! 0..255 stay user-only in the existing builder).
 
-use super::address::{is_canonical_x86_64_48, VirtualAddress};
+use super::address::{VirtualAddress, is_canonical_x86_64_48};
 
 /// 2 MiB alignment used for every region boundary. Regions are planned at
 /// large-page granularity so future huge-page direct-map mappings inherit
@@ -248,7 +248,10 @@ mod tests {
 
     #[test]
     fn direct_map_translation_is_bounded() {
-        assert_eq!(direct_map_address(0x1000).unwrap().0, DIRECT_MAP_BASE + 0x1000);
+        assert_eq!(
+            direct_map_address(0x1000).unwrap().0,
+            DIRECT_MAP_BASE + 0x1000
+        );
         assert!(direct_map_address(DIRECT_MAP_MAX_PHYSICAL - 0x1000).is_some());
         assert_eq!(direct_map_address(DIRECT_MAP_MAX_PHYSICAL), None);
         assert_eq!(direct_map_address(0xffff_0000_0000_0000), None);
@@ -270,7 +273,10 @@ mod tests {
         assert_ne!(heap, percpu);
         assert_ne!(direct, text);
         assert_eq!(kernel_region_of(0x1000), None);
-        assert_eq!(kernel_region_of(KERNEL_PERCPU_BASE + KERNEL_PERCPU_SIZE), None);
+        assert_eq!(
+            kernel_region_of(KERNEL_PERCPU_BASE + KERNEL_PERCPU_SIZE),
+            None
+        );
     }
 
     #[test]
