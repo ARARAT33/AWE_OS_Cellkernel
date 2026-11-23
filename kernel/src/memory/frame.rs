@@ -702,10 +702,7 @@ mod tests {
 
         // The requested four-page run must start after the three reserved
         // pages; previewing it twice must not consume the first free frame.
-        assert_eq!(
-            allocator.peek_contiguous_frames(4).unwrap().start,
-            0x5000
-        );
+        assert_eq!(allocator.peek_contiguous_frames(4).unwrap().start, 0x5000);
         assert_eq!(allocator.peek_next_frame().unwrap().start, 0x5000);
         assert_eq!(allocator.allocate().unwrap().start, 0x5000);
     }
