@@ -43,6 +43,21 @@ pub const TABLE_ARENA_MAX_FRAMES: usize = 128;
 /// expression.
 const TABLE_ARENA_BITMAP_WORDS: usize = TABLE_ARENA_MAX_FRAMES / 64;
 
+/// Fail-closed errors for reserving a table arena before mutating an allocator.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum TableArenaReserveError {
+    /// An arena must contain at least one frame.
+    ZeroFrames,
+    /// The requested range cannot be tracked by the fixed TableArena bitmap.
+    TooManyFrames,
+    /// The physical base must be page aligned.
+    MisalignedBase,
+    /// The physical byte range overflows the address space.
+    RangeOverflow,
+    /// The underlying frame reserver rejected an otherwise valid range.
+    Reservation(BitmapFrameError),
+}
+
 /// Fail-closed construction errors for a TableArena.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum TableArenaError {
@@ -162,17 +177,34 @@ impl<const PAGES: usize> FramePoolSource for TableArena<PAGES> {
 /// Reserve a contiguous table arena on any FrameReserver before the first
 /// frame allocation. Returns the reserved byte length. The physical base
 /// must already be page aligned; the caller derives it from
-/// PhysicalFrameAllocator::peek_next_frame, which only returns page-aligned
-/// candidates.
+/// PhysicalFrameAllocator::peek_contiguous_frames, which returns a page-aligned
+/// run outside every installed reservation.
 pub fn reserve_table_arena<R: FrameReserver>(
     allocator: &mut R,
     phys_base: u64,
     frame_count: usize,
-) -> Result<u64, BitmapFrameError> {
+) -> Result<u64, TableArenaReserveError> {
+    // Validate every shape constraint before touching the reservation ledger.
+    // An invalid request must not permanently consume physical memory and
+    // then fail later when TableArena::open checks the same constraints.
+    if frame_count == 0 {
+        return Err(TableArenaReserveError::ZeroFrames);
+    }
+    if frame_count > TABLE_ARENA_MAX_FRAMES {
+        return Err(TableArenaReserveError::TooManyFrames);
+    }
+    if phys_base & (PAGE_SIZE - 1) != 0 {
+        return Err(TableArenaReserveError::MisalignedBase);
+    }
     let bytes = (frame_count as u64)
         .checked_mul(PAGE_SIZE)
-        .ok_or(BitmapFrameError::RangeOverflow)?;
-    allocator.reserve_range(phys_base, bytes)?;
+        .ok_or(TableArenaReserveError::RangeOverflow)?;
+    phys_base
+        .checked_add(bytes)
+        .ok_or(TableArenaReserveError::RangeOverflow)?;
+    allocator
+        .reserve_range(phys_base, bytes)
+        .map_err(TableArenaReserveError::Reservation)?;
     Ok(bytes)
 }
 
@@ -200,7 +232,10 @@ mod live_probe {
     pub fn boot_table_pool_probe(allocator: &mut PhysicalFrameAllocator) {
         use crate::arch::x86_64::{serial_write_str, serial_write_u64};
 
-        let Some(base) = allocator.peek_next_frame().map(|frame| frame.start) else {
+        let Some(base) = allocator
+            .peek_contiguous_frames(BOOT_TABLE_ARENA_FRAMES)
+            .map(|frame| frame.start)
+        else {
             serial_write_str("AWEOS: [cell:tables] skip: no frame available\n");
             return;
         };
@@ -284,7 +319,7 @@ mod live_probe {
         serial_write_str(" reused-and-rezeroed=");
         serial_write_u64(rebuilt as u64);
         serial_write_str("\n");
-        if readback && released && rebuilt {
+        if readback && released && foreign_rejected && rebuilt {
             serial_write_str("AWEOS: [cell:tables] probe result: PASS\n");
         } else {
             serial_write_str("AWEOS: [cell:tables] probe result: FAIL\n");
@@ -508,11 +543,13 @@ mod tests {
         let mut allocator = BitmapFrameAllocator::<8>::new(0x1000, 8);
         assert_eq!(
             reserve_table_arena(&mut allocator, 0xfc00_0000, 4),
-            Err(BitmapFrameError::RangeOutOfBounds)
+            Err(TableArenaReserveError::Reservation(
+                BitmapFrameError::RangeOutOfBounds
+            ))
         );
         assert_eq!(
             reserve_table_arena(&mut allocator, 0x1000, 0),
-            Err(BitmapFrameError::EmptyRange)
+            Err(TableArenaReserveError::ZeroFrames)
         );
         // A successful arena reservation sticks: reserved frames are never
         // freed or handed out by the source allocator.
@@ -547,7 +584,34 @@ mod tests {
         // the conflicting request reserves nothing new.
         assert_eq!(
             reserve_table_arena(&mut allocator, 0x9000, 1),
-            Err(BitmapFrameError::RangeOutOfBounds)
+            Err(TableArenaReserveError::Reservation(
+                BitmapFrameError::RangeOutOfBounds
+            ))
         );
+    }
+
+    #[test]
+    fn invalid_arena_shapes_do_not_mutate_the_allocator() {
+        let mut allocator = BitmapFrameAllocator::<4>::new(0x1000, 4);
+
+        assert_eq!(
+            reserve_table_arena(&mut allocator, 0x1001, 1),
+            Err(TableArenaReserveError::MisalignedBase)
+        );
+        assert_eq!(
+            reserve_table_arena(&mut allocator, 0x1000, TABLE_ARENA_MAX_FRAMES + 1),
+            Err(TableArenaReserveError::TooManyFrames)
+        );
+        assert_eq!(
+            reserve_table_arena(&mut allocator, 0x1000, 0),
+            Err(TableArenaReserveError::ZeroFrames)
+        );
+        assert_eq!(
+            reserve_table_arena(&mut allocator, u64::MAX - (PAGE_SIZE - 1), 1),
+            Err(TableArenaReserveError::RangeOverflow)
+        );
+
+        // Rejected shapes must not reserve even the first page.
+        assert_eq!(allocator.allocate_frame().unwrap().start, 0x1000);
     }
 }

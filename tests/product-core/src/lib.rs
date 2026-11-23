@@ -1055,6 +1055,14 @@ mod product_core {
 
         let final_log = read_log();
         assert!(
+            final_log.contains("AWEOS: [cell:tables] probe result: PASS"),
+            "the live physical table-pool probe did not pass:\n{final_log}"
+        );
+        assert!(
+            final_log.contains("foreign-rejected=1"),
+            "the live physical table-pool probe did not reject a foreign frame:\n{final_log}"
+        );
+        assert!(
             !final_log.contains("AWEOS SELFTEST: FAIL"),
             "selftest reported a validation failure:
 {final_log}"
