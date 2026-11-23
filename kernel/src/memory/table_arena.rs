@@ -540,7 +540,9 @@ mod tests {
         let mut allocator = BitmapFrameAllocator::<8>::new(0x1000, 8);
         assert_eq!(
             reserve_table_arena(&mut allocator, 0xfc00_0000, 4),
-            Err(TableArenaReserveError::Reservation(BitmapFrameError::RangeOutOfBounds))
+            Err(TableArenaReserveError::Reservation(
+                BitmapFrameError::RangeOutOfBounds
+            ))
         );
         assert_eq!(
             reserve_table_arena(&mut allocator, 0x1000, 0),
@@ -579,7 +581,9 @@ mod tests {
         // the conflicting request reserves nothing new.
         assert_eq!(
             reserve_table_arena(&mut allocator, 0x9000, 1),
-            Err(TableArenaReserveError::Reservation(BitmapFrameError::RangeOutOfBounds))
+            Err(TableArenaReserveError::Reservation(
+                BitmapFrameError::RangeOutOfBounds
+            ))
         );
     }
 
