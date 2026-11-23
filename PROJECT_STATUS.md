@@ -28,10 +28,11 @@ The immediate focus is **engineering the bootable and testable AWE_OS core**, wi
 ## Current implementation evidence (2026-11-23)
 
 - PR #78 (checked physical user-copy contract), PRs #79–#81 (reservation-aware frame allocation and boot-owned range reservation), and PR #84 (reserved `TableArena` backing a real `PhysicalTablePool`) are merged into `main`.
-- Current main head: `a1248b8974919a970f329d6a72ae5cefc228f749` (merge of PR #84).
-- PR #84 exact head `4f189c916b491a199ab0edef48d478c3ddbe6df4` passed **16/16 GitHub check-runs**. The main-head workspace CI, Quality Gate, Bootable Image Pipeline, VirtIO Runtime, Cloud Security Gate, Multi-Architecture Images, AOSIN installers and scheduled branch-integration audit also completed successfully on 2026-11-22/23.
+- Current main head: `00e8f3f14c7b07c8153fa21fde13806dc153b3be` (merge of PR #85).
+- PR #85 (Run 14) was merged after its head `c1dc74ea4fea706d11fefc71773233adcea03a63` passed **16/16 GitHub check-runs**; PR #84 exact head `4f189c916b491a199ab0edef48d478c3ddbe6df4` also passed **16/16 check-runs** before that. The main-head workspace CI, Quality Gate, Bootable Image Pipeline, VirtIO Runtime, Cloud Security Gate, Multi-Architecture Images, AOSIN installers and scheduled branch-integration audit also completed successfully on 2026-11-22/23.
 - The live `PhysicalFrameAllocator` reserves boot-owned ranges before its first allocation. The `kernel-selftest` x86_64 boot path can reserve a 16-frame table arena below the proven 1 GiB bootstrap identity map and exercise a real `PhysicalTablePool` over those pages: allocation, zeroing, table read/write, release, foreign-frame rejection and reuse/rezeroing. PR #85 also adds a non-allocating contiguous-run preview that skips reserved ranges, so the probe does not mistake the first boot-owned page for a usable arena start.
 - Runtime evidence added in PR #85: the QEMU exception-injection self-test passed on code head `d4b65c1341129735516a05910c143e82b6fe0b48` with assertions for both `[cell:tables] probe result: PASS` and `foreign-rejected=1`. This validates the bounded self-test arena path only. The latest formatter follow-up `0ea2fbb` is formatting-only; the full CI suite must still pass on the latest PR head before merge.
+- New on `feat/higher-half-kernel-layout-2026-11-23`: `kernel/src/memory/kernel_map.rs` defines the planned higher-half layout contract (bounded 64 TiB direct map, kernel text, heap, per-CPU space) with const validators and 9 host tests. It is a validated contract, not an active mapper: no CR3 write, higher-half page-table installation or boot evidence for these addresses exists yet.
 - QEMU x86_64 evidence from the scheduler milestone remains: PIT/timer interrupts drive a three-kernel-thread preemptive scheduler. These are ring-0 threads sharing the kernel address space, not isolated userspace processes.
 - Memory: early x86_64 paging and CR3 bootstrap exist. A bounded `AddressSpace` contract, four-level PML4 → PDPT → PD → PT builder, ownership/rollback primitives, and a physical table pool over real frames exist. The pool's current boot integration is a validation probe, not a retained production allocator.
 - The checked user-copy helper validates a complete user range before page-bounded access through a supplied `PhysicalAccess` backend and caps each request at 1 MiB. It is not connected to a verified live user-memory backend.
@@ -70,7 +71,7 @@ That branch is the recovery point for the previous repository state and should n
 
 Prioritize the next missing runtime boundary, not additional feature labels:
 
-1. Complete the full CI matrix on the latest PR #85 head; retain the QEMU table-pool PASS and foreign-frame rejection assertions, and merge only after every required check is green.
+1. Review the higher-half kernel layout contract PR; after every check is green, merge it and wire `KERNEL_HALF_BASE`/`direct_map_address` into the address-space builder and boot mapper. QEMU table-pool PASS and foreign-frame rejection assertions stay in place.
 2. Keep the current `TableArena` as a bounded self-test resource. Define a permanent, QEMU-proven direct-map window and allocator lifetime before retaining a production table-frame pool.
 3. Resolve the lower-half bootstrap identity-map conflict with user mappings by defining the kernel's permanent higher-half mapping strategy.
 4. Build each process root with supervisor-only kernel mappings preserved; define root/table ownership and teardown before activating a process address space.

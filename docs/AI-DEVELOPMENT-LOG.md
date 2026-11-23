@@ -1,3 +1,18 @@
+## 2026-11-23 — Run 15: PR #85 merged; higher-half kernel layout contract introduced
+
+- **Merge:** PR #85 (TableArena reservation preflight + QEMU probe evidence, Run 14) was merged into `main` at merge commit `00e8f3f14c7b07c8153fa21fde13806dc153b3be` after its head `c1dc74ea4fea706d11fefc71773233adcea03a63` completed **all check-runs with conclusion success** (Rust workspace, Workspace Build & Validation, clippy-with-diagnostics, cargo failure diagnostics, UEFI loader, build-and-smoke-test-image, exception-injection-selftest, virtio-block-contract-and-qemu, cloud-security, cloud-release-contract, Build Multi-Arch Boot Images and all four AOSIN installers, plus the rustfmt bot commit). Merge used `expected_head_sha` compare-and-swap; no force push, no branch deletion; open draft PRs #83 and #64 remain untouched.
+- **Implemented on `feat/higher-half-kernel-layout-2026-11-23`:** new `kernel/src/memory/kernel_map.rs` — the higher-half kernel virtual layout contract:
+  - Single typed constants for the PML4-index-256 kernel-half base, a **bounded** 64 TiB direct map (translation returns `None` beyond the cap), kernel text/read-only data at `0xffff_c100…`, kernel heap at `0xffff_c180…` and per-CPU space at `0xffff_c1c0…`, all 2 MiB aligned.
+  - `validate_layout()` / `validate_region()` const validators: misaligned, zero-length, non-canonical, user-half, overflow, overlap and unordered layouts fail closed.
+  - `direct_map_address()` bounded physical→virtual alias translation; `kernel_region_of()` region lookup; `pml4_index()` / `is_kernel_half()` helpers.
+  - 9 host unit tests: shipped-layout validity, all regions verify as PML4 index >= 256 (the user half stays untouched by the existing builder), bounded translation, direct-map/text separation, distinct region kinds, and rejection of misaligned, user-half, zero-length and oversized (overlap) regions.
+  - `kernel/src/memory/mod.rs` registers and re-exports the new module.
+- **Files changed:** `kernel/src/memory/kernel_map.rs` (new), `kernel/src/memory/mod.rs`, `PROJECT_STATUS.md`, this log.
+- **Validation limits (honest):** no local Rust/QEMU toolchain exists in this execution environment; validation comes from remote CI on exact Commit SHAs, once available. The layout module is a validated contract, **not** an active mapper: no CR3 write, no higher-half page-table installation, no TLB invalidation, no Ring 3, no runtime boot evidence for these addresses yet. The next stage must wire these constants into the address-space builder and the boot mapper before any activation claim.
+- **Next priorities:** review this PR's CI; then implement the higher-half kernel-half mirror of `UserPageTableBuilder` (kernel-half PML4 walk with supervisor-only flags) plus boot-time validation that `BootInfo` memory maps never exceed `DIRECT_MAP_MAX_PHYSICAL`.
+
+---
+
 ## 2026-11-23 — Run 14: harden TableArena reservation preflight and require QEMU probe evidence
 
 - **Baseline audit:** continued from main `a1248b8974919a970f329d6a72ae5cefc228f749` after PR #84 merged. The latest main-head CI family (workspace, Quality Gate, boot image, VirtIO, Cloud Security, Multi-Architecture and AOSIN installers) completed successfully; scheduled branch integration audit run #19 also succeeded. PR #84's exact head passed 16/16 check-runs. Open draft PRs #83 (branch-audit quoting) and #64 (initd restart policy) were preserved.
