@@ -218,12 +218,21 @@ pub const fn pml4_index(virtual_address: u64) -> usize {
 
 /// True if the address is inside the canonical kernel half.
 pub const fn is_kernel_half(virtual_address: u64) -> bool {
-    virtual_address >= KERNEL_HALF_BASE
+    virtual_address >= KERNEL_HALF_BASE && is_canonical_x86_64_48(virtual_address)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn kernel_half_check_rejects_noncanonical_addresses() {
+        assert!(is_kernel_half(KERNEL_HALF_BASE));
+        assert!(is_kernel_half(u64::MAX));
+        assert!(!is_kernel_half(0xffff_0000_0000_0000));
+        assert!(!is_kernel_half(0x0000_8000_0000_0000));
+        assert!(!is_kernel_half(0x0000_7fff_ffff_ffff));
+    }
 
     #[test]
     fn shipped_layout_is_valid() {
