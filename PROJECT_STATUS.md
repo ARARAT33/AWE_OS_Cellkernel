@@ -2,7 +2,7 @@
 
 **Project track:** AWE development project #2  
 **Status:** Active development / preserved for continued work  
-**Date:** 2026-11-23  
+**Date:** 2026-11-24  
 **Primary branch:** `main`  
 **Preserved snapshot:** `archive/pre-restructure-2026-08-27`
 
@@ -25,18 +25,17 @@ The immediate focus is **engineering the bootable and testable AWE_OS core**, wi
 7. AYUI and first-party userspace
 8. recovery, validation and release evidence
 
-## Current implementation evidence (2026-11-23)
+## Current implementation evidence (2026-11-24)
 
 - PR #78 (checked physical user-copy contract), PRs #79–#81 (reservation-aware frame allocation and boot-owned range reservation), and PR #84 (reserved `TableArena` backing a real `PhysicalTablePool`) are merged into `main`.
-- Current main head: `00e8f3f14c7b07c8153fa21fde13806dc153b3be` (merge of PR #85).
+- Current main head: `bd47eca67259945c044454dfe31b09212e8a90b5` (merge of PR #86).
 - PR #85 (Run 14) was merged after its head `c1dc74ea4fea706d11fefc71773233adcea03a63` passed **16/16 GitHub check-runs**; PR #84 exact head `4f189c916b491a199ab0edef48d478c3ddbe6df4` also passed **16/16 check-runs** before that. The main-head workspace CI, Quality Gate, Bootable Image Pipeline, VirtIO Runtime, Cloud Security Gate, Multi-Architecture Images, AOSIN installers and scheduled branch-integration audit also completed successfully on 2026-11-22/23.
 - The live `PhysicalFrameAllocator` reserves boot-owned ranges before its first allocation. The `kernel-selftest` x86_64 boot path can reserve a 16-frame table arena below the proven 1 GiB bootstrap identity map and exercise a real `PhysicalTablePool` over those pages: allocation, zeroing, table read/write, release, foreign-frame rejection and reuse/rezeroing. PR #85 also adds a non-allocating contiguous-run preview that skips reserved ranges, so the probe does not mistake the first boot-owned page for a usable arena start.
 - Runtime evidence added in PR #85: the QEMU exception-injection self-test passed on code head `d4b65c1341129735516a05910c143e82b6fe0b48` with assertions for both `[cell:tables] probe result: PASS` and `foreign-rejected=1`. This validates the bounded self-test arena path only. The latest formatter follow-up `0ea2fbb` is formatting-only; the full CI suite must still pass on the latest PR head before merge.
-- New on `feat/higher-half-kernel-layout-2026-11-23`: `kernel/src/memory/kernel_map.rs` defines the planned higher-half layout contract (bounded 64 TiB direct map, kernel text, heap, per-CPU space) with const validators and 14 host tests. It is a validated contract, not an active mapper: no CR3 write, higher-half page-table installation or boot evidence for these addresses exists yet.
-- PR #86's first CI attempt exposed two test-compilation errors: `assert_eq!(Option<VirtualAddress>, None)` imposed `Debug`/`PartialEq` bounds, and a test-only `FrameReserver` import was redundant. The follow-up uses `.is_none()` and removes that import; fresh full CI on the corrected head is pending. PR #86 remains draft until its exact head passes the required checks.
-- Code review also found that `is_kernel_half()` accepted noncanonical upper-hole addresses; the PR follow-up now checks 48-bit canonicality and adds regression tests. This remains pending fresh CI.
-- The shipped higher-half region table is now also checked by a compile-time assertion using `validate_layout()`; the build will reject an invalid constant layout. This guard is pending fresh CI.
-- The expanded overflow fixture exposed a Clippy `identity_op` lint in test code; the equivalent simplified mask is pending revalidation. Keep PR #86 draft until the corrected head passes Clippy and the remaining runtime gates.
+- PR #86 merged into `main` at `bd47eca67259945c044454dfe31b09212e8a90b5` from exact PR head `32387a44460cab52215d5981a6fd0cd94d178a18` after **9/9 workflow families passed**. `kernel/src/memory/kernel_map.rs` now defines the bounded 64 TiB direct-map window, kernel text, heap and per-CPU virtual regions, canonical-address checks, half-open region lookup, a const pairwise validator, and a compile-time assertion over the shipped layout. It has 14 host tests.
+- Run 16 resolved the initial `Option<VirtualAddress>` assertion trait-bound errors, removed a redundant `FrameReserver` test import, hardened `is_kernel_half()` against noncanonical addresses, and added real overlap, unordered, noncanonical, overflow and region-boundary regression tests. A Clippy `identity_op` finding in the overflow-test fixture was fixed without changing production logic.
+- Exact-head CI evidence on `32387a44460cab52215d5981a6fd0cd94d178a18`: Quality Gate, CI Pipeline, Clippy, CI Diagnostics, Bootable Image Pipeline, VirtIO Runtime, Multi-Architecture Images, Cloud Security and AOSIN Cross-Platform Installers all concluded success. Diagnostics reported 443 `aweos-kernel` tests and 4 `kernel-bin` tests passing; workspace formatting/checks, QEMU exception-injection self-test, QEMU boot with a VirtIO block device, multi-architecture image builds and all four Linux/Windows GUI/CLI installer builds passed.
+- **Scope limit:** the merged higher-half module is a validated layout contract only. It does not install higher-half page tables, write CR3, invalidate TLB entries, establish a production direct map, or prove Ring 3/process isolation. The QEMU VirtIO result proves the existing boot/transport smoke path, not durable block I/O or filesystem persistence.
 - QEMU x86_64 evidence from the scheduler milestone remains: PIT/timer interrupts drive a three-kernel-thread preemptive scheduler. These are ring-0 threads sharing the kernel address space, not isolated userspace processes.
 - Memory: early x86_64 paging and CR3 bootstrap exist. A bounded `AddressSpace` contract, four-level PML4 → PDPT → PD → PT builder, ownership/rollback primitives, and a physical table pool over real frames exist. The pool's current boot integration is a validation probe, not a retained production allocator.
 - The checked user-copy helper validates a complete user range before page-bounded access through a supplied `PhysicalAccess` backend and caps each request at 1 MiB. It is not connected to a verified live user-memory backend.
@@ -75,7 +74,7 @@ That branch is the recovery point for the previous repository state and should n
 
 Prioritize the next missing runtime boundary, not additional feature labels:
 
-1. Review the higher-half kernel layout contract PR; after every check is green, merge it and wire `KERNEL_HALF_BASE`/`direct_map_address` into the address-space builder and boot mapper. QEMU table-pool PASS and foreign-frame rejection assertions stay in place.
+1. With PR #86 merged, implement a supervisor-only kernel-half page-table builder using the validated region contract, then add boot-time validation that every RAM/BootInfo range fits the bounded direct-map window. Keep the mapping inactive until QEMU proves the exact layout and permissions. Preserve the existing TableArena PASS and foreign-frame rejection assertions.
 2. Keep the current `TableArena` as a bounded self-test resource. Define a permanent, QEMU-proven direct-map window and allocator lifetime before retaining a production table-frame pool.
 3. Resolve the lower-half bootstrap identity-map conflict with user mappings by defining the kernel's permanent higher-half mapping strategy.
 4. Build each process root with supervisor-only kernel mappings preserved; define root/table ownership and teardown before activating a process address space.
