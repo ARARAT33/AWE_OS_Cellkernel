@@ -371,7 +371,7 @@ mod tests {
     fn overflowing_region_is_rejected() {
         let region = KernelRegion {
             kind: KernelRegionKind::KernelPerCpu,
-            base: u64::MAX & !(REGION_GRANULARITY - 1),
+            base: !(REGION_GRANULARITY - 1),
             length: REGION_GRANULARITY,
         };
         assert_eq!(validate_region(&region), Err(LayoutError::Overflow));
