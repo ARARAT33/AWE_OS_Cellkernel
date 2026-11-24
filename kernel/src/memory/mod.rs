@@ -36,8 +36,8 @@ pub use kernel_map::{
     kernel_region_of, pml4_index, validate_layout, validate_region,
 };
 pub use kernel_page_table_build::{
-    DIRECT_MAP_WINDOW_END, DirectMapFitError, KernelMapping, KernelPageBuildError,
-    KernelPageTableBuilder, KERNEL_PAGE_SIZE, fits_direct_map_window, validate_ram_ranges,
+    DIRECT_MAP_WINDOW_END, DirectMapFitError, KERNEL_PAGE_SIZE, KernelMapping,
+    KernelPageBuildError, KernelPageTableBuilder, fits_direct_map_window, validate_ram_ranges,
 };
 pub use mapper::{MapError, PageMapper};
 pub use page_table_build::{PageBuildError, TableMemory, UserPageTableBuilder};
