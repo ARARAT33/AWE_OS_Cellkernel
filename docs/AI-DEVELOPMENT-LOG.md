@@ -1,20 +1,21 @@
-## 2026-11-24 — Run 16: repair higher-half layout PR test compilation
+## 2026-11-24 — Run 16: repair, validate and merge higher-half layout contract
 
-- **Baseline:** `main` remained at `00e8f3f14c7b07c8153fa21fde13806dc153b3be`; draft PR #86 was at head `f6b18f965bb1fd962e60636e098c3d8ee0cbe803`.
-- **CI audit:** inspected the exact PR-triggered workflow jobs and logs. Workspace tests, Clippy, CI diagnostics, Cloud Security and VirtIO contract validation all stopped during Rust test compilation. The failing assertions compared `Option<VirtualAddress>` with `None`, causing `assert_eq!` to require `Debug` and `PartialEq` implementations that the address newtype intentionally does not expose. A test-only `FrameReserver` import was also redundant because the parent module import is already visible through `super::*`.
-- **Implemented on the existing PR branch:**
-  - Replaced the two `Option<VirtualAddress> == None` assertions with `.is_none()` checks. This keeps the public `VirtualAddress` trait surface unchanged and tests the intended bounded-translation contract directly.
-  - Removed the redundant test-only `FrameReserver` import so warning-sensitive Clippy validation is not blocked.
-  - During API review, tightened `is_kernel_half()` to require a 48-bit canonical address as well as the kernel-half threshold; added regression coverage for canonical kernel addresses, noncanonical upper-hole addresses and lower-half addresses.
-  - Added a compile-time assertion that runs the same `validate_layout()` contract against the shipped constants, so misalignment, overlap, noncanonical regions or overflow fail the build rather than waiting for a host test.
-  - Added half-open region-boundary coverage, including the adjacent heap/per-CPU boundary and intentional gaps.
-  - Refactored pairwise validation into a reusable const helper and replaced the misleading oversized-map test with real overlap/unordered rejection tests; added explicit noncanonical-address and arithmetic-overflow rejection tests.
-  - Fresh Clippy exposed `clippy::identity_op` in the overflow fixture (`u64::MAX & mask`); the test-only expression is being simplified to the equivalent inverted mask. No production logic is implicated.
-- **Files changed:** `kernel/src/memory/kernel_map.rs`, `kernel/src/memory/table_arena.rs`, `PROJECT_STATUS.md`, and this log.
-- **Validation:** the previous PR head failed compilation with E0277 in the two bounded-translation assertions; those failures are not counted as passing tests. UEFI loader, bootable-image, multi-architecture-image and AOSIN installer jobs completed successfully on that old PR event, but they do not validate the changed Rust test code. No local Cargo/QEMU execution is available in this session. The correction commit is pushed to the existing PR branch; fresh PR CI is required before the draft can be considered validated or ready.
-- **Scope boundary:** the higher-half module remains a layout contract only. It does not install page tables, write CR3, invalidate TLB entries, establish a production direct map, or prove process isolation. No runtime capability is promoted by this test-only correction.
-- **Next priorities:** verify the full check matrix on the corrected exact head; inspect any new failures; then implement a supervisor-only kernel-half page-table builder and boot-map range validation without activating an unproven mapping.
+- **Baseline:** `main` at `00e8f3f14c7b07c8153fa21fde13806dc153b3be`; draft PR #86 initially at `f6b18f965bb1fd962e60636e098c3d8ee0cbe803`.
+- **CI diagnosis:** the first PR run failed Rust test compilation because two `assert_eq!(Option<VirtualAddress>, None)` calls imposed `Debug`/`PartialEq` bounds on the address newtype. A test-only `FrameReserver` import was redundant. After those fixes, deeper review found `is_kernel_half()` accepted noncanonical upper-hole values and the original oversized-map test did not actually call the pairwise validator. A later Clippy run also caught `clippy::identity_op` in the overflow-test fixture.
+- **Implemented:**
+  - Replaced the two `Option<VirtualAddress>` equality assertions with `.is_none()` and removed the redundant `FrameReserver` import.
+  - Made `is_kernel_half()` require both the kernel-half threshold and 48-bit canonicality.
+  - Added a compile-time assertion over the complete shipped layout using `validate_layout()`.
+  - Added half-open region-boundary coverage, including adjacent heap/per-CPU boundaries and intentional gaps.
+  - Factored pairwise validation into a const helper that distinguishes unordered regions from overlap; added explicit overlap, unordered, noncanonical and overflow rejection tests.
+  - Simplified the overflow-test mask to satisfy Clippy without changing production behavior. Final `kernel_map.rs` coverage: 14 host tests.
+- **Files changed:** `kernel/src/memory/kernel_map.rs`, `kernel/src/memory/table_arena.rs`, `PROJECT_STATUS.md`, and `docs/AI-DEVELOPMENT-LOG.md`.
+- **Final validation:** exact PR head `32387a44460cab52215d5981a6fd0cd94d178a18` passed **9/9 workflow families**: AWEOS Quality Gate, AWEOS CI Pipeline, Clippy, CI Diagnostics, Bootable Image Pipeline, VirtIO Runtime, Multi-Architecture Images, Cloud Security and AOSIN Cross-Platform Installers. CI diagnostics reported **443 kernel tests + 4 kernel-bin tests** passing. Workspace format/check/tests/Clippy passed; UEFI loader, QEMU exception-injection self-test, QEMU boot with VirtIO block device, multi-architecture image builds and all four Linux/Windows GUI/CLI installer jobs passed.
+- **Merge:** PR #86 was marked ready only after the green checks, then merged with expected-head compare-and-swap into `main` at `bd47eca67259945c044454dfe31b09212e8a90b5`. No force push or branch deletion was performed.
+- **Scope boundary:** this merge validates a virtual-layout contract, not an active higher-half mapper. No higher-half page-table installation, CR3 switch, TLB invalidation/shootdown, permanent direct map, Ring 3 entry or process-isolation proof was added. VirtIO CI proves the current boot/transport smoke path, not persistent block I/O, flush semantics or crash recovery.
+- **Next priorities:** implement a supervisor-only kernel-half page-table builder that preserves the user half; validate all boot memory-map/BootInfo ranges against the direct-map cap; then add QEMU tests for mapping permissions, canonicality, guard gaps and boot-time failure handling before activation.
 
+---
 ---
 ## 2026-11-23 — Run 15: PR #85 merged; higher-half kernel layout contract introduced
 
