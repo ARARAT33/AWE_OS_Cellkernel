@@ -5,6 +5,7 @@
 - **Implemented on the existing PR branch:**
   - Replaced the two `Option<VirtualAddress> == None` assertions with `.is_none()` checks. This keeps the public `VirtualAddress` trait surface unchanged and tests the intended bounded-translation contract directly.
   - Removed the redundant test-only `FrameReserver` import so warning-sensitive Clippy validation is not blocked.
+  - During API review, tightened `is_kernel_half()` to require a 48-bit canonical address as well as the kernel-half threshold; added regression coverage for canonical kernel addresses, noncanonical upper-hole addresses and lower-half addresses.
 - **Files changed:** `kernel/src/memory/kernel_map.rs`, `kernel/src/memory/table_arena.rs`, `PROJECT_STATUS.md`, and this log.
 - **Validation:** the previous PR head failed compilation with E0277 in the two bounded-translation assertions; those failures are not counted as passing tests. UEFI loader, bootable-image, multi-architecture-image and AOSIN installer jobs completed successfully on that old PR event, but they do not validate the changed Rust test code. No local Cargo/QEMU execution is available in this session. The correction commit is pushed to the existing PR branch; fresh PR CI is required before the draft can be considered validated or ready.
 - **Scope boundary:** the higher-half module remains a layout contract only. It does not install page tables, write CR3, invalidate TLB entries, establish a production direct map, or prove process isolation. No runtime capability is promoted by this test-only correction.
