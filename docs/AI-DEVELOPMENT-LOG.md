@@ -1,3 +1,16 @@
+## 2026-11-24 — Run 16: repair higher-half layout PR test compilation
+
+- **Baseline:** `main` remained at `00e8f3f14c7b07c8153fa21fde13806dc153b3be`; draft PR #86 was at head `f6b18f965bb1fd962e60636e098c3d8ee0cbe803`.
+- **CI audit:** inspected the exact PR-triggered workflow jobs and logs. Workspace tests, Clippy, CI diagnostics, Cloud Security and VirtIO contract validation all stopped during Rust test compilation. The failing assertions compared `Option<VirtualAddress>` with `None`, causing `assert_eq!` to require `Debug` and `PartialEq` implementations that the address newtype intentionally does not expose. A test-only `FrameReserver` import was also redundant because the parent module import is already visible through `super::*`.
+- **Implemented on the existing PR branch:**
+  - Replaced the two `Option<VirtualAddress> == None` assertions with `.is_none()` checks. This keeps the public `VirtualAddress` trait surface unchanged and tests the intended bounded-translation contract directly.
+  - Removed the redundant test-only `FrameReserver` import so warning-sensitive Clippy validation is not blocked.
+- **Files changed:** `kernel/src/memory/kernel_map.rs`, `kernel/src/memory/table_arena.rs`, `PROJECT_STATUS.md`, and this log.
+- **Validation:** the previous PR head failed compilation with E0277 in the two bounded-translation assertions; those failures are not counted as passing tests. UEFI loader, bootable-image, multi-architecture-image and AOSIN installer jobs completed successfully on that old PR event, but they do not validate the changed Rust test code. No local Cargo/QEMU execution is available in this session. The correction commit is pushed to the existing PR branch; fresh PR CI is required before the draft can be considered validated or ready.
+- **Scope boundary:** the higher-half module remains a layout contract only. It does not install page tables, write CR3, invalidate TLB entries, establish a production direct map, or prove process isolation. No runtime capability is promoted by this test-only correction.
+- **Next priorities:** verify the full check matrix on the corrected exact head; inspect any new failures; then implement a supervisor-only kernel-half page-table builder and boot-map range validation without activating an unproven mapping.
+
+---
 ## 2026-11-23 — Run 15: PR #85 merged; higher-half kernel layout contract introduced
 
 - **Merge:** PR #85 (TableArena reservation preflight + QEMU probe evidence, Run 14) was merged into `main` at merge commit `00e8f3f14c7b07c8153fa21fde13806dc153b3be` after its head `c1dc74ea4fea706d11fefc71773233adcea03a63` completed **all check-runs with conclusion success** (Rust workspace, Workspace Build & Validation, clippy-with-diagnostics, cargo failure diagnostics, UEFI loader, build-and-smoke-test-image, exception-injection-selftest, virtio-block-contract-and-qemu, cloud-security, cloud-release-contract, Build Multi-Arch Boot Images and all four AOSIN installers, plus the rustfmt bot commit). Merge used `expected_head_sha` compare-and-swap; no force push, no branch deletion; open draft PRs #83 and #64 remain untouched.
