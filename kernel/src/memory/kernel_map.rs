@@ -280,6 +280,32 @@ mod tests {
     }
 
     #[test]
+    fn region_lookup_uses_half_open_boundaries() {
+        let regions = region_table();
+        let mut i = 0;
+        while i < regions.len() {
+            let region = regions[i];
+            let end = region_end(&region).unwrap();
+
+            assert_eq!(kernel_region_of(region.base), Some(region.kind));
+            assert_eq!(kernel_region_of(end - 1), Some(region.kind));
+
+            if i + 1 < regions.len() {
+                let next = regions[i + 1];
+                if end == next.base {
+                    assert_eq!(kernel_region_of(end), Some(next.kind));
+                } else {
+                    assert_eq!(kernel_region_of(end), None);
+                }
+            } else {
+                assert_eq!(kernel_region_of(end), None);
+            }
+
+            i += 1;
+        }
+    }
+
+    #[test]
     fn kernel_regions_use_distinct_kinds() {
         let text = kernel_region_of(KERNEL_TEXT_BASE + 0x1000).unwrap();
         let heap = kernel_region_of(KERNEL_HEAP_BASE + 0x1000).unwrap();
