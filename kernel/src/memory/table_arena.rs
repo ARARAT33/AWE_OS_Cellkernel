@@ -336,7 +336,6 @@ pub use live_probe::boot_table_pool_probe;
 
 #[cfg(test)]
 mod tests {
-    use super::super::boot_reserve::FrameReserver;
     use super::super::frame::{BitmapFrameAllocator, PhysicalFrameAllocator};
     use super::super::paging::{PageFlags, PageTableEntry};
     use super::super::physical_tables::PhysicalTablePool;
