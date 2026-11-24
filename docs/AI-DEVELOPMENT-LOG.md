@@ -1,3 +1,36 @@
+## 2026-11-24 — Run 16: repair higher-half layout PR test compilation
+
+- **Baseline:** `main` remained at `00e8f3f14c7b07c8153fa21fde13806dc153b3be`; draft PR #86 was at head `f6b18f965bb1fd962e60636e098c3d8ee0cbe803`.
+- **CI audit:** inspected the exact PR-triggered workflow jobs and logs. Workspace tests, Clippy, CI diagnostics, Cloud Security and VirtIO contract validation all stopped during Rust test compilation. The failing assertions compared `Option<VirtualAddress>` with `None`, causing `assert_eq!` to require `Debug` and `PartialEq` implementations that the address newtype intentionally does not expose. A test-only `FrameReserver` import was also redundant because the parent module import is already visible through `super::*`.
+- **Implemented on the existing PR branch:**
+  - Replaced the two `Option<VirtualAddress> == None` assertions with `.is_none()` checks. This keeps the public `VirtualAddress` trait surface unchanged and tests the intended bounded-translation contract directly.
+  - Removed the redundant test-only `FrameReserver` import so warning-sensitive Clippy validation is not blocked.
+  - During API review, tightened `is_kernel_half()` to require a 48-bit canonical address as well as the kernel-half threshold; added regression coverage for canonical kernel addresses, noncanonical upper-hole addresses and lower-half addresses.
+  - Added a compile-time assertion that runs the same `validate_layout()` contract against the shipped constants, so misalignment, overlap, noncanonical regions or overflow fail the build rather than waiting for a host test.
+  - Added half-open region-boundary coverage, including the adjacent heap/per-CPU boundary and intentional gaps.
+  - Refactored pairwise validation into a reusable const helper and replaced the misleading oversized-map test with real overlap/unordered rejection tests; added explicit noncanonical-address and arithmetic-overflow rejection tests.
+  - Fresh Clippy exposed `clippy::identity_op` in the overflow fixture (`u64::MAX & mask`); the test-only expression is being simplified to the equivalent inverted mask. No production logic is implicated.
+- **Files changed:** `kernel/src/memory/kernel_map.rs`, `kernel/src/memory/table_arena.rs`, `PROJECT_STATUS.md`, and this log.
+- **Validation:** the previous PR head failed compilation with E0277 in the two bounded-translation assertions; those failures are not counted as passing tests. UEFI loader, bootable-image, multi-architecture-image and AOSIN installer jobs completed successfully on that old PR event, but they do not validate the changed Rust test code. No local Cargo/QEMU execution is available in this session. The correction commit is pushed to the existing PR branch; fresh PR CI is required before the draft can be considered validated or ready.
+- **Scope boundary:** the higher-half module remains a layout contract only. It does not install page tables, write CR3, invalidate TLB entries, establish a production direct map, or prove process isolation. No runtime capability is promoted by this test-only correction.
+- **Next priorities:** verify the full check matrix on the corrected exact head; inspect any new failures; then implement a supervisor-only kernel-half page-table builder and boot-map range validation without activating an unproven mapping.
+
+---
+## 2026-11-23 — Run 15: PR #85 merged; higher-half kernel layout contract introduced
+
+- **Merge:** PR #85 (TableArena reservation preflight + QEMU probe evidence, Run 14) was merged into `main` at merge commit `00e8f3f14c7b07c8153fa21fde13806dc153b3be` after its head `c1dc74ea4fea706d11fefc71773233adcea03a63` completed **all check-runs with conclusion success** (Rust workspace, Workspace Build & Validation, clippy-with-diagnostics, cargo failure diagnostics, UEFI loader, build-and-smoke-test-image, exception-injection-selftest, virtio-block-contract-and-qemu, cloud-security, cloud-release-contract, Build Multi-Arch Boot Images and all four AOSIN installers, plus the rustfmt bot commit). Merge used `expected_head_sha` compare-and-swap; no force push, no branch deletion; open draft PRs #83 and #64 remain untouched.
+- **Implemented on `feat/higher-half-kernel-layout-2026-11-23`:** new `kernel/src/memory/kernel_map.rs` — the higher-half kernel virtual layout contract:
+  - Single typed constants for the PML4-index-256 kernel-half base, a **bounded** 64 TiB direct map (translation returns `None` beyond the cap), kernel text/read-only data at `0xffff_c100…`, kernel heap at `0xffff_c180…` and per-CPU space at `0xffff_c1c0…`, all 2 MiB aligned.
+  - `validate_layout()` / `validate_region()` const validators: misaligned, zero-length, non-canonical, user-half, overflow, overlap and unordered layouts fail closed.
+  - `direct_map_address()` bounded physical→virtual alias translation; `kernel_region_of()` region lookup; `pml4_index()` / `is_kernel_half()` helpers.
+  - 9 host unit tests in the initial Run 15 submission; Run 16 adds canonical-kernel-half and half-open region-boundary regression tests, bringing the current PR head to 14 tests. Coverage includes shipped-layout validity, PML4-index separation, bounded translation, direct-map/text separation, distinct region kinds, canonical-address checks, and invalid-region rejection.
+  - `kernel/src/memory/mod.rs` registers and re-exports the new module.
+- **Files changed:** `kernel/src/memory/kernel_map.rs` (new), `kernel/src/memory/mod.rs`, `PROJECT_STATUS.md`, this log.
+- **Validation limits (honest):** no local Rust/QEMU toolchain exists in this execution environment; validation comes from remote CI on exact Commit SHAs, once available. The layout module is a validated contract, **not** an active mapper: no CR3 write, no higher-half page-table installation, no TLB invalidation, no Ring 3, no runtime boot evidence for these addresses yet. The next stage must wire these constants into the address-space builder and the boot mapper before any activation claim.
+- **Next priorities:** review this PR's CI; then implement the higher-half kernel-half mirror of `UserPageTableBuilder` (kernel-half PML4 walk with supervisor-only flags) plus boot-time validation that `BootInfo` memory maps never exceed `DIRECT_MAP_MAX_PHYSICAL`.
+
+---
+
 ## 2026-11-23 — Run 14: harden TableArena reservation preflight and require QEMU probe evidence
 
 - **Baseline audit:** continued from main `a1248b8974919a970f329d6a72ae5cefc228f749` after PR #84 merged. The latest main-head CI family (workspace, Quality Gate, boot image, VirtIO, Cloud Security, Multi-Architecture and AOSIN installers) completed successfully; scheduled branch integration audit run #19 also succeeded. PR #84's exact head passed 16/16 check-runs. Open draft PRs #83 (branch-audit quoting) and #64 (initd restart policy) were preserved.

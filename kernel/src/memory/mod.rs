@@ -6,6 +6,7 @@ pub mod allocator;
 pub mod boot_mapper;
 pub mod boot_reserve;
 pub mod frame;
+pub mod kernel_map;
 pub mod mapper;
 pub mod page_table_build;
 pub mod paging;
@@ -29,6 +30,10 @@ pub use boot_reserve::{
 pub use frame::{
     BitmapFrameAllocator, BitmapFrameError, Frame, FrameAllocatorError, PAGE_SIZE,
     PhysicalFrameAllocator, checked_frame_end, frame_at, frame_end,
+};
+pub use kernel_map::{
+    KernelRegion, KernelRegionKind, LayoutError, direct_map_address, is_kernel_half,
+    kernel_region_of, pml4_index, validate_layout, validate_region,
 };
 pub use mapper::{MapError, PageMapper};
 pub use page_table_build::{PageBuildError, TableMemory, UserPageTableBuilder};
