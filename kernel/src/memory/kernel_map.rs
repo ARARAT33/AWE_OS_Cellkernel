@@ -147,8 +147,8 @@ pub const fn validate_region(region: &KernelRegion) -> Result<(), LayoutError> {
     Ok(())
 }
 
-/// Build-time validation of the whole higher-half plan. Const-invocable so
-/// a future compile-time static check can share this exact validation.
+/// Const validation of the whole higher-half plan. The compile-time
+/// assertion below and host tests share this exact validation.
 pub const fn validate_layout() -> Result<(), LayoutError> {
     let regions = region_table();
     let mut i = 0;
@@ -174,6 +174,13 @@ pub const fn validate_layout() -> Result<(), LayoutError> {
     }
     Ok(())
 }
+
+/// Reject an invalid shipped layout during compilation, before any mapper can
+/// consume these constants.
+const _: () = match validate_layout() {
+    Ok(()) => (),
+    Err(_) => panic!("invalid CellKernel x86_64 higher-half layout"),
+};
 
 /// Translate a physical address into its higher-half direct-map alias.
 /// `None` means the physical address exceeds the bounded direct-map window
