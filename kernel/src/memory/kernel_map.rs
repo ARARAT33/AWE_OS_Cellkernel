@@ -253,8 +253,8 @@ mod tests {
             DIRECT_MAP_BASE + 0x1000
         );
         assert!(direct_map_address(DIRECT_MAP_MAX_PHYSICAL - 0x1000).is_some());
-        assert_eq!(direct_map_address(DIRECT_MAP_MAX_PHYSICAL), None);
-        assert_eq!(direct_map_address(0xffff_0000_0000_0000), None);
+        assert!(direct_map_address(DIRECT_MAP_MAX_PHYSICAL).is_none());
+        assert!(direct_map_address(0xffff_0000_0000_0000).is_none());
     }
 
     #[test]
