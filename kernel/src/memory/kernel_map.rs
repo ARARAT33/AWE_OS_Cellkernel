@@ -134,9 +134,6 @@ pub const fn validate_region(region: &KernelRegion) -> Result<(), LayoutError> {
     {
         return Err(LayoutError::Misaligned);
     }
-    if region.base < KERNEL_HALF_BASE {
-        return Err(LayoutError::NotKernelHalf);
-    }
     let end = match region_end(region) {
         Ok(end) => end,
         Err(e) => return Err(e),
@@ -144,15 +141,17 @@ pub const fn validate_region(region: &KernelRegion) -> Result<(), LayoutError> {
     if !is_canonical_x86_64_48(region.base) || !is_canonical_x86_64_48(end - 1) {
         return Err(LayoutError::NonCanonical);
     }
+    if region.base < KERNEL_HALF_BASE {
+        return Err(LayoutError::NotKernelHalf);
+    }
     Ok(())
 }
 
-/// Const validation of the whole higher-half plan. The compile-time
-/// assertion below and host tests share this exact validation.
-pub const fn validate_layout() -> Result<(), LayoutError> {
-    let regions = region_table();
+/// Validate a sorted sequence of non-overlapping kernel regions.
+/// Ordering is checked before overlap so both failure modes remain distinct.
+const fn validate_regions(regions: &[KernelRegion]) -> Result<(), LayoutError> {
     let mut i = 0;
-    while i < REGION_COUNT {
+    while i < regions.len() {
         match validate_region(&regions[i]) {
             Ok(()) => {}
             Err(e) => return Err(e),
@@ -161,18 +160,25 @@ pub const fn validate_layout() -> Result<(), LayoutError> {
             Ok(end) => end,
             Err(e) => return Err(e),
         };
-        if i + 1 < REGION_COUNT {
+        if i + 1 < regions.len() {
             let next = &regions[i + 1];
-            if end > next.base {
-                return Err(LayoutError::Overlap);
-            }
             if next.base <= regions[i].base {
                 return Err(LayoutError::Unordered);
+            }
+            if end > next.base {
+                return Err(LayoutError::Overlap);
             }
         }
         i += 1;
     }
     Ok(())
+}
+
+/// Const validation of the whole higher-half plan. The compile-time
+/// assertion below and host tests share this exact validation.
+pub const fn validate_layout() -> Result<(), LayoutError> {
+    let regions = region_table();
+    validate_regions(&regions)
 }
 
 /// Reject an invalid shipped layout during compilation, before any mapper can
@@ -352,19 +358,58 @@ mod tests {
     }
 
     #[test]
-    fn oversized_direct_map_only_the_pairwise_check_catches_it() {
-        // An oversized direct map is aligned and kernel-half valid, so only
-        // the pairwise check in validate_layout can reject it against the
-        // kernel-text region. Prove the pairwise arithmetic directly.
-        let oversized_direct = KernelRegion {
-            kind: KernelRegionKind::DirectMap,
-            base: DIRECT_MAP_BASE,
-            length: KERNEL_TEXT_BASE - DIRECT_MAP_BASE + REGION_GRANULARITY,
+    fn noncanonical_region_is_rejected() {
+        let region = KernelRegion {
+            kind: KernelRegionKind::KernelText,
+            base: 0xffff_0000_0000_0000,
+            length: REGION_GRANULARITY,
         };
-        assert_eq!(validate_region(&oversized_direct), Ok(()));
-        let direct_end = region_end(&oversized_direct).unwrap();
-        assert!(direct_end > KERNEL_TEXT_BASE);
-        // The shipped layout must never exhibit that overlap.
-        assert_eq!(validate_layout(), Ok(()));
+        assert_eq!(validate_region(&region), Err(LayoutError::NonCanonical));
+    }
+
+    #[test]
+    fn overflowing_region_is_rejected() {
+        let region = KernelRegion {
+            kind: KernelRegionKind::KernelPerCpu,
+            base: u64::MAX & !(REGION_GRANULARITY - 1),
+            length: REGION_GRANULARITY,
+        };
+        assert_eq!(validate_region(&region), Err(LayoutError::Overflow));
+    }
+
+    #[test]
+    fn overlapping_regions_are_rejected_by_pairwise_validator() {
+        let regions = [
+            KernelRegion {
+                kind: KernelRegionKind::DirectMap,
+                base: DIRECT_MAP_BASE,
+                length: KERNEL_TEXT_BASE - DIRECT_MAP_BASE + REGION_GRANULARITY,
+            },
+            KernelRegion {
+                kind: KernelRegionKind::KernelText,
+                base: KERNEL_TEXT_BASE,
+                length: KERNEL_TEXT_SIZE,
+            },
+        ];
+        assert_eq!(validate_region(&regions[0]), Ok(()));
+        assert_eq!(validate_region(&regions[1]), Ok(()));
+        assert_eq!(validate_regions(&regions), Err(LayoutError::Overlap));
+    }
+
+    #[test]
+    fn unordered_regions_are_rejected_before_overlap_check() {
+        let regions = [
+            KernelRegion {
+                kind: KernelRegionKind::KernelHeap,
+                base: KERNEL_HEAP_BASE,
+                length: KERNEL_HEAP_SIZE,
+            },
+            KernelRegion {
+                kind: KernelRegionKind::KernelText,
+                base: KERNEL_TEXT_BASE,
+                length: KERNEL_TEXT_SIZE,
+            },
+        ];
+        assert_eq!(validate_regions(&regions), Err(LayoutError::Unordered));
     }
 }
