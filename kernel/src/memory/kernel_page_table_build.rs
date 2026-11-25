@@ -857,18 +857,18 @@ mod tests {
 
     #[test]
     fn direct_map_fit_rejects_out_of_window_empty_and_overflowing_ranges() {
-        assert!(matches!(
+        assert_eq!(
             fits_direct_map_window(DIRECT_MAP_MAX_PHYSICAL, 0x1000),
             Err(DirectMapFitError::BeyondWindow {
                 end: DIRECT_MAP_MAX_PHYSICAL + 0x1000
             })
-        ));
-        assert!(matches!(
+        );
+        assert_eq!(
             fits_direct_map_window(DIRECT_MAP_MAX_PHYSICAL - 0x800, 0x1000),
             Err(DirectMapFitError::BeyondWindow {
                 end: DIRECT_MAP_MAX_PHYSICAL + 0x800
             })
-        ));
+        );
         assert_eq!(
             fits_direct_map_window(0, 0),
             Err(DirectMapFitError::EmptyRange)
