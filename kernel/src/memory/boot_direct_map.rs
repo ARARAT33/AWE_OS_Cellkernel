@@ -143,8 +143,8 @@ const _: () = assert!(DIRECT_MAP_MAX_PHYSICAL <= 64 * 1024 * 1024 * 1024 * 1024)
 mod tests {
     use super::*;
     use awe_boot_protocol::{
-        AWE_BOOT_MAGIC, AWE_BOOT_VERSION, Architecture, MEMORY_REGION_MMIO,
-        MEMORY_REGION_RESERVED, MemoryRegion,
+        AWE_BOOT_MAGIC, AWE_BOOT_VERSION, Architecture, MEMORY_REGION_MMIO, MEMORY_REGION_RESERVED,
+        MemoryRegion,
     };
 
     fn region(base: u64, length: u64, kind: u8) -> MemoryRegion {
