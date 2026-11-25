@@ -25,11 +25,10 @@
 
 use super::address::is_canonical_x86_64_48;
 use super::kernel_map::{
-    DIRECT_MAP_BASE, DIRECT_MAP_MAX_PHYSICAL, KERNEL_HEAP_BASE, KERNEL_PERCPU_BASE,
-    KERNEL_TEXT_BASE, KERNEL_TEXT_SIZE, KernelRegionKind, kernel_region_of, pml4_index,
+    DIRECT_MAP_BASE, DIRECT_MAP_MAX_PHYSICAL, KernelRegionKind, kernel_region_of, pml4_index,
 };
-use super::paging::{PageFlags, PageTable, PageTableEntry, indices, valid_mapping};
 use super::page_table_build::TableMemory;
+use super::paging::{PageFlags, PageTableEntry, indices, valid_mapping};
 
 /// 4 KiB page size used by this builder (large pages are not installed).
 pub const KERNEL_PAGE_SIZE: u64 = 0x1000;
@@ -133,6 +132,55 @@ pub struct KernelMapping {
     pub flags: PageFlags,
 }
 
+/// Validate a kernel mapping independently of any page-table memory backend.
+///
+/// Keeping this check outside the generic builder makes the policy reusable
+/// by boot planning and host-side validation without requiring a dummy
+/// `TableMemory` type parameter.
+pub fn validate_kernel_mapping(mapping: &KernelMapping) -> Result<(), KernelPageBuildError> {
+    if mapping.page_count == 0
+        || mapping.virtual_start & (KERNEL_PAGE_SIZE - 1) != 0
+        || mapping.physical_start & (KERNEL_PAGE_SIZE - 1) != 0
+        || !valid_mapping(mapping.physical_start, mapping.flags)
+    {
+        return Err(KernelPageBuildError::InvalidMapping);
+    }
+    if mapping.flags.contains(PageFlags::HUGE) {
+        return Err(KernelPageBuildError::HugeForbidden);
+    }
+    if mapping.flags.contains(PageFlags::USER) {
+        return Err(KernelPageBuildError::UserFlagForbidden);
+    }
+    if !is_canonical_x86_64_48(mapping.virtual_start) {
+        return Err(KernelPageBuildError::InvalidMapping);
+    }
+    if pml4_index(mapping.virtual_start) < 256 {
+        return Err(KernelPageBuildError::UserHalfForbidden);
+    }
+    let bytes = mapping
+        .page_count
+        .checked_mul(KERNEL_PAGE_SIZE)
+        .ok_or(KernelPageBuildError::Overflow)?;
+    let virtual_end = mapping
+        .virtual_start
+        .checked_add(bytes)
+        .ok_or(KernelPageBuildError::Overflow)?;
+    let physical_end = mapping
+        .physical_start
+        .checked_add(bytes)
+        .ok_or(KernelPageBuildError::Overflow)?;
+    let physical_limit = PageTableEntry::ADDRESS_MASK + KERNEL_PAGE_SIZE;
+    if physical_end > physical_limit {
+        return Err(KernelPageBuildError::Overflow);
+    }
+    let region = kernel_region_of(mapping.virtual_start)
+        .ok_or(KernelPageBuildError::OutsidePlannedRegion)?;
+    if kernel_region_of(virtual_end - 1) != Some(region) {
+        return Err(KernelPageBuildError::CrossesRegionBoundary);
+    }
+    check_region_policy(region, mapping.flags)
+}
+
 /// Flag policy enforced for every kernel-half leaf mapping.
 fn check_region_policy(
     region: KernelRegionKind,
@@ -159,8 +207,7 @@ fn check_region_policy(
 /// Intermediate entries are supervisor-only and writable so leaf permissions
 /// remain the effective access boundary. GLOBAL is a leaf attribute and is
 /// intentionally not set on non-leaf entries.
-const KERNEL_INTERMEDIATE_FLAGS: PageFlags =
-    PageFlags::PRESENT.union(PageFlags::WRITABLE);
+const KERNEL_INTERMEDIATE_FLAGS: PageFlags = PageFlags::PRESENT.union(PageFlags::WRITABLE);
 
 /// Upper bound on intermediate table frames tracked by one builder.
 const MAX_TRACKED_TABLES: usize = 512;
@@ -219,59 +266,11 @@ impl<'m, M: TableMemory> KernelPageTableBuilder<'m, M> {
         Ok(())
     }
 
-    /// Validate the complete externally supplied mapping before changing any
-    /// table. Region lookup uses half-open boundaries, so a mapping that
-    /// crosses a region's end is rejected instead of silently spilling into
-    /// a gap or the next region.
-    pub fn validate_mapping(mapping: &KernelMapping) -> Result<(), KernelPageBuildError> {
-        if mapping.page_count == 0
-            || mapping.virtual_start & (KERNEL_PAGE_SIZE - 1) != 0
-            || mapping.physical_start & (KERNEL_PAGE_SIZE - 1) != 0
-            || !valid_mapping(mapping.physical_start, mapping.flags)
-        {
-            return Err(KernelPageBuildError::InvalidMapping);
-        }
-        if mapping.flags.contains(PageFlags::HUGE) {
-            return Err(KernelPageBuildError::HugeForbidden);
-        }
-        if mapping.flags.contains(PageFlags::USER) {
-            return Err(KernelPageBuildError::UserFlagForbidden);
-        }
-        if !is_canonical_x86_64_48(mapping.virtual_start) {
-            return Err(KernelPageBuildError::InvalidMapping);
-        }
-        if pml4_index(mapping.virtual_start) < 256 {
-            return Err(KernelPageBuildError::UserHalfForbidden);
-        }
-        let bytes = mapping
-            .page_count
-            .checked_mul(KERNEL_PAGE_SIZE)
-            .ok_or(KernelPageBuildError::Overflow)?;
-        let virtual_end = mapping
-            .virtual_start
-            .checked_add(bytes)
-            .ok_or(KernelPageBuildError::Overflow)?;
-        let physical_end = mapping
-            .physical_start
-            .checked_add(bytes)
-            .ok_or(KernelPageBuildError::Overflow)?;
-        let physical_limit = PageTableEntry::ADDRESS_MASK + KERNEL_PAGE_SIZE;
-        if physical_end > physical_limit {
-            return Err(KernelPageBuildError::Overflow);
-        }
-        let region = kernel_region_of(mapping.virtual_start)
-            .ok_or(KernelPageBuildError::OutsidePlannedRegion)?;
-        if kernel_region_of(virtual_end - 1) != Some(region) {
-            return Err(KernelPageBuildError::CrossesRegionBoundary);
-        }
-        check_region_policy(region, mapping.flags)
-    }
-
     /// Check every existing path before installing any page in this mapping.
     /// A rejected preflight leaves every table unchanged, so a partially
     /// installed range can never be observed.
     pub fn preflight(&self, mapping: &KernelMapping) -> Result<(), KernelPageBuildError> {
-        Self::validate_mapping(mapping)?;
+        validate_kernel_mapping(mapping)?;
         let mut page = 0u64;
         while page < mapping.page_count {
             let offset = page
@@ -520,11 +519,7 @@ impl<'m, M: TableMemory> KernelPageTableBuilder<'m, M> {
             level += 1;
         }
         let leaf = self.memory.table(table_phys)?.get(idx[3])?;
-        if leaf.is_present() {
-            Some(leaf)
-        } else {
-            None
-        }
+        if leaf.is_present() { Some(leaf) } else { None }
     }
 
     /// True if nothing is present below PML4 index 256. The user half of the
@@ -545,6 +540,10 @@ impl<'m, M: TableMemory> KernelPageTableBuilder<'m, M> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::memory::kernel_map::{
+        KERNEL_HEAP_BASE, KERNEL_PERCPU_BASE, KERNEL_TEXT_BASE, KERNEL_TEXT_SIZE,
+    };
+    use crate::memory::paging::PageTable;
 
     const KERNEL_MAP_BASE: u64 = DIRECT_MAP_BASE;
 
@@ -578,7 +577,7 @@ mod tests {
             Self {
                 next_frame: 0x10_0000,
                 phys: [0; FAKE_TABLES],
-                tables: [PageTable::new(); FAKE_TABLES],
+                tables: [const { PageTable::new() }; FAKE_TABLES],
                 live: [false; FAKE_TABLES],
                 used: 0,
             }
@@ -645,7 +644,7 @@ mod tests {
     fn user_half_install_is_forbidden_everywhere() {
         let mapping = vm(0x0000_1000, 0x30_0000, 1, PageFlags::PRESENT);
         assert_eq!(
-            KernelPageTableBuilder::validate_mapping(&mapping),
+            validate_kernel_mapping(&mapping),
             Err(KernelPageBuildError::UserHalfForbidden)
         );
         let mut memory = FakeMemory::new();
@@ -667,7 +666,7 @@ mod tests {
             PageFlags::PRESENT.union(PageFlags::USER),
         );
         assert_eq!(
-            KernelPageTableBuilder::validate_mapping(&mapping),
+            validate_kernel_mapping(&mapping),
             Err(KernelPageBuildError::UserFlagForbidden)
         );
     }
@@ -681,7 +680,7 @@ mod tests {
             PageFlags::PRESENT.union(PageFlags::HUGE),
         );
         assert_eq!(
-            KernelPageTableBuilder::validate_mapping(&mapping),
+            validate_kernel_mapping(&mapping),
             Err(KernelPageBuildError::HugeForbidden)
         );
     }
@@ -691,7 +690,7 @@ mod tests {
         // Inside the gap between the text region end and the heap start.
         let mapping = vm(0xffff_c110_0000_0000, 0x30_0000, 1, RNX);
         assert_eq!(
-            KernelPageTableBuilder::validate_mapping(&mapping),
+            validate_kernel_mapping(&mapping),
             Err(KernelPageBuildError::OutsidePlannedRegion)
         );
     }
@@ -701,7 +700,7 @@ mod tests {
         let base = KERNEL_TEXT_BASE + KERNEL_TEXT_SIZE - KERNEL_PAGE_SIZE;
         let mapping = vm(base, 0x30_0000, 2, RNX);
         assert_eq!(
-            KernelPageTableBuilder::validate_mapping(&mapping),
+            validate_kernel_mapping(&mapping),
             Err(KernelPageBuildError::CrossesRegionBoundary)
         );
     }
@@ -715,7 +714,7 @@ mod tests {
             PageFlags::PRESENT.union(PageFlags::WRITABLE),
         );
         assert_eq!(
-            KernelPageTableBuilder::validate_mapping(&mapping),
+            validate_kernel_mapping(&mapping),
             Err(KernelPageBuildError::WritableTextRegion)
         );
     }
@@ -729,7 +728,7 @@ mod tests {
             PageFlags::PRESENT.union(PageFlags::WRITABLE),
         );
         assert_eq!(
-            KernelPageTableBuilder::validate_mapping(&mapping),
+            validate_kernel_mapping(&mapping),
             Err(KernelPageBuildError::WritableExecutable)
         );
     }
@@ -741,7 +740,7 @@ mod tests {
         let unaligned_phys = vm(KERNEL_MAP_BASE, 0x30_0123, 1, RNX);
         for mapping in [misaligned, empty, unaligned_phys] {
             assert_eq!(
-                KernelPageTableBuilder::validate_mapping(&mapping),
+                validate_kernel_mapping(&mapping),
                 Err(KernelPageBuildError::InvalidMapping)
             );
         }
@@ -870,7 +869,10 @@ mod tests {
                 end: DIRECT_MAP_MAX_PHYSICAL + 0x800
             })
         ));
-        assert_eq!(fits_direct_map_window(0, 0), Err(DirectMapFitError::EmptyRange));
+        assert_eq!(
+            fits_direct_map_window(0, 0),
+            Err(DirectMapFitError::EmptyRange)
+        );
         assert!(matches!(
             fits_direct_map_window(0xffff_ffff_ffff_f000, 0x2000),
             Err(DirectMapFitError::Overflow)
@@ -885,10 +887,7 @@ mod tests {
             (0x90_0000, 0x30_0000),
         ];
         assert_eq!(validate_ram_ranges(&ranges), Ok(()));
-        let bad = [
-            (0u64, 0x30_0000u64),
-            (DIRECT_MAP_MAX_PHYSICAL, 0x30_0000),
-        ];
+        let bad = [(0u64, 0x30_0000u64), (DIRECT_MAP_MAX_PHYSICAL, 0x30_0000)];
         assert_eq!(
             validate_ram_ranges(&bad),
             Err((
@@ -903,14 +902,14 @@ mod tests {
     #[test]
     fn invalid_root_is_rejected() {
         let mut memory = FakeMemory::new();
-        assert_eq!(
+        assert!(matches!(
             KernelPageTableBuilder::new(0, &mut memory),
             Err(KernelPageBuildError::InvalidRoot)
-        );
-        assert_eq!(
+        ));
+        assert!(matches!(
             KernelPageTableBuilder::new(1, &mut memory),
             Err(KernelPageBuildError::InvalidRoot)
-        );
+        ));
     }
 
     #[test]
