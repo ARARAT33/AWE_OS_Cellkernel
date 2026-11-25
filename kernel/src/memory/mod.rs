@@ -7,6 +7,7 @@ pub mod boot_mapper;
 pub mod boot_reserve;
 pub mod frame;
 pub mod kernel_map;
+pub mod kernel_page_table_build;
 pub mod mapper;
 pub mod page_table_build;
 pub mod paging;

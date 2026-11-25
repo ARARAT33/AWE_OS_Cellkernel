@@ -76,6 +76,8 @@ pub enum KernelPageBuildError {
     InvalidTableFrame,
     /// The table allocator returned a frame already owned by this builder.
     DuplicateTableFrame,
+    /// Two mappings in one install batch cover at least one common virtual page.
+    OverlappingMappings,
 }
 
 /// Errors reported when validating that physical ranges fit the bounded
@@ -100,7 +102,7 @@ pub const fn fits_direct_map_window(base: u64, length: u64) -> Result<(), Direct
         Some(end) => end,
         None => return Err(DirectMapFitError::Overflow),
     };
-    if end > DIRECT_MAP_WINDOW_END {
+    if end > DIRECT_MAP_MAX_PHYSICAL {
         return Err(DirectMapFitError::BeyondWindow { end });
     }
     Ok(())
@@ -154,12 +156,11 @@ fn check_region_policy(
     Ok(())
 }
 
-/// Intermediate entry flags for the kernel half: supervisor-only traversal,
-/// writable so leaf permissions are the only boundary, and global so kernel
-/// mappings survive CR3 switches once activation lands.
-const KERNEL_INTERMEDIATE_FLAGS: PageFlags = PageFlags::PRESENT
-    .union(PageFlags::WRITABLE)
-    .union(PageFlags::GLOBAL);
+/// Intermediate entries are supervisor-only and writable so leaf permissions
+/// remain the effective access boundary. GLOBAL is a leaf attribute and is
+/// intentionally not set on non-leaf entries.
+const KERNEL_INTERMEDIATE_FLAGS: PageFlags =
+    PageFlags::PRESENT.union(PageFlags::WRITABLE);
 
 /// Upper bound on intermediate table frames tracked by one builder.
 const MAX_TRACKED_TABLES: usize = 512;
@@ -329,13 +330,43 @@ impl<'m, M: TableMemory> KernelPageTableBuilder<'m, M> {
         Ok(())
     }
 
-    /// Validate and install every mapping in insertion order. The preflight
-    /// pass rejects the whole batch before any table is mutated, so a bad
-    /// later mapping can never leave an earlier one installed.
+    /// Validate the full batch, reject virtual-range overlaps, and preflight
+    /// existing page-table entries before mutation. If a later allocation or
+    /// backend access fails during installation, partial tables may remain;
+    /// the caller must keep the root unpublished and discard it on any error.
     pub fn install_all(&mut self, mappings: &[KernelMapping]) -> Result<(), KernelPageBuildError> {
         for mapping in mappings {
             self.preflight(mapping)?;
         }
+
+        let mut i = 0usize;
+        while i < mappings.len() {
+            let a_bytes = mappings[i]
+                .page_count
+                .checked_mul(KERNEL_PAGE_SIZE)
+                .ok_or(KernelPageBuildError::Overflow)?;
+            let a_end = mappings[i]
+                .virtual_start
+                .checked_add(a_bytes)
+                .ok_or(KernelPageBuildError::Overflow)?;
+            let mut j = i + 1;
+            while j < mappings.len() {
+                let b_bytes = mappings[j]
+                    .page_count
+                    .checked_mul(KERNEL_PAGE_SIZE)
+                    .ok_or(KernelPageBuildError::Overflow)?;
+                let b_end = mappings[j]
+                    .virtual_start
+                    .checked_add(b_bytes)
+                    .ok_or(KernelPageBuildError::Overflow)?;
+                if mappings[i].virtual_start < b_end && mappings[j].virtual_start < a_end {
+                    return Err(KernelPageBuildError::OverlappingMappings);
+                }
+                j += 1;
+            }
+            i += 1;
+        }
+
         for mapping in mappings {
             self.install_pages(*mapping)?;
         }
@@ -343,9 +374,9 @@ impl<'m, M: TableMemory> KernelPageTableBuilder<'m, M> {
     }
 
     /// Validate and install one mapping page by page, creating missing
-    /// intermediate tables. Callers should use `install_all`, which
-    /// preflights the whole batch first; this method re-validates every page
-    /// as defense in depth.
+    /// intermediate tables. This operation does not roll back if a backend
+    /// error occurs after an earlier page was installed; on error, the caller
+    /// must keep the root unpublished and discard it.
     pub fn install_pages(&mut self, mapping: KernelMapping) -> Result<(), KernelPageBuildError> {
         Self::validate_mapping(&mapping)?;
         let mut page = 0u64;
@@ -608,6 +639,7 @@ mod tests {
     const WNX: PageFlags = PageFlags::PRESENT
         .union(PageFlags::WRITABLE)
         .union(PageFlags::NO_EXECUTE);
+    const WNX_GLOBAL: PageFlags = WNX.union(PageFlags::GLOBAL);
 
     #[test]
     fn user_half_install_is_forbidden_everywhere() {
@@ -720,7 +752,7 @@ mod tests {
         let mut memory = FakeMemory::new();
         let root = memory.alloc_table().expect("root frame");
         let mappings = [
-            vm(KERNEL_MAP_BASE, 0x30_0000, 2, WNX),
+            vm(KERNEL_MAP_BASE, 0x30_0000, 2, WNX_GLOBAL),
             vm(KERNEL_TEXT_BASE, 0x40_0000, 2, TEXT),
             vm(KERNEL_HEAP_BASE, 0x50_0000, 1, WNX),
             vm(KERNEL_PERCPU_BASE, 0x60_0000, 1, RNX),
@@ -749,17 +781,20 @@ mod tests {
         assert!(!direct_leaf.flags().contains(PageFlags::USER));
         assert!(direct_leaf.flags().contains(PageFlags::NO_EXECUTE));
         assert!(direct_leaf.flags().contains(PageFlags::WRITABLE));
+        assert!(direct_leaf.flags().contains(PageFlags::GLOBAL));
 
         let text_leaf = builder.leaf_entry(KERNEL_TEXT_BASE).unwrap();
         assert!(!text_leaf.flags().contains(PageFlags::WRITABLE));
         assert!(!text_leaf.flags().contains(PageFlags::NO_EXECUTE));
 
-        // Intermediate entries are supervisor-only and global.
+        // Intermediate entries are supervisor-only; GLOBAL is applied only
+        // to leaf entries when requested by the mapping policy.
         let idx = indices(KERNEL_MAP_BASE);
         let pml4 = memory.table(root).expect("pml4 readable");
         let entry = pml4.get(idx[0]).expect("pml4 entry installed");
         assert!(!entry.flags().contains(PageFlags::USER));
-        assert!(entry.flags().contains(PageFlags::GLOBAL));
+        assert!(entry.flags().contains(PageFlags::WRITABLE));
+        assert!(!entry.flags().contains(PageFlags::GLOBAL));
         assert_eq!(entry.address() & 0xfff, 0);
     }
 
@@ -777,6 +812,23 @@ mod tests {
             Err(KernelPageBuildError::AlreadyMapped)
         );
         assert_eq!(builder.allocated_table_count(), before);
+    }
+
+    #[test]
+    fn overlapping_batch_mappings_are_rejected_before_mutation() {
+        let mut memory = FakeMemory::new();
+        let root = memory.alloc_table().expect("root frame");
+        let first = vm(KERNEL_MAP_BASE, 0x30_0000, 2, WNX);
+        let overlap = vm(KERNEL_MAP_BASE + KERNEL_PAGE_SIZE, 0x70_0000, 1, WNX);
+        let mut builder = KernelPageTableBuilder::new(root, &mut memory).unwrap();
+
+        assert_eq!(
+            builder.install_all(&[first, overlap]),
+            Err(KernelPageBuildError::OverlappingMappings)
+        );
+        assert_eq!(builder.allocated_table_count(), 0);
+        assert!(builder.leaf_entry(KERNEL_MAP_BASE).is_none());
+        assert!(builder.user_half_is_untouched());
     }
 
     #[test]
@@ -808,7 +860,15 @@ mod tests {
     fn direct_map_fit_rejects_out_of_window_empty_and_overflowing_ranges() {
         assert!(matches!(
             fits_direct_map_window(DIRECT_MAP_MAX_PHYSICAL, 0x1000),
-            Err(DirectMapFitError::BeyondWindow { .. })
+            Err(DirectMapFitError::BeyondWindow {
+                end: DIRECT_MAP_MAX_PHYSICAL + 0x1000
+            })
+        ));
+        assert!(matches!(
+            fits_direct_map_window(DIRECT_MAP_MAX_PHYSICAL - 0x800, 0x1000),
+            Err(DirectMapFitError::BeyondWindow {
+                end: DIRECT_MAP_MAX_PHYSICAL + 0x800
+            })
         ));
         assert_eq!(fits_direct_map_window(0, 0), Err(DirectMapFitError::EmptyRange));
         assert!(matches!(
