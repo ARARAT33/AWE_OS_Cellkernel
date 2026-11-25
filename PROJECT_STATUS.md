@@ -27,6 +27,8 @@ The immediate focus is **engineering the bootable and testable AWE_OS core**, wi
 
 ## Current implementation evidence (2026-11-24)
 
+- Run 17 (2026-11-24): added `kernel/src/memory/kernel_page_table_build.rs`, a supervisor-only kernel-half page-table builder over the validated `kernel_map` region contract (kernel-half-only installs, no USER bits, planned-region bounds, W^X), plus direct-map window fit validation. Host tests only; nothing is activated at boot, and no CR3 switch, TLB invalidation, or Ring 3 change is claimed.
+
 - PR #78 (checked physical user-copy contract), PRs #79–#81 (reservation-aware frame allocation and boot-owned range reservation), and PR #84 (reserved `TableArena` backing a real `PhysicalTablePool`) are merged into `main`.
 - PR #86 merge commit: `bd47eca67259945c044454dfe31b09212e8a90b5` (the current `main` history also includes the Run 16 status/log documentation commits).
 - PR #85 (Run 14) was merged after its head `c1dc74ea4fea706d11fefc71773233adcea03a63` passed **16/16 GitHub check-runs**; PR #84 exact head `4f189c916b491a199ab0edef48d478c3ddbe6df4` also passed **16/16 check-runs** before that. The main-head workspace CI, Quality Gate, Bootable Image Pipeline, VirtIO Runtime, Cloud Security Gate, Multi-Architecture Images, AOSIN installers and scheduled branch-integration audit also completed successfully on 2026-11-22/23.
@@ -74,7 +76,7 @@ That branch is the recovery point for the previous repository state and should n
 
 Prioritize the next missing runtime boundary, not additional feature labels:
 
-1. With PR #86 merged, implement a supervisor-only kernel-half page-table builder using the validated region contract, then add boot-time validation that every RAM/BootInfo range fits the bounded direct-map window. Keep the mapping inactive until QEMU proves the exact layout and permissions. Preserve the existing TableArena PASS and foreign-frame rejection assertions.
+1. Run 17 (2026-11-24) added the supervisor-only `KernelPageTableBuilder` contract and the `fits_direct_map_window` / `validate_ram_ranges` direct-map window fit validator (`kernel/src/memory/kernel_page_table_build.rs`). The builder is still inactive: boot-time wiring, QEMU layout/permission evidence, and the TableArena PASS + foreign-frame rejection assertions remain open work.
 2. Keep the current `TableArena` as a bounded self-test resource. Define a permanent, QEMU-proven direct-map window and allocator lifetime before retaining a production table-frame pool.
 3. Resolve the lower-half bootstrap identity-map conflict with user mappings by defining the kernel's permanent higher-half mapping strategy.
 4. Build each process root with supervisor-only kernel mappings preserved; define root/table ownership and teardown before activating a process address space.

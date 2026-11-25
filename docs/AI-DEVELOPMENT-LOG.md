@@ -1,3 +1,18 @@
+## 2026-11-24 — Run 17: supervisor-only kernel-half page-table builder
+
+- **Baseline:** `main` at `57897c72b8ab307ba6c7ae5fd2336b9dcfda98a9` (post-PR-#86 merge plus Run 16 status commits). PR #86 and Run 16 are fully merged; the Run 16 next-priority list was read before any new work.
+- **Implemented (new `kernel/src/memory/kernel_page_table_build.rs`):**
+  - `KernelPageTableBuilder` builds PML4 -> PDPT -> PD -> PT entries through the same `TableMemory` backend contract as the user-half builder.
+  - Hard rules: kernel half only (never writes PML4 indexes 0..255), supervisor only (`USER` rejected on leaves, never set on intermediates), planned regions only (every mapping must start inside a `kernel_map` region and cannot cross its half-open boundary).
+  - W^X policy: writable kernel mappings must be non-executable; writable mappings are rejected outright inside the kernel text region.
+  - `KERNEL_INTERMEDIATE_FLAGS` = `PRESENT|WRITABLE|GLOBAL` with no USER bit; bounded 512-table tracking; all-or-nothing `install_all` (whole batch preflighted before any mutation); `leaf_entry` hardware-walk diagnostics helper; `user_half_is_untouched` observability helper.
+  - `fits_direct_map_window` and `validate_ram_ranges`: boot-side direct-map fit validation honoring the 64 TiB bounded window, naming the first offending physical range, so oversize memory maps are rejected instead of silently growing the window.
+- **Files changed:** new `kernel/src/memory/kernel_page_table_build.rs`; `kernel/src/memory/mod.rs` (module registration + re-exports); `PROJECT_STATUS.md` (evidence bullet + next-priority 1 update); this log entry.
+- **Test results:** 15 new host tests added in the module (user-half / USER / HUGE rejection, outside-region and cross-region-boundary rejection, text-region W^X policy, global W^X policy, install + readback with supervisor-only GLOBAL intermediates, double install without growth, atomic batch rejection, direct-map fit acceptance and rejection, first-offender naming, invalid root, out-of-frames fail-closed). To be executed by remote CI on this PR head; no local Rust toolchain is available in this run, so no green test result is claimed here.
+- **Explicit limits:** the builder is not called from `kernel_entry`; nothing installs page tables, writes CR3, or invalidates the TLB. The higher-half layout remains a validated contract plus an unpublished builder; QEMU layout/permission evidence, boot-range wiring, CR3/TLB switching and process-root integration are still open.
+- **Branch/PR:** `feat/kernel-half-page-table-builder-2026-11-24`, draft PR against `main` until all CI gates pass on the exact head.
+- **Next priorities:** (1) wire the builder into the `kernel-selftest` boot path with QEMU layout/permission evidence, preserving the TableArena PASS and foreign-frame rejection assertions; (2) run `validate_ram_ranges` over the derived BootInfo/RAM ranges during boot; (3) then continue the existing Run 16 order (CR3/TLB policy, user-copy backend wiring, VirtIO block I/O, NIC/UDP transport, ARM64/RISC-V builds).
+
 ## 2026-11-24 — Run 16: repair, validate and merge higher-half layout contract
 
 - **Baseline:** `main` at `00e8f3f14c7b07c8153fa21fde13806dc153b3be`; draft PR #86 initially at `f6b18f965bb1fd962e60636e098c3d8ee0cbe803`.
