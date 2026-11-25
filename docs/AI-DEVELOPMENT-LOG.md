@@ -22,6 +22,16 @@
   2. Add a `kernel-selftest` path that builds a kernel-half root through the real `PhysicalTablePool` and validates readback without activating it.
   3. Only after QEMU evidence, plan the CR3 switch/TLB invalidation contract; keep Ring 3 disabled until per-process isolation is real.
 
+### Run 18 follow-up — CI comment reliability (2026-11-25)
+
+- Updated `.github/workflows/ci-diagnostics.yml`: PR-comment delivery now retries three times and degrades to a warning if GitHub returns an empty/truncated JSON response. Cargo diagnostics remain authoritative: a failed Clippy/check/test command still fails the diagnostics job; only optional comment delivery is best-effort.
+- Exact final validation head: `8ace162a891190bec6665d9d13cc9712990d2e7c`.
+- **GitHub Actions: 16/16 check-runs passed.** This includes workspace compile/tests/Clippy, 460/460 workspace tests, all 17 kernel page-table builder tests, UEFI loader, bootable-image smoke test, exception-injection self-test, VirtIO block QEMU boot, multi-architecture images, Cloud Security/Release, all four Linux/Windows AOSIN installer jobs, rustfmt, and CI diagnostics.
+- The CI Diagnostics cargo-collection step passed and reported 460/460 tests. GitHub's PR-comment endpoint still returned `Unexpected end of JSON input` on all three attempts; the new best-effort handling emitted warnings and correctly kept the validation job green.
+- PR #87 was closed as superseded by PR #88; its branch and commits were preserved. PR #88 remains unmerged and is ready for review.
+- The kernel-half page-table builder remains **host-tested only**. Existing QEMU/UEFI/VirtIO boot checks do not activate this new builder, do not write CR3 for it, and do not establish TLB invalidation or Ring 3 readiness.
+
+
 ---
 
 ## 2026-11-24 — Run 17: supervisor-only kernel-half page-table builder
