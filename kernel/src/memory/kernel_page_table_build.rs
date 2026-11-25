@@ -377,7 +377,7 @@ impl<'m, M: TableMemory> KernelPageTableBuilder<'m, M> {
     /// error occurs after an earlier page was installed; on error, the caller
     /// must keep the root unpublished and discard it.
     pub fn install_pages(&mut self, mapping: KernelMapping) -> Result<(), KernelPageBuildError> {
-        Self::validate_mapping(&mapping)?;
+        validate_kernel_mapping(&mapping)?;
         let mut page = 0u64;
         while page < mapping.page_count {
             let offset = page
