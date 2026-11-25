@@ -28,8 +28,8 @@ use super::kernel_map::{
     DIRECT_MAP_BASE, DIRECT_MAP_MAX_PHYSICAL, KERNEL_HEAP_BASE, KERNEL_PERCPU_BASE,
     KERNEL_TEXT_BASE, KERNEL_TEXT_SIZE, KernelRegionKind, kernel_region_of, pml4_index,
 };
-use super::paging::{PageFlags, PageTable, PageTableEntry, indices, valid_mapping};
 use super::page_table_build::TableMemory;
+use super::paging::{PageFlags, PageTable, PageTableEntry, indices, valid_mapping};
 
 /// 4 KiB page size used by this builder (large pages are not installed).
 pub const KERNEL_PAGE_SIZE: u64 = 0x1000;
@@ -159,8 +159,7 @@ fn check_region_policy(
 /// Intermediate entries are supervisor-only and writable so leaf permissions
 /// remain the effective access boundary. GLOBAL is a leaf attribute and is
 /// intentionally not set on non-leaf entries.
-const KERNEL_INTERMEDIATE_FLAGS: PageFlags =
-    PageFlags::PRESENT.union(PageFlags::WRITABLE);
+const KERNEL_INTERMEDIATE_FLAGS: PageFlags = PageFlags::PRESENT.union(PageFlags::WRITABLE);
 
 /// Upper bound on intermediate table frames tracked by one builder.
 const MAX_TRACKED_TABLES: usize = 512;
@@ -520,11 +519,7 @@ impl<'m, M: TableMemory> KernelPageTableBuilder<'m, M> {
             level += 1;
         }
         let leaf = self.memory.table(table_phys)?.get(idx[3])?;
-        if leaf.is_present() {
-            Some(leaf)
-        } else {
-            None
-        }
+        if leaf.is_present() { Some(leaf) } else { None }
     }
 
     /// True if nothing is present below PML4 index 256. The user half of the
@@ -870,7 +865,10 @@ mod tests {
                 end: DIRECT_MAP_MAX_PHYSICAL + 0x800
             })
         ));
-        assert_eq!(fits_direct_map_window(0, 0), Err(DirectMapFitError::EmptyRange));
+        assert_eq!(
+            fits_direct_map_window(0, 0),
+            Err(DirectMapFitError::EmptyRange)
+        );
         assert!(matches!(
             fits_direct_map_window(0xffff_ffff_ffff_f000, 0x2000),
             Err(DirectMapFitError::Overflow)
@@ -885,10 +883,7 @@ mod tests {
             (0x90_0000, 0x30_0000),
         ];
         assert_eq!(validate_ram_ranges(&ranges), Ok(()));
-        let bad = [
-            (0u64, 0x30_0000u64),
-            (DIRECT_MAP_MAX_PHYSICAL, 0x30_0000),
-        ];
+        let bad = [(0u64, 0x30_0000u64), (DIRECT_MAP_MAX_PHYSICAL, 0x30_0000)];
         assert_eq!(
             validate_ram_ranges(&bad),
             Err((
