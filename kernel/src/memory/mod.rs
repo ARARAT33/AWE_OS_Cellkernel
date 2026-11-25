@@ -3,6 +3,7 @@
 pub mod address;
 pub mod address_space;
 pub mod allocator;
+pub mod boot_direct_map;
 pub mod boot_mapper;
 pub mod boot_reserve;
 pub mod frame;
@@ -23,6 +24,9 @@ pub mod x86_64;
 pub use address::{PhysicalAddress, VirtualAddress};
 pub use address_space::{AddressSpace, UserCopyError, UserMapping, checked_user_range};
 pub use allocator::BumpAllocator;
+pub use boot_direct_map::{
+    DirectMapBootReport, DirectMapGateError, GATE_DIRECT_MAP_LIMIT, validate_boot_direct_map,
+};
 pub use boot_mapper::{BootMapError, BootMapper};
 pub use boot_reserve::{
     BootOwnedRanges, BootReserveError, FrameReserver, MAX_BOOT_OWNED_RANGES, OwnedRange,
