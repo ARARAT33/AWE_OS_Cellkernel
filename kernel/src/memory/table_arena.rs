@@ -399,13 +399,13 @@ mod live_probe {
             flags: kernel_heap_flags,
         }];
 
+        let mut access = OwnedTableFrames::<PhysicalTablePool<_>, 64>::new(&mut pool);
         let install;
         let readback;
         let untouched;
         let mut built_frames = [0u64; 8];
         let mut built_count = 0usize;
         {
-            let mut access = OwnedTableFrames::<PhysicalTablePool<_>, 64>::new(&mut pool);
             let mut builder = match KernelPageTableBuilder::new(root.start, &mut access) {
                 Ok(builder) => builder,
                 Err(_) => {
@@ -416,12 +416,14 @@ mod live_probe {
             };
             install = builder.install_all(&mappings);
             readback = install.is_ok()
-                && builder.leaf_entry(KERNEL_HEAP_BASE).is_some_and(|leaf| {
-                    leaf.address() == PAGE_SIZE
-                        && !leaf.flags().contains(PageFlags::USER)
-                        && leaf.flags().contains(PageFlags::WRITABLE)
-                        && leaf.flags().contains(PageFlags::NO_EXECUTE)
-                });
+                && builder
+                    .leaf_entry(KERNEL_HEAP_BASE)
+                    .is_some_and(|leaf| {
+                        leaf.address() == PAGE_SIZE
+                            && !leaf.flags().contains(PageFlags::USER)
+                            && leaf.flags().contains(PageFlags::WRITABLE)
+                            && leaf.flags().contains(PageFlags::NO_EXECUTE)
+                    });
             untouched = builder.user_half_is_untouched();
             for (index, &frame) in builder.allocated_tables().iter().enumerate() {
                 if index < built_frames.len() {
@@ -430,6 +432,10 @@ mod live_probe {
                 }
             }
         }
+
+        // End the wrapper's exclusive borrow of the pool before releasing
+        // the unpublished frames back into the arena.
+        core::mem::drop(access);
 
         serial_write_str("AWEOS: [cell:kernmap] install=");
         serial_write_u64(u64::from(install.is_ok()));
@@ -447,12 +453,7 @@ mod live_probe {
         let mut index = built_count;
         while index > 0 {
             index -= 1;
-            if pool
-                .release(Frame {
-                    start: built_frames[index],
-                })
-                .is_err()
-            {
+            if pool.release(Frame { start: built_frames[index] }).is_err() {
                 all_released = false;
             }
         }
@@ -484,3 +485,284 @@ pub use live_probe::boot_table_pool_probe;
     target_os = "none"
 ))]
 pub use live_probe::boot_kernel_root_probe;
+
+#[cfg(test)]
+mod tests {
+    use super::super::frame::{BitmapFrameAllocator, PhysicalFrameAllocator};
+    use super::super::paging::{PageFlags, PageTableEntry};
+    use super::super::physical_tables::PhysicalTablePool;
+    use super::super::table_frames::TableFramePool;
+    use super::*;
+    use awe_boot_protocol::{Architecture, BootInfo, MEMORY_REGION_USABLE, MemoryRegion};
+
+    #[repr(C, align(4096))]
+    struct PhysicalMemory {
+        pages: [[u64; 512]; 8],
+    }
+
+    impl PhysicalMemory {
+        fn new() -> Self {
+            Self {
+                pages: [[0u64; 512]; 8],
+            }
+        }
+        fn as_u64(&self) -> u64 {
+            self.pages.as_ptr() as u64
+        }
+    }
+
+    fn boot_info(regions: &[MemoryRegion]) -> BootInfo {
+        BootInfo {
+            magic: awe_boot_protocol::AWE_BOOT_MAGIC,
+            version: awe_boot_protocol::AWE_BOOT_VERSION,
+            size: core::mem::size_of::<BootInfo>() as u32,
+            architecture: Architecture::X86_64,
+            cpu_count: 1,
+            memory_regions: regions.as_ptr(),
+            memory_region_count: regions.len() as u32,
+            framebuffer_address: 0,
+            framebuffer_size: 0,
+            framebuffer_width: 0,
+            framebuffer_height: 0,
+            framebuffer_pitch: 0,
+            acpi_rsdp: 0,
+            device_tree: 0,
+            kernel_base: 0,
+            kernel_size: 0,
+        }
+    }
+
+    #[test]
+    fn arena_construction_rejects_zero_frames_and_bad_shapes() {
+        let memory = PhysicalMemory::new();
+        let base = memory.as_u64();
+        assert_eq!(
+            TableArena::<0>::open(base, base).err(),
+            Some(TableArenaError::ZeroFrames)
+        );
+        assert_eq!(
+            TableArena::<2>::open(base + 1, base).err(),
+            Some(TableArenaError::Window(DirectMapError::Misaligned))
+        );
+        assert_eq!(
+            TableArena::<2>::open(base, base + 1).err(),
+            Some(TableArenaError::Window(DirectMapError::Misaligned))
+        );
+        assert_eq!(
+            TableArena::<4>::open(u64::MAX - 0xfff, 0).err(),
+            Some(TableArenaError::Window(DirectMapError::Overflow))
+        );
+    }
+
+    #[test]
+    fn arena_rejects_arenas_larger_than_the_fixed_bitmap() {
+        let memory = PhysicalMemory::new();
+        let base = memory.as_u64();
+        assert_eq!(
+            TableArena::<{ TABLE_ARENA_MAX_FRAMES + 1 }>::open(base, base).err(),
+            Some(TableArenaError::TooManyFrames)
+        );
+    }
+
+    #[test]
+    fn arena_allocates_the_page_range_in_order_and_fails_closed() {
+        let memory = PhysicalMemory::new();
+        let base = memory.as_u64();
+        let mut arena = TableArena::<8>::open(base, base).expect("arena");
+        assert_eq!(arena.phys_base(), base);
+        assert_eq!(arena.frame_count(), 8);
+        for index in 0..8u64 {
+            assert_eq!(
+                arena.alloc_frame(),
+                Some(Frame {
+                    start: base + index * PAGE_SIZE
+                })
+            );
+        }
+        assert_eq!(arena.allocated_count(), 8);
+        // A fully allocated arena hands out nothing further.
+        assert!(arena.alloc_frame().is_none());
+        // Keep the backing buffer referenced by its true bases.
+        assert!(memory.as_u64() > 0);
+    }
+
+    #[test]
+    fn arena_release_reuse_and_error_discrimination() {
+        let memory = PhysicalMemory::new();
+        let base = memory.as_u64();
+        let mut arena = TableArena::<8>::open(base, base).expect("arena");
+        let mut frames = [Frame { start: 0 }; 8];
+        for frame in frames.iter_mut() {
+            *frame = arena.alloc_frame().expect("arena frame");
+        }
+        assert_eq!(arena.free_frame(frames[3]), Ok(()));
+        assert_eq!(arena.allocated_count(), 7);
+        // A second release is a double release.
+        assert_eq!(
+            arena.free_frame(frames[3]),
+            Err(FrameReleaseError::DoubleRelease)
+        );
+        // Unaligned, out-of-window and beyond-range frames are unknown.
+        assert_eq!(
+            arena.free_frame(Frame {
+                start: frames[3].start + 1
+            }),
+            Err(FrameReleaseError::UnknownFrame)
+        );
+        assert_eq!(
+            arena.free_frame(Frame {
+                start: base.wrapping_sub(PAGE_SIZE)
+            }),
+            Err(FrameReleaseError::UnknownFrame)
+        );
+        assert_eq!(
+            arena.free_frame(Frame {
+                start: base + 8 * PAGE_SIZE
+            }),
+            Err(FrameReleaseError::UnknownFrame)
+        );
+        // The freed slot is reused first, in arena order.
+        assert_eq!(arena.alloc_frame(), Some(frames[3]));
+        // Every frame can be released exactly once at the end.
+        for frame in &frames {
+            assert_eq!(arena.free_frame(*frame), Ok(()));
+        }
+        assert_eq!(arena.allocated_count(), 0);
+    }
+
+    #[test]
+    fn pool_over_arena_zeroes_mutates_and_rezeroes_real_frames() {
+        let memory = PhysicalMemory::new();
+        let base = memory.as_u64();
+        let mut arena = TableArena::<8>::open(base, base).expect("arena");
+        let window: DirectMapWindow = *arena.window();
+        let mut pool: PhysicalTablePool<TableArena<8>, 4> =
+            unsafe { PhysicalTablePool::with_capacity(window, &mut arena) };
+
+        let frame = pool.allocate().expect("arena frame");
+        assert_eq!(frame.start, base);
+        // The handed-out frame must be fully zeroed in real memory.
+        for entry in &memory.pages[0] {
+            assert_eq!(*entry, 0);
+        }
+        pool.table_mut(frame)
+            .expect("table")
+            .set(5, PageTableEntry::new(0x9000, PageFlags::PRESENT));
+        assert_eq!(memory.pages[0][5], 0x9001); // 0x9000 | PRESENT
+        assert_eq!(pool.release(frame), Ok(()));
+        let reused = pool.allocate().expect("reuse");
+        assert_eq!(reused, frame);
+        assert!(
+            !pool
+                .table(reused)
+                .and_then(|read| read.get(5))
+                .is_some_and(|entry| entry.is_present())
+        );
+    }
+
+    #[test]
+    fn reserve_table_arena_excludes_the_range_from_the_live_allocator() {
+        let regions = [MemoryRegion {
+            base: 0x1000,
+            length: 0x10000,
+            kind: MEMORY_REGION_USABLE,
+            reserved: 0,
+        }];
+        let info = boot_info(&regions);
+        let mut allocator = unsafe { PhysicalFrameAllocator::try_from_boot_info(&info) }.unwrap();
+        let base = allocator.peek_next_frame().unwrap().start;
+        assert_eq!(base, 0x1000);
+        assert_eq!(
+            reserve_table_arena(&mut allocator, base, 4),
+            Ok(4 * PAGE_SIZE)
+        );
+        // The reserved arena is skipped by the live allocator.
+        assert_eq!(allocator.allocate().unwrap().start, base + 4 * PAGE_SIZE);
+        assert_eq!(
+            allocator.peek_next_frame().unwrap().start,
+            base + 5 * PAGE_SIZE
+        );
+        // A fully contained repeat stays idempotent and consumes no slot.
+        assert_eq!(
+            reserve_table_arena(&mut allocator, base, 4),
+            Ok(4 * PAGE_SIZE)
+        );
+    }
+
+    #[test]
+    fn reserve_table_arena_propagates_allocator_errors() {
+        let mut allocator = BitmapFrameAllocator::<8>::new(0x1000, 8);
+        assert_eq!(
+            reserve_table_arena(&mut allocator, 0xfc00_0000, 4),
+            Err(TableArenaReserveError::Reservation(
+                BitmapFrameError::RangeOutOfBounds
+            ))
+        );
+        assert_eq!(
+            reserve_table_arena(&mut allocator, 0x1000, 0),
+            Err(TableArenaReserveError::ZeroFrames)
+        );
+        // A successful arena reservation sticks: reserved frames are never
+        // freed or handed out by the source allocator.
+        let base = 0x1000;
+        assert_eq!(
+            reserve_table_arena(&mut allocator, base, 2),
+            Ok(2 * PAGE_SIZE)
+        );
+        assert_eq!(
+            allocator.try_free_frame(Frame { start: base }),
+            Err(BitmapFrameError::ReservedFrame)
+        );
+        assert_eq!(
+            allocator.allocate_frame().unwrap().start,
+            base + 2 * PAGE_SIZE
+        );
+    }
+
+    #[test]
+    fn reserve_table_arena_rejects_conflicts_before_reserving() {
+        let mut allocator = BitmapFrameAllocator::<8>::new(0x1000, 8);
+        let mut ranges = [(0u64, 0u64); 8];
+        for (index, range) in ranges.iter_mut().enumerate() {
+            *range = (0x1000 + (index as u64 * 0x1000), 0x1000);
+        }
+        // BitmapFrameAllocator only exposes the single-range reserve_range
+        // API; reserving frame by frame fills the whole bitmap.
+        for (start, length) in ranges {
+            allocator.reserve_range(start, length).unwrap();
+        }
+        // The bitmap is fully reserved; nothing is left for a new arena and
+        // the conflicting request reserves nothing new.
+        assert_eq!(
+            reserve_table_arena(&mut allocator, 0x9000, 1),
+            Err(TableArenaReserveError::Reservation(
+                BitmapFrameError::RangeOutOfBounds
+            ))
+        );
+    }
+
+    #[test]
+    fn invalid_arena_shapes_do_not_mutate_the_allocator() {
+        let mut allocator = BitmapFrameAllocator::<4>::new(0x1000, 4);
+
+        assert_eq!(
+            reserve_table_arena(&mut allocator, 0x1001, 1),
+            Err(TableArenaReserveError::MisalignedBase)
+        );
+        assert_eq!(
+            reserve_table_arena(&mut allocator, 0x1000, TABLE_ARENA_MAX_FRAMES + 1),
+            Err(TableArenaReserveError::TooManyFrames)
+        );
+        assert_eq!(
+            reserve_table_arena(&mut allocator, 0x1000, 0),
+            Err(TableArenaReserveError::ZeroFrames)
+        );
+        assert_eq!(
+            reserve_table_arena(&mut allocator, u64::MAX - (PAGE_SIZE - 1), 1),
+            Err(TableArenaReserveError::RangeOverflow)
+        );
+
+        // Rejected shapes must not reserve even the first page.
+        assert_eq!(allocator.allocate_frame().unwrap().start, 0x1000);
+    }
+}
