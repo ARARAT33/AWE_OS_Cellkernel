@@ -7,6 +7,7 @@ pub mod boot_mapper;
 pub mod boot_reserve;
 pub mod frame;
 pub mod kernel_map;
+pub mod kernel_page_table_build;
 pub mod mapper;
 pub mod page_table_build;
 pub mod paging;
@@ -34,6 +35,11 @@ pub use frame::{
 pub use kernel_map::{
     KernelRegion, KernelRegionKind, LayoutError, direct_map_address, is_kernel_half,
     kernel_region_of, pml4_index, validate_layout, validate_region,
+};
+pub use kernel_page_table_build::{
+    DIRECT_MAP_WINDOW_END, DirectMapFitError, KERNEL_PAGE_SIZE, KernelMapping,
+    KernelPageBuildError, KernelPageTableBuilder, fits_direct_map_window, validate_kernel_mapping,
+    validate_ram_ranges,
 };
 pub use mapper::{MapError, PageMapper};
 pub use page_table_build::{PageBuildError, TableMemory, UserPageTableBuilder};

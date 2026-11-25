@@ -1,3 +1,54 @@
+## 2026-11-25 — Run 18: kernel-half page-table builder hardening and CI repair
+
+- **Baseline:** `main` at `57897c72b8ab307ba6c7ae5fd2336b9dcfda98a9`; resumed the unfinished Run 17 kernel-half page-table builder on PR #87. PR #87's first CI exposed an unregistered module; follow-up CI then exposed host-test compilation and policy-fixture errors. No changes were made to `main`.
+- **Implemented on PR #88** (draft, branch `fix/kernel-page-table-builder-compile-2026-11-25`):
+  - Registered `kernel_page_table_build` in `kernel/src/memory/mod.rs` and exported the backend-independent `validate_kernel_mapping` helper.
+  - Fixed the direct-map bound check: the physical end is now compared to `DIRECT_MAP_MAX_PHYSICAL` (64 TiB), not `DIRECT_MAP_WINDOW_END` (a high-half virtual address). Added exact-boundary and straddling-range regression assertions.
+  - Removed `GLOBAL` from intermediate paging entries. The bit is now preserved only on leaf entries when explicitly requested by the mapping policy.
+  - Added `OverlappingMappings` rejection to `install_all`, so overlapping virtual ranges are detected before any page-table mutation.
+  - Corrected the builder contract: invalid/overlapping batches are rejected before mutation, but allocation/backend failures during installation are not rollback-transactional. On any such error the root must remain unpublished and be discarded.
+  - Fixed the generic associated-validator inference problem, test-only `PageTable` initialization, invalid-root assertions, and the writable-kernel-text test fixture.
+- **Files changed:** `kernel/src/memory/mod.rs`; `kernel/src/memory/kernel_page_table_build.rs`.
+- **Host regression evidence at exact code head `acd38595c4d06da922d14d578108bdeeb347f5da`:**
+  - The kernel page-table builder's 17 tests all passed, including direct-map boundary checks, leaf/intermediate flag behavior, batch-overlap rejection, W^X and region-policy checks, and allocator exhaustion.
+  - `cargo test --workspace --all-targets`: **460 passed, 0 failed**.
+  - Workspace compilation, formatting, Clippy, UEFI loader, bootable-image smoke test, exception-injection self-test, VirtIO/QEMU contract, multi-architecture image build, Cloud Security/Release checks, and all four Linux/Windows AOSIN installer jobs passed.
+  - The CI Diagnostics workflow's cargo collection step passed on retry and independently reported 460/460 workspace tests. Its final PR-comment step failed twice with GitHub API `HttpError: Unexpected end of JSON input`; this is an external comment API failure, not a Rust/test failure. The check remains non-green for that infrastructure reason.
+- **Limitations:** PR #88 is still a draft; no merge was performed. The new kernel page-table builder is still host-tested only: it is not called from `kernel_entry`, does not install the production root, does not write CR3, does not perform TLB invalidation, and does not enable Ring 3. The direct-map range helper is not yet wired into boot-memory-map validation. Cross-architecture image workflow success is not proof of ARM64/RISC-V kernel runtime support.
+- **Run 17 contract clarification:** its earlier “all-or-nothing install_all” wording was too broad. Only preflight rejection is mutation-free; backend/resource failure after installation starts can leave a partial unpublished root.
+- **Unresolved CI issue:** the optional diagnostics-comment step can fail when GitHub returns a truncated/empty JSON response. Core compile/test and runtime workflows passed.
+- **Next priorities:**
+  1. Add a no-allocation boot-memory-map validator that checks only `MEMORY_REGION_USABLE` ranges against the 64 TiB direct-map limit before allocator/page-table use; return a distinct fail-closed boot status and test malformed/straddling ranges.
+  2. Add a `kernel-selftest` path that builds a kernel-half root through the real `PhysicalTablePool` and validates readback without activating it.
+  3. Only after QEMU evidence, plan the CR3 switch/TLB invalidation contract; keep Ring 3 disabled until per-process isolation is real.
+
+### Run 18 follow-up — CI comment reliability (2026-11-25)
+
+- Updated `.github/workflows/ci-diagnostics.yml`: PR-comment delivery now retries three times and degrades to a warning if GitHub returns an empty/truncated JSON response. Cargo diagnostics remain authoritative: a failed Clippy/check/test command still fails the diagnostics job; only optional comment delivery is best-effort.
+- Exact final validation head: `8ace162a891190bec6665d9d13cc9712990d2e7c`.
+- **GitHub Actions: 16/16 check-runs passed.** This includes workspace compile/tests/Clippy, 460/460 workspace tests, all 17 kernel page-table builder tests, UEFI loader, bootable-image smoke test, exception-injection self-test, VirtIO block QEMU boot, multi-architecture images, Cloud Security/Release, all four Linux/Windows AOSIN installer jobs, rustfmt, and CI diagnostics.
+- The CI Diagnostics cargo-collection step passed and reported 460/460 tests. GitHub's PR-comment endpoint still returned `Unexpected end of JSON input` on all three attempts; the new best-effort handling emitted warnings and correctly kept the validation job green.
+- PR #87 was closed as superseded by PR #88; its branch and commits were preserved. PR #88 remains unmerged and is ready for review.
+- The kernel-half page-table builder remains **host-tested only**. Existing QEMU/UEFI/VirtIO boot checks do not activate this new builder, do not write CR3 for it, and do not establish TLB invalidation or Ring 3 readiness.
+
+
+---
+
+## 2026-11-24 — Run 17: supervisor-only kernel-half page-table builder
+
+- **Baseline:** `main` at `57897c72b8ab307ba6c7ae5fd2336b9dcfda98a9` (post-PR-#86 merge plus Run 16 status commits). PR #86 and Run 16 are fully merged; the Run 16 next-priority list was read before any new work.
+- **Implemented (new `kernel/src/memory/kernel_page_table_build.rs`):**
+  - `KernelPageTableBuilder` builds PML4 -> PDPT -> PD -> PT entries through the same `TableMemory` backend contract as the user-half builder.
+  - Hard rules: kernel half only (never writes PML4 indexes 0..255), supervisor only (`USER` rejected on leaves, never set on intermediates), planned regions only (every mapping must start inside a `kernel_map` region and cannot cross its half-open boundary).
+  - W^X policy: writable kernel mappings must be non-executable; writable mappings are rejected outright inside the kernel text region.
+  - `KERNEL_INTERMEDIATE_FLAGS` = `PRESENT|WRITABLE|GLOBAL` with no USER bit; bounded 512-table tracking; all-or-nothing `install_all` (whole batch preflighted before any mutation); `leaf_entry` hardware-walk diagnostics helper; `user_half_is_untouched` observability helper.
+  - `fits_direct_map_window` and `validate_ram_ranges`: boot-side direct-map fit validation honoring the 64 TiB bounded window, naming the first offending physical range, so oversize memory maps are rejected instead of silently growing the window.
+- **Files changed:** new `kernel/src/memory/kernel_page_table_build.rs`; `kernel/src/memory/mod.rs` (module registration + re-exports); `PROJECT_STATUS.md` (evidence bullet + next-priority 1 update); this log entry.
+- **Test results:** 15 new host tests added in the module (user-half / USER / HUGE rejection, outside-region and cross-region-boundary rejection, text-region W^X policy, global W^X policy, install + readback with supervisor-only GLOBAL intermediates, double install without growth, atomic batch rejection, direct-map fit acceptance and rejection, first-offender naming, invalid root, out-of-frames fail-closed). To be executed by remote CI on this PR head; no local Rust toolchain is available in this run, so no green test result is claimed here.
+- **Explicit limits:** the builder is not called from `kernel_entry`; nothing installs page tables, writes CR3, or invalidates the TLB. The higher-half layout remains a validated contract plus an unpublished builder; QEMU layout/permission evidence, boot-range wiring, CR3/TLB switching and process-root integration are still open.
+- **Branch/PR:** `feat/kernel-half-page-table-builder-2026-11-24`, draft PR against `main` until all CI gates pass on the exact head.
+- **Next priorities:** (1) wire the builder into the `kernel-selftest` boot path with QEMU layout/permission evidence, preserving the TableArena PASS and foreign-frame rejection assertions; (2) run `validate_ram_ranges` over the derived BootInfo/RAM ranges during boot; (3) then continue the existing Run 16 order (CR3/TLB policy, user-copy backend wiring, VirtIO block I/O, NIC/UDP transport, ARM64/RISC-V builds).
+
 ## 2026-11-24 — Run 16: repair, validate and merge higher-half layout contract
 
 - **Baseline:** `main` at `00e8f3f14c7b07c8153fa21fde13806dc153b3be`; draft PR #86 initially at `f6b18f965bb1fd962e60636e098c3d8ee0cbe803`.
