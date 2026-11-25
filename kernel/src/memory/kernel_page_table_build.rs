@@ -707,12 +707,7 @@ mod tests {
 
     #[test]
     fn writable_kernel_text_is_rejected() {
-        let mapping = vm(
-            KERNEL_TEXT_BASE,
-            0x30_0000,
-            1,
-            PageFlags::PRESENT.union(PageFlags::WRITABLE),
-        );
+        let mapping = vm(KERNEL_TEXT_BASE, 0x30_0000, 1, WNX);
         assert_eq!(
             validate_kernel_mapping(&mapping),
             Err(KernelPageBuildError::WritableTextRegion)
