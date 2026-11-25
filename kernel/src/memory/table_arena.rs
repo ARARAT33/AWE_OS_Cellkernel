@@ -416,14 +416,12 @@ mod live_probe {
             };
             install = builder.install_all(&mappings);
             readback = install.is_ok()
-                && builder
-                    .leaf_entry(KERNEL_HEAP_BASE)
-                    .is_some_and(|leaf| {
-                        leaf.address() == PAGE_SIZE
-                            && !leaf.flags().contains(PageFlags::USER)
-                            && leaf.flags().contains(PageFlags::WRITABLE)
-                            && leaf.flags().contains(PageFlags::NO_EXECUTE)
-                    });
+                && builder.leaf_entry(KERNEL_HEAP_BASE).is_some_and(|leaf| {
+                    leaf.address() == PAGE_SIZE
+                        && !leaf.flags().contains(PageFlags::USER)
+                        && leaf.flags().contains(PageFlags::WRITABLE)
+                        && leaf.flags().contains(PageFlags::NO_EXECUTE)
+                });
             untouched = builder.user_half_is_untouched();
             for (index, &frame) in builder.allocated_tables().iter().enumerate() {
                 if index < built_frames.len() {
@@ -453,7 +451,12 @@ mod live_probe {
         let mut index = built_count;
         while index > 0 {
             index -= 1;
-            if pool.release(Frame { start: built_frames[index] }).is_err() {
+            if pool
+                .release(Frame {
+                    start: built_frames[index],
+                })
+                .is_err()
+            {
                 all_released = false;
             }
         }
