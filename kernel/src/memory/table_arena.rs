@@ -381,11 +381,6 @@ mod live_probe {
         let mut pool: PhysicalTablePool<TableArena<BOOT_TABLE_ARENA_FRAMES>, PROBE_LEDGER> =
             unsafe { PhysicalTablePool::with_capacity(window, &mut arena) };
 
-        let Some(root) = pool.allocate() else {
-            serial_write_str("AWEOS: [cell:kernmap] FAIL: root allocation\n");
-            return;
-        };
-
         // One writable, non-executable, supervisor-only mapping inside the
         // planned kernel-heap region, backed by a page-aligned frame inside
         // the proven identity range.
@@ -400,15 +395,21 @@ mod live_probe {
         }];
 
         let mut access = OwnedTableFrames::<_, 64>::new(&mut pool);
+        let root = match access.alloc_root() {
+            Ok(root) => root,
+            Err(_) => {
+                serial_write_str("AWEOS: [cell:kernmap] FAIL: root allocation\n");
+                return;
+            }
+        };
         let install;
         let readback;
         let untouched;
         {
-            let mut builder = match KernelPageTableBuilder::new(root.start, &mut access) {
+            let mut builder = match KernelPageTableBuilder::new(root, &mut access) {
                 Ok(builder) => builder,
                 Err(_) => {
                     serial_write_str("AWEOS: [cell:kernmap] FAIL: builder rejected root\n");
-                    pool.release(root).ok();
                     return;
                 }
             };
@@ -453,9 +454,6 @@ mod live_probe {
             {
                 all_released = false;
             }
-        }
-        if pool.release(root).is_err() {
-            all_released = false;
         }
 
         serial_write_str("AWEOS: [cell:kernmap] released=");
