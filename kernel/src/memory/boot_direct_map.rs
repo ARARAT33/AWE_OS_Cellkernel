@@ -22,7 +22,8 @@ use core::mem::{align_of, size_of};
 
 use awe_boot_protocol::{BootInfo, MAX_MEMORY_REGIONS, MEMORY_REGION_USABLE, MemoryRegion};
 
-use super::kernel_page_table_build::{DIRECT_MAP_MAX_PHYSICAL, DirectMapFitError};
+use super::kernel_map::DIRECT_MAP_MAX_PHYSICAL;
+use super::kernel_page_table_build::{fits_direct_map_window, DirectMapFitError};
 
 /// Fail-closed errors for the boot direct-map gate.
 ///
@@ -83,7 +84,7 @@ pub fn validate_boot_direct_map(
     }
     if info.memory_region_count > MAX_MEMORY_REGIONS as u32 {
         return Err((
-            usize::from(info.memory_region_count),
+            info.memory_region_count as usize,
             DirectMapGateError::MapAddressOverflow,
         ));
     }
