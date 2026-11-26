@@ -424,9 +424,9 @@ mod live_probe {
             untouched = builder.user_half_is_untouched();
         }
 
-        // Transfer intermediate-frame ownership out of the wrapper. Otherwise
-        // OwnedTableFrames::drop would release the frames before the explicit
-        // release below, causing a double-release failure in the probe.
+        // Transfer root and intermediate-frame ownership out of the wrapper.
+        // Otherwise OwnedTableFrames::drop would release the frames before the
+        // explicit release below, causing a double-release failure in the probe.
         let built_tables = access.take_ownership();
 
         serial_write_str("AWEOS: [cell:kernmap] install=");
