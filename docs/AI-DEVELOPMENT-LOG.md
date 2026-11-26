@@ -1,3 +1,21 @@
+## 2026-11-26 — Run 20: repair Run 19 boot direct-map gate compilation
+
+- **Baseline:** continued on the existing open PR #89 branch `feat/boot-direct-map-gate-2026-11-25`, head `703f59752036fde42a2d825fb9b0ea0e70c97d9d`. The PR was left open; no main-branch changes, merges, force pushes, or branch deletions were made.
+- **CI audit:** all eight code/boot workflow runs associated with the PR head had completed. The AOSIN cross-platform installer passed; the Quality Gate, Clippy, Cloud Security, CI Pipeline, VirtIO Runtime, Multi-Architecture Images, CI Diagnostics and Bootable Image Pipeline failed because the same three Rust compile errors prevented the kernel crate from building.
+- **Root causes from exact GitHub Actions job logs:**
+  1. `boot_direct_map.rs` called `fits_direct_map_window` without importing it.
+  2. It imported `DIRECT_MAP_MAX_PHYSICAL` through a private import in `kernel_page_table_build`; the public defining constant is in `kernel_map`.
+  3. `usize::from(u32)` is not implemented on the target toolchain; the bounded `memory_region_count` is now converted with `as usize` after the existing maximum-count guard.
+- **Implemented:** commit `9d59967f8818d9211afa46a6282b7fe76f3d188e` updates only `kernel/src/memory/boot_direct_map.rs`: imports the helper and physical limit from their defining modules and corrects the integer conversion. Existing validation order and fail-closed behavior are preserved.
+- **Files changed in this run:** `kernel/src/memory/boot_direct_map.rs`; this log; the dated Run 19 log.
+- **Validation:** the previous PR head failed workspace compilation with E0425, E0603 and E0277. The fix commit was pushed to the existing PR branch; fresh CI results for the new head are pending. No passing result is claimed yet. Local Rust/QEMU execution is unavailable through the connected GitHub-only development path.
+- **Second CI diagnostic pass:** after the first three errors were fixed, the next exact-head run exposed additional compile/runtime-probe issues before tests could pass: `kernel-bin` had a non-exhaustive `KernelBootStatus` match; the new test helper used `u8` although the boot protocol stores `MemoryRegion.kind` as `u32`; the kernel-root probe's explicit `PhysicalTablePool` type assumed the default ledger capacity instead of the configured probe capacity; and `OwnedTableFrames::drop` would release intermediate frames before the probe's manual release, causing double-release evidence. The fixes add the boot-status arm, use the protocol's `u32` type, infer the pool backend type, and call `take_ownership()` before explicit reverse-order release. A final semantics correction maps malformed/misaligned/overflowing memory-map descriptors to `InvalidMemoryMap`; only a genuinely out-of-window usable RAM range returns `DirectMapWindowExceeded`.
+- **Follow-up commits:** `305414c3884b3e45082c692cf2ee07a1821c50fe` (test type + rustfmt), `0ff4b299aa6c15a25aa530605facbec04c0b10ce` (boot status handling), `d80d9899f17299a8c437f1c09116ef22d7b6574c` (owned table-frame release), `36fe7420b733dee8bd9cd74b157facf22c590057` (precise boot status mapping).
+- **Unresolved:** rerun all PR checks on the exact fix head; inspect any newly exposed compile/Clippy/QEMU failures before declaring Run 19 validated.
+- **Next priorities:** once CI is green, merge only after review and exact-head validation; then continue the memory roadmap with full pre-activation kernel-root validation and a separately specified CR3/TLB contract. Do not enable Ring 3 or claim process isolation before per-process root construction, mapping permissions, teardown and QEMU isolation tests exist.
+
+---
+
 ## 2026-11-25 — Run 18: kernel-half page-table builder hardening and CI repair
 
 - **Baseline:** `main` at `57897c72b8ab307ba6c7ae5fd2336b9dcfda98a9`; resumed the unfinished Run 17 kernel-half page-table builder on PR #87. PR #87's first CI exposed an unregistered module; follow-up CI then exposed host-test compilation and policy-fixture errors. No changes were made to `main`.
@@ -1619,3 +1637,26 @@ physical frames.
   without activating unverified page tables.
 
 
+
+
+## 2026-11-26 — Run 19 follow-up: Clippy correction on PR #89
+
+- Resumed the existing Run 19 branch and PR #89 after reading its dated development log, current main commit, open PR state, and latest GitHub Actions results.
+- On PR head `2762eeb2241d5618f881d47c4b794c1d4db54dad`, the workspace compile/tests/format, ISO QEMU smoke boot, VirtIO block QEMU boot, UEFI loader, multi-architecture image and installer checks passed. Quality, Cloud Security and exception-injection self-test workflows failed at Clippy. The exception-injection runtime test was skipped because its feature-build lint step failed.
+- Exact failure: `clippy::unnecessary_cast` at `kernel/src/memory/boot_direct_map.rs:85`; `MAX_MEMORY_REGIONS` is declared `u32`, the same type as `memory_region_count`. Removed the redundant `as u32` only.
+- **Fix commit:** `146d71adc81d13f727c8a665a2e0deb0f0dd4446` on `feat/boot-direct-map-gate-2026-11-25`, within existing PR #89. No main-branch write, force push, deletion or merge was performed.
+- **Changed file:** `kernel/src/memory/boot_direct_map.rs`.
+- **Validation status:** fresh CI on the fix commit is pending; this GitHub-only execution had no local Rust/QEMU toolchain. Prior-head successes are not represented as tests of the fix commit. No green status or production readiness is claimed.
+- **Open technical limits:** direct-map itself is not installed at boot; the kernel-half root probe remains validation-only and must not publish CR3 or enable Ring 3; process-root sharing, TLB invalidation, user-copy backend, durable VirtIO I/O and NIC-backed two-node CellNet remain future milestones.
+- **Next priorities:** inspect exact CI on the new PR head; require Clippy and exception-injection QEMU pass; then review the root-probe evidence and define a tested CR3/TLB and per-process teardown contract before activation.
+
+
+### 2026-11-26 — Run 19: enforce and validate the kernel-half QEMU probe
+
+- Reviewed the QEMU integration test after the new `boot_kernel_root_probe` was added. The harness asserted the older table-pool probe and foreign-frame rejection, but did not require the new `[cell:kernmap]` probe to pass; a skipped/failed new probe could therefore have been hidden by an otherwise passing QEMU run.
+- Added a fail-closed assertion in `tests/product-core/src/lib.rs` requiring `AWEOS: [cell:kernmap] probe result: PASS`. Commit: `07fa2425fc3c5e219bcab37a965681a61f56dcc4`. No production boot behavior changed.
+- Exact code head `07fa2425fc3c5e219bcab37a965681a61f56dcc4` passed all 9 PR workflow families: Quality Gate, CI Pipeline, Clippy, CI Diagnostics, Bootable Image Pipeline, VirtIO Runtime, Multi-Architecture Images, Cloud Security/Release Contract, and AOSIN Cross-Platform Installers. The rustfmt-fix workflow also passed.
+- Test evidence: workspace validation passed; `aweos-kernel` **469 passed / 0 failed**, `aweos-kernel-bin` **4 passed / 0 failed**, and the QEMU exception-injection self-test **1 passed / 0 failed** with the new root-probe assertion. ISO smoke boot, VirtIO transport/QEMU boot, multi-architecture image build, cloud-security/release gates and Linux/Windows GUI/CLI installer jobs all passed.
+- The new QEMU assertion now proves the unpublished kernel-half root's install/readback, supervisor-only mapping policy, untouched user half, and table-frame release path. It does not prove CR3 activation, TLB invalidation, Ring 3, production process isolation, or a production direct map. VirtIO QEMU success remains transport/boot evidence, not durable storage; multi-architecture image success is not ARM64/RISC-V runtime evidence.
+- PR #89 remains open and unmerged; all work remains on `feat/boot-direct-map-gate-2026-11-25`. No main-branch write, force push, branch deletion or merge was performed.
+- Next priorities: define and test CR3/TLB activation and per-process root ownership/teardown before publication; connect checked user-copy to a verified physical backend; then implement real VirtIO block request/completion/flush and NIC-backed two-node CellNet transport.

@@ -325,6 +325,146 @@ mod live_probe {
             serial_write_str("AWEOS: [cell:tables] probe result: FAIL\n");
         }
     }
+
+    /// QEMU evidence probe (kernel-selftest builds only, production boot is
+    /// unchanged): through the same proven TableArena => PhysicalTablePool
+    /// path, build a real supervisor-only kernel-half page-table root with
+    /// the merged `KernelPageTableBuilder` and validate it by readback.
+    /// The root is never published: it is never written to CR3, never
+    /// loaded by the bootstrap path, and every built frame is released back
+    /// to the arena when the probe ends.
+    pub fn boot_kernel_root_probe(allocator: &mut PhysicalFrameAllocator) {
+        use super::super::kernel_map::KERNEL_HEAP_BASE;
+        use super::super::kernel_page_table_build::{KernelMapping, KernelPageTableBuilder};
+        use super::super::table_frames::OwnedTableFrames;
+        use crate::arch::x86_64::{serial_write_str, serial_write_u64};
+
+        // Same fail-closed guard chain as boot_table_pool_probe: skip
+        // instead of touching anything outside the proven identity map.
+        let Some(base) = allocator
+            .peek_contiguous_frames(BOOT_TABLE_ARENA_FRAMES)
+            .map(|frame| frame.start)
+        else {
+            serial_write_str("AWEOS: [cell:kernmap] skip: no frame available\n");
+            return;
+        };
+        let Some(bytes) = (BOOT_TABLE_ARENA_FRAMES as u64).checked_mul(PAGE_SIZE) else {
+            serial_write_str("AWEOS: [cell:kernmap] skip: arena length overflow\n");
+            return;
+        };
+        if base >= PROVEN_IDENTITY_LIMIT {
+            serial_write_str(
+                "AWEOS: [cell:kernmap] skip: candidate outside the proven 1 GiB identity map\n",
+            );
+            return;
+        }
+        if allocator.range_intersects_reservation(base, bytes) {
+            serial_write_str(
+                "AWEOS: [cell:kernmap] skip: candidate intersects a boot-owned range\n",
+            );
+            return;
+        }
+        if reserve_table_arena(allocator, base, BOOT_TABLE_ARENA_FRAMES).is_err() {
+            serial_write_str("AWEOS: [cell:kernmap] skip: arena reservation failed\n");
+            return;
+        }
+        let mut arena = match TableArena::<BOOT_TABLE_ARENA_FRAMES>::open(base, base) {
+            Ok(arena) => arena,
+            Err(_) => {
+                serial_write_str("AWEOS: [cell:kernmap] skip: arena window rejected\n");
+                return;
+            }
+        };
+        let window: DirectMapWindow = *arena.window();
+        // SAFETY: the bootstrap identity map (memory::x86_64) maps the whole
+        // first 1 GiB writable, and the arena was checked to lie below 1 GiB.
+        let mut pool: PhysicalTablePool<TableArena<BOOT_TABLE_ARENA_FRAMES>, PROBE_LEDGER> =
+            unsafe { PhysicalTablePool::with_capacity(window, &mut arena) };
+
+        // One writable, non-executable, supervisor-only mapping inside the
+        // planned kernel-heap region, backed by a page-aligned frame inside
+        // the proven identity range.
+        let kernel_heap_flags = PageFlags::PRESENT
+            .union(PageFlags::WRITABLE)
+            .union(PageFlags::NO_EXECUTE);
+        let mappings = [KernelMapping {
+            virtual_start: KERNEL_HEAP_BASE,
+            physical_start: PAGE_SIZE,
+            page_count: 1,
+            flags: kernel_heap_flags,
+        }];
+
+        let mut access = OwnedTableFrames::<_, 64>::new(&mut pool);
+        let root = match access.alloc_root() {
+            Ok(root) => root,
+            Err(_) => {
+                serial_write_str("AWEOS: [cell:kernmap] FAIL: root allocation\n");
+                return;
+            }
+        };
+        let install;
+        let readback;
+        let untouched;
+        {
+            let mut builder = match KernelPageTableBuilder::new(root, &mut access) {
+                Ok(builder) => builder,
+                Err(_) => {
+                    serial_write_str("AWEOS: [cell:kernmap] FAIL: builder rejected root\n");
+                    return;
+                }
+            };
+            install = builder.install_all(&mappings);
+            readback = install.is_ok()
+                && builder.leaf_entry(KERNEL_HEAP_BASE).is_some_and(|leaf| {
+                    leaf.address() == PAGE_SIZE
+                        && !leaf.flags().contains(PageFlags::USER)
+                        && leaf.flags().contains(PageFlags::WRITABLE)
+                        && leaf.flags().contains(PageFlags::NO_EXECUTE)
+                });
+            untouched = builder.user_half_is_untouched();
+        }
+
+        // Transfer root and intermediate-frame ownership out of the wrapper.
+        // Otherwise OwnedTableFrames::drop would release the frames before the
+        // explicit release below, causing a double-release failure in the probe.
+        let built_tables = access.take_ownership();
+
+        serial_write_str("AWEOS: [cell:kernmap] install=");
+        serial_write_u64(u64::from(install.is_ok()));
+        serial_write_str(" readback=");
+        serial_write_u64(u64::from(readback));
+        serial_write_str(" user-half-untouched=");
+        serial_write_u64(u64::from(untouched));
+        serial_write_str(" tables=");
+        serial_write_u64(u64::try_from(built_tables.frame_count()).unwrap_or(0));
+        serial_write_str("\n");
+
+        // The root and every built frame remain unpublished: release them
+        // all back to the arena so the probe leaves the table pool empty.
+        let mut all_released = true;
+        let built_frames = built_tables.frames();
+        let mut index = built_frames.len();
+        while index > 0 {
+            index -= 1;
+            if pool
+                .release(Frame {
+                    start: built_frames[index],
+                })
+                .is_err()
+            {
+                all_released = false;
+            }
+        }
+
+        serial_write_str("AWEOS: [cell:kernmap] released=");
+        serial_write_u64(u64::from(all_released));
+        serial_write_str("\n");
+        if install.is_ok() && readback && untouched && all_released {
+            serial_write_str("AWEOS: [cell:kernmap] probe result: PASS\n");
+        } else {
+            serial_write_str("AWEOS: [cell:kernmap] probe result: FAIL\n");
+        }
+    }
 }
 
 #[cfg(all(
@@ -333,6 +473,13 @@ mod live_probe {
     target_os = "none"
 ))]
 pub use live_probe::boot_table_pool_probe;
+
+#[cfg(all(
+    feature = "kernel-selftest",
+    target_arch = "x86_64",
+    target_os = "none"
+))]
+pub use live_probe::boot_kernel_root_probe;
 
 #[cfg(test)]
 mod tests {

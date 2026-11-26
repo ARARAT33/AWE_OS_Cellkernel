@@ -3,7 +3,7 @@
 use awe_boot_protocol::{BootInfo, validate};
 
 use crate::boot_phase::{BootPhase, BootProgress};
-use crate::memory::{PhysicalFrameAllocator, reserve_boot_owned_ranges};
+use crate::memory::{DirectMapGateError, PhysicalFrameAllocator, reserve_boot_owned_ranges};
 
 #[repr(u8)]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -15,6 +15,10 @@ pub enum KernelBootStatus {
     NoUsableMemory = 4,
     InvalidMemoryMap = 5,
     BootReservationFailed = 6,
+    /// A usable RAM range of the boot memory map does not fit inside the
+    /// bounded direct-map window. Boot fails closed before any allocator or
+    /// page-table state is created; see `memory::boot_direct_map`.
+    DirectMapWindowExceeded = 7,
 }
 
 pub struct KernelContext {
@@ -56,6 +60,17 @@ pub fn kernel_entry(info: &BootInfo) -> KernelBootStatus {
         return KernelBootStatus::NoUsableMemory;
     }
 
+    // No-allocation direct-map gate: every usable RAM range must fit the
+    // 64 TiB bounded direct-map window before any allocator or page-table
+    // state exists. A memory map beyond the window fails closed.
+    match crate::memory::validate_boot_direct_map(info) {
+        Ok(_) => {}
+        Err((_, DirectMapGateError::BeyondDirectMapWindow { .. })) => {
+            return KernelBootStatus::DirectMapWindowExceeded;
+        }
+        Err(_) => return KernelBootStatus::InvalidMemoryMap,
+    }
+
     let mut frames = match unsafe { PhysicalFrameAllocator::try_from_boot_info(info) } {
         Ok(allocator) => allocator,
         Err(_) => return KernelBootStatus::InvalidMemoryMap,
@@ -75,6 +90,17 @@ pub fn kernel_entry(info: &BootInfo) -> KernelBootStatus {
         target_os = "none"
     ))]
     crate::memory::table_arena::boot_table_pool_probe(&mut frames);
+
+    // QEMU evidence probe (kernel-selftest builds only): through the same
+    // proven arena path, build a real supervisor-only kernel-half root via
+    // the merged KernelPageTableBuilder and validate it by readback. The
+    // root is never published and never written to CR3.
+    #[cfg(all(
+        feature = "kernel-selftest",
+        target_arch = "x86_64",
+        target_os = "none"
+    ))]
+    crate::memory::table_arena::boot_kernel_root_probe(&mut frames);
 
     if frames.allocate().is_none() {
         return KernelBootStatus::NoUsableMemory;
@@ -317,6 +343,38 @@ mod tests {
     fn rejects_missing_memory_map() {
         let info = BootInfo::empty(Architecture::X86_64);
         assert_eq!(kernel_entry(&info), KernelBootStatus::NoUsableMemory);
+    }
+
+    #[test]
+    fn rejects_memory_map_beyond_the_direct_map_window() {
+        let regions = [MemoryRegion {
+            base: super::super::memory::GATE_DIRECT_MAP_LIMIT,
+            length: 0x10000,
+            kind: 1,
+            reserved: 0,
+        }];
+        let info = BootInfo {
+            magic: awe_boot_protocol::AWE_BOOT_MAGIC,
+            version: awe_boot_protocol::AWE_BOOT_VERSION,
+            size: core::mem::size_of::<BootInfo>() as u32,
+            architecture: Architecture::X86_64,
+            cpu_count: 1,
+            memory_regions: regions.as_ptr(),
+            memory_region_count: 1,
+            framebuffer_address: 0,
+            framebuffer_size: 0,
+            framebuffer_width: 0,
+            framebuffer_height: 0,
+            framebuffer_pitch: 0,
+            acpi_rsdp: 0,
+            device_tree: 0,
+            kernel_base: 0,
+            kernel_size: 0,
+        };
+        assert_eq!(
+            kernel_entry(&info),
+            KernelBootStatus::DirectMapWindowExceeded
+        );
     }
 
     #[test]
