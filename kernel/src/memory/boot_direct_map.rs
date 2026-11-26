@@ -82,7 +82,7 @@ pub fn validate_boot_direct_map(
     if info.memory_region_count == 0 || info.memory_regions.is_null() {
         return Err((0, DirectMapGateError::MissingMemoryMap));
     }
-    if info.memory_region_count > MAX_MEMORY_REGIONS as u32 {
+    if info.memory_region_count > MAX_MEMORY_REGIONS {
         return Err((
             info.memory_region_count as usize,
             DirectMapGateError::MapAddressOverflow,
