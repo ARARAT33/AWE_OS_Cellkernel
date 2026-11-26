@@ -440,10 +440,7 @@ mod tests {
             kernel_base: 0,
             kernel_size: 0,
         };
-        assert_eq!(
-            kernel_entry(&info),
-            KernelBootStatus::InvalidMemoryMap
-        );
+        assert_eq!(kernel_entry(&info), KernelBootStatus::InvalidMemoryMap);
     }
 
     #[test]
@@ -468,9 +465,6 @@ mod tests {
             kernel_base: 0,
             kernel_size: 0,
         };
-        assert_eq!(
-            kernel_entry(&info),
-            KernelBootStatus::InvalidMemoryMap
-        );
+        assert_eq!(kernel_entry(&info), KernelBootStatus::InvalidMemoryMap);
     }
 }
