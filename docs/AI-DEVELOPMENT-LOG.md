@@ -1,3 +1,19 @@
+## 2026-11-26 — Run 20: repair Run 19 boot direct-map gate compilation
+
+- **Baseline:** continued on the existing open PR #89 branch `feat/boot-direct-map-gate-2026-11-25`, head `703f59752036fde42a2d825fb9b0ea0e70c97d9d`. The PR was left open; no main-branch changes, merges, force pushes, or branch deletions were made.
+- **CI audit:** all eight code/boot workflow runs associated with the PR head had completed. The AOSIN cross-platform installer passed; the Quality Gate, Clippy, Cloud Security, CI Pipeline, VirtIO Runtime, Multi-Architecture Images, CI Diagnostics and Bootable Image Pipeline failed because the same three Rust compile errors prevented the kernel crate from building.
+- **Root causes from exact GitHub Actions job logs:**
+  1. `boot_direct_map.rs` called `fits_direct_map_window` without importing it.
+  2. It imported `DIRECT_MAP_MAX_PHYSICAL` through a private import in `kernel_page_table_build`; the public defining constant is in `kernel_map`.
+  3. `usize::from(u32)` is not implemented on the target toolchain; the bounded `memory_region_count` is now converted with `as usize` after the existing maximum-count guard.
+- **Implemented:** commit `9d59967f8818d9211afa46a6282b7fe76f3d188e` updates only `kernel/src/memory/boot_direct_map.rs`: imports the helper and physical limit from their defining modules and corrects the integer conversion. Existing validation order and fail-closed behavior are preserved.
+- **Files changed in this run:** `kernel/src/memory/boot_direct_map.rs`; this log; the dated Run 19 log.
+- **Validation:** the previous PR head failed workspace compilation with E0425, E0603 and E0277. The fix commit was pushed to the existing PR branch; fresh CI results for the new head are pending. No passing result is claimed yet. Local Rust/QEMU execution is unavailable through the connected GitHub-only development path.
+- **Unresolved:** rerun all PR checks on the exact fix head; inspect any newly exposed compile/Clippy/QEMU failures before declaring Run 19 validated.
+- **Next priorities:** once CI is green, merge only after review and exact-head validation; then continue the memory roadmap with full pre-activation kernel-root validation and a separately specified CR3/TLB contract. Do not enable Ring 3 or claim process isolation before per-process root construction, mapping permissions, teardown and QEMU isolation tests exist.
+
+---
+
 ## 2026-11-25 — Run 18: kernel-half page-table builder hardening and CI repair
 
 - **Baseline:** `main` at `57897c72b8ab307ba6c7ae5fd2336b9dcfda98a9`; resumed the unfinished Run 17 kernel-half page-table builder on PR #87. PR #87's first CI exposed an unregistered module; follow-up CI then exposed host-test compilation and policy-fixture errors. No changes were made to `main`.
