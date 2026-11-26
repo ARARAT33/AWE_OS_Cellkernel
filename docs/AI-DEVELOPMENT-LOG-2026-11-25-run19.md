@@ -35,3 +35,13 @@ log-reconciliation commit, following the repo's dated-log precedent.
 - Runtime review found that dropping `OwnedTableFrames` automatically tears down its tracked frames. The probe now calls `take_ownership()` and then releases those transferred frames explicitly in reverse order, preventing a double release and avoiding the previous fixed eight-frame capture limit.
 - Boot status semantics were tightened: only `BeyondDirectMapWindow` maps to `KernelBootStatus::DirectMapWindowExceeded`; malformed descriptor arrays, misalignment, empty/overflowing ranges map to `InvalidMemoryMap`. The corresponding entry tests were updated.
 - Current code head at this point: `36fe7420b733dee8bd9cd74b157facf22c590057`. CI for this exact head is not yet confirmed; no test pass is claimed.
+
+
+### 2026-11-26 — Clippy regression fix on PR #89
+
+- **CI evidence:** On PR head `2762eeb2241d5618f881d47c4b794c1d4db54dad`, the workspace compile, workspace tests, formatting, bootable ISO smoke boot, VirtIO block QEMU boot, UEFI loader, multi-architecture image build, AOSIN installer matrix and CI diagnostics completed successfully. The Quality Gate, Cloud Security Gate and exception-injection self-test gate failed at Clippy before the QEMU exception-injection test could run.
+- **Root cause:** all three failing Clippy paths reported `clippy::unnecessary_cast` at `kernel/src/memory/boot_direct_map.rs:85`: `MAX_MEMORY_REGIONS` is already `u32`, matching `BootInfo.memory_region_count`; the `as u32` cast was redundant. This was a lint failure, not a Rust compile or unit-test failure.
+- **Fix:** commit `146d71adc81d13f727c8a665a2e0deb0f0dd4446` removes only the redundant cast. The comparison remains type-correct and preserves the 4096-descriptor bound.
+- **Files changed in this follow-up:** `kernel/src/memory/boot_direct_map.rs`.
+- **Validation:** no local Rust/QEMU toolchain is available in this GitHub-only execution. The fix has been pushed to the existing PR #89 branch; fresh remote CI is pending. The previous green workspace tests and QEMU ISO/VirtIO checks are recorded as evidence on the previous head only, not as validation of this fix commit. No merge/readiness promotion is claimed.
+- **Next priorities:** (1) inspect every workflow on the new head and fetch exact logs for any remaining failures; (2) require Clippy and the QEMU exception-injection job to pass before merge; (3) review the kernel-half root probe's serial PASS evidence and ensure the root remains unpublished; (4) only then specify CR3/TLB activation and per-process root teardown.
