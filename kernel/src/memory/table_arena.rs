@@ -403,8 +403,6 @@ mod live_probe {
         let install;
         let readback;
         let untouched;
-        let mut built_frames = [0u64; 8];
-        let mut built_count = 0usize;
         {
             let mut builder = match KernelPageTableBuilder::new(root.start, &mut access) {
                 Ok(builder) => builder,
@@ -423,17 +421,12 @@ mod live_probe {
                         && leaf.flags().contains(PageFlags::NO_EXECUTE)
                 });
             untouched = builder.user_half_is_untouched();
-            for (index, &frame) in builder.allocated_tables().iter().enumerate() {
-                if index < built_frames.len() {
-                    built_frames[index] = frame;
-                    built_count = index + 1;
-                }
-            }
         }
 
-        // End the wrapper's exclusive borrow of the pool before releasing
-        // the unpublished frames back into the arena.
-        core::mem::drop(access);
+        // Transfer intermediate-frame ownership out of the wrapper. Otherwise
+        // OwnedTableFrames::drop would release the frames before the explicit
+        // release below, causing a double-release failure in the probe.
+        let built_tables = access.take_ownership();
 
         serial_write_str("AWEOS: [cell:kernmap] install=");
         serial_write_u64(u64::from(install.is_ok()));
@@ -442,21 +435,17 @@ mod live_probe {
         serial_write_str(" user-half-untouched=");
         serial_write_u64(u64::from(untouched));
         serial_write_str(" tables=");
-        serial_write_u64(u64::try_from(built_count).unwrap_or(0));
+        serial_write_u64(u64::try_from(built_tables.frame_count()).unwrap_or(0));
         serial_write_str("\n");
 
         // The root and every built frame remain unpublished: release them
         // all back to the arena so the probe leaves the table pool empty.
         let mut all_released = true;
-        let mut index = built_count;
+        let built_frames = built_tables.frames();
+        let mut index = built_frames.len();
         while index > 0 {
             index -= 1;
-            if pool
-                .release(Frame {
-                    start: built_frames[index],
-                })
-                .is_err()
-            {
+            if pool.release(Frame { start: built_frames[index] }).is_err() {
                 all_released = false;
             }
         }
