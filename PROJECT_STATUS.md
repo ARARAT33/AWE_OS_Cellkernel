@@ -2,7 +2,7 @@
 
 **Project track:** AWE development project #2  
 **Status:** Active development / preserved for continued work  
-**Date:** 2026-11-25  
+**Date:** 2026-11-26  
 **Primary branch:** `main`  
 **Preserved snapshot:** `archive/pre-restructure-2026-08-27`
 
@@ -25,11 +25,11 @@ The immediate focus is **engineering the bootable and testable AWE_OS core**, wi
 7. AYUI and first-party userspace
 8. recovery, validation and release evidence
 
-## Current implementation evidence (2026-11-25)
+## Current implementation evidence (2026-11-26)
 
 - Run 19 (2026-11-25): added `kernel/src/memory/boot_direct_map.rs`, a no-allocation boot gate that fails closed with the new `KernelBootStatus::DirectMapWindowExceeded` when any `MEMORY_REGION_USABLE` range of the boot memory map exceeds the 64 TiB bounded direct-map window; `kernel_entry` now runs the gate before any allocator or page-table state exists. The `kernel-selftest` boot path gained `boot_kernel_root_probe`, which builds a real supervisor-only kernel-half root through the merged `KernelPageTableBuilder` over `TableArena => PhysicalTablePool` and validates it by readback, never publishing it (no CR3, no TLB, no Ring 3).
 
-- PR #89 (`feat/boot-direct-map-gate-2026-11-25`) remains open against `main`. Its first CI attempts exposed compile errors and a QEMU probe ownership issue; follow-up commits corrected the imports/types, exhaustive boot-status handling, pool-capacity inference, and `OwnedTableFrames` release lifecycle. The latest exact head must still pass the full required CI set before merge; no CR3 activation, TLB switch, or Ring 3 is claimed.
+- PR #89 (`feat/boot-direct-map-gate-2026-11-25`) remains open against `main`. After correcting the boot-map Clippy regression, code review found that the QEMU integration test asserted the table-pool probe but not the new kernel-half root probe. Commit `07fa2425fc3c5e219bcab37a965681a61f56dcc4` adds a fail-closed assertion requiring `AWEOS: [cell:kernmap] probe result: PASS`; a skipped or failed probe now fails the QEMU self-test. Exact code head `07fa2425fc3c5e219bcab37a965681a61f56dcc4` passed all 9 PR workflow families: Quality Gate, CI Pipeline, Clippy, CI Diagnostics, Bootable Image Pipeline (ISO smoke boot and exception-injection QEMU self-test), VirtIO Runtime, Multi-Architecture Images, Cloud Security/Release Contract, and AOSIN installers. The kernel crate reported 469/469 tests and kernel-bin 4/4. This proves only the unpublished kernel-half root's construction/readback/cleanup path; no CR3 activation, TLB switch, production direct-map installation, or Ring 3 is claimed.
 
 - Run 17 (2026-11-24): added `kernel/src/memory/kernel_page_table_build.rs`, a supervisor-only kernel-half page-table builder over the validated `kernel_map` region contract (kernel-half-only installs, no USER bits, planned-region bounds, W^X), plus direct-map window fit validation. Host tests only; nothing is activated at boot, and no CR3 switch, TLB invalidation, or Ring 3 change is claimed.
 
