@@ -27,3 +27,11 @@ log-reconciliation commit, following the repo's dated-log precedent.
 - The first full PR #89 CI attempt on code head `703f59752036fde42a2d825fb9b0ea0e70c97d9d` failed in the kernel crate before tests could execute. Exact logs showed E0425 (missing `fits_direct_map_window` import), E0603 (private re-export path for `DIRECT_MAP_MAX_PHYSICAL`), and E0277 (unsupported `usize::from(u32)`).
 - Fixed in commit `9d59967f8818d9211afa46a6282b7fe76f3d188e`: import `DIRECT_MAP_MAX_PHYSICAL` from `kernel_map`, import `fits_direct_map_window` directly, and cast the already bounded region count to `usize`.
 - The old-head run had 8 failing workflow families and the AOSIN installer succeeded; these failures were compile blockers, not runtime test evidence. Fresh CI on the fix commit is pending. No green result is claimed.
+
+### 2026-11-26 — second compile pass and probe ownership correction
+
+- The first compile-fix head exposed additional issues: the kernel binary did not handle the new `DirectMapWindowExceeded` enum variant; the test helper declared `MemoryRegion.kind` as `u8` although the boot protocol defines it as `u32`; and the kernel-root probe's explicit `PhysicalTablePool<_>` type selected the default ledger capacity (256) while the probe pool used capacity 8.
+- Fixed the kernel-bin match, corrected the test helper type, and let `OwnedTableFrames` infer the concrete pool type/capacity.
+- Runtime review found that dropping `OwnedTableFrames` automatically tears down its tracked frames. The probe now calls `take_ownership()` and then releases those transferred frames explicitly in reverse order, preventing a double release and avoiding the previous fixed eight-frame capture limit.
+- Boot status semantics were tightened: only `BeyondDirectMapWindow` maps to `KernelBootStatus::DirectMapWindowExceeded`; malformed descriptor arrays, misalignment, empty/overflowing ranges map to `InvalidMemoryMap`. The corresponding entry tests were updated.
+- Current code head at this point: `36fe7420b733dee8bd9cd74b157facf22c590057`. CI for this exact head is not yet confirmed; no test pass is claimed.
