@@ -1637,3 +1637,15 @@ physical frames.
   without activating unverified page tables.
 
 
+
+
+## 2026-11-26 — Run 19 follow-up: Clippy correction on PR #89
+
+- Resumed the existing Run 19 branch and PR #89 after reading its dated development log, current main commit, open PR state, and latest GitHub Actions results.
+- On PR head `2762eeb2241d5618f881d47c4b794c1d4db54dad`, the workspace compile/tests/format, ISO QEMU smoke boot, VirtIO block QEMU boot, UEFI loader, multi-architecture image and installer checks passed. Quality, Cloud Security and exception-injection self-test workflows failed at Clippy. The exception-injection runtime test was skipped because its feature-build lint step failed.
+- Exact failure: `clippy::unnecessary_cast` at `kernel/src/memory/boot_direct_map.rs:85`; `MAX_MEMORY_REGIONS` is declared `u32`, the same type as `memory_region_count`. Removed the redundant `as u32` only.
+- **Fix commit:** `146d71adc81d13f727c8a665a2e0deb0f0dd4446` on `feat/boot-direct-map-gate-2026-11-25`, within existing PR #89. No main-branch write, force push, deletion or merge was performed.
+- **Changed file:** `kernel/src/memory/boot_direct_map.rs`.
+- **Validation status:** fresh CI on the fix commit is pending; this GitHub-only execution had no local Rust/QEMU toolchain. Prior-head successes are not represented as tests of the fix commit. No green status or production readiness is claimed.
+- **Open technical limits:** direct-map itself is not installed at boot; the kernel-half root probe remains validation-only and must not publish CR3 or enable Ring 3; process-root sharing, TLB invalidation, user-copy backend, durable VirtIO I/O and NIC-backed two-node CellNet remain future milestones.
+- **Next priorities:** inspect exact CI on the new PR head; require Clippy and exception-injection QEMU pass; then review the root-probe evidence and define a tested CR3/TLB and per-process teardown contract before activation.
