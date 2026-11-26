@@ -399,7 +399,7 @@ mod live_probe {
             flags: kernel_heap_flags,
         }];
 
-        let mut access = OwnedTableFrames::<PhysicalTablePool<_>, 64>::new(&mut pool);
+        let mut access = OwnedTableFrames::<_, 64>::new(&mut pool);
         let install;
         let readback;
         let untouched;
