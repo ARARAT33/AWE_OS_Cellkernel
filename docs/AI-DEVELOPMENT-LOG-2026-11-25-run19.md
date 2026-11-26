@@ -21,3 +21,9 @@ log-reconciliation commit, following the repo's dated-log precedent.
   2. Build each process root preserving supervisor-only kernel-half mappings; define root/table ownership and teardown before activating a process address space.
   3. Connect checked user-copy to a verified physical-access backend and test mapped/unmapped, read-only, cross-page and fault cases in QEMU.
   4. VirtIO block request/completion with read-after-write/flush/power-loss tests; then NIC/UDP two-node transport.
+
+### 2026-11-26 — CI diagnosis and compile repair
+
+- The first full PR #89 CI attempt on code head `703f59752036fde42a2d825fb9b0ea0e70c97d9d` failed in the kernel crate before tests could execute. Exact logs showed E0425 (missing `fits_direct_map_window` import), E0603 (private re-export path for `DIRECT_MAP_MAX_PHYSICAL`), and E0277 (unsupported `usize::from(u32)`).
+- Fixed in commit `9d59967f8818d9211afa46a6282b7fe76f3d188e`: import `DIRECT_MAP_MAX_PHYSICAL` from `kernel_map`, import `fits_direct_map_window` directly, and cast the already bounded region count to `usize`.
+- The old-head run had 8 failing workflow families and the AOSIN installer succeeded; these failures were compile blockers, not runtime test evidence. Fresh CI on the fix commit is pending. No green result is claimed.
