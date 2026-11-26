@@ -148,7 +148,7 @@ mod tests {
         MemoryRegion,
     };
 
-    fn region(base: u64, length: u64, kind: u8) -> MemoryRegion {
+    fn region(base: u64, length: u64, kind: u32) -> MemoryRegion {
         MemoryRegion {
             base,
             length,
