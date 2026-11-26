@@ -397,6 +397,10 @@ pub extern "C" fn rust_main(boot_magic: u32, boot_info_addr: u64) -> ! {
             serial_write(b"AWEOS: boot-owned physical range reservation failed\r\n");
             halt_forever();
         }
+        KernelBootStatus::DirectMapWindowExceeded => {
+            serial_write(b"AWEOS: usable RAM exceeds the bounded direct-map window\r\n");
+            halt_forever();
+        }
     }
 
     serial_write(b"AWEOS: kernel is alive\r\n");
