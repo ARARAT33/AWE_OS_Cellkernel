@@ -23,7 +23,7 @@ use core::mem::{align_of, size_of};
 use awe_boot_protocol::{BootInfo, MAX_MEMORY_REGIONS, MEMORY_REGION_USABLE, MemoryRegion};
 
 use super::kernel_map::DIRECT_MAP_MAX_PHYSICAL;
-use super::kernel_page_table_build::{fits_direct_map_window, DirectMapFitError};
+use super::kernel_page_table_build::{DirectMapFitError, fits_direct_map_window};
 
 /// Fail-closed errors for the boot direct-map gate.
 ///
