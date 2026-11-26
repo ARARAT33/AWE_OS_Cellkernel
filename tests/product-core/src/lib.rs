@@ -1063,6 +1063,10 @@ mod product_core {
             "the live physical table-pool probe did not reject a foreign frame:\n{final_log}"
         );
         assert!(
+            final_log.contains("AWEOS: [cell:kernmap] probe result: PASS"),
+            "the live supervisor-only kernel-half root probe did not pass:\n{final_log}"
+        );
+        assert!(
             !final_log.contains("AWEOS SELFTEST: FAIL"),
             "selftest reported a validation failure:
 {final_log}"
