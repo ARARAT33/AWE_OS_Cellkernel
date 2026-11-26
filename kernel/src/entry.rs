@@ -3,7 +3,7 @@
 use awe_boot_protocol::{BootInfo, validate};
 
 use crate::boot_phase::{BootPhase, BootProgress};
-use crate::memory::{PhysicalFrameAllocator, reserve_boot_owned_ranges};
+use crate::memory::{DirectMapGateError, PhysicalFrameAllocator, reserve_boot_owned_ranges};
 
 #[repr(u8)]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -63,8 +63,12 @@ pub fn kernel_entry(info: &BootInfo) -> KernelBootStatus {
     // No-allocation direct-map gate: every usable RAM range must fit the
     // 64 TiB bounded direct-map window before any allocator or page-table
     // state exists. A memory map beyond the window fails closed.
-    if crate::memory::validate_boot_direct_map(info).is_err() {
-        return KernelBootStatus::DirectMapWindowExceeded;
+    match crate::memory::validate_boot_direct_map(info) {
+        Ok(_) => {}
+        Err((_, DirectMapGateError::BeyondDirectMapWindow { .. })) => {
+            return KernelBootStatus::DirectMapWindowExceeded;
+        }
+        Err(_) => return KernelBootStatus::InvalidMemoryMap,
     }
 
     let mut frames = match unsafe { PhysicalFrameAllocator::try_from_boot_info(info) } {
@@ -438,7 +442,7 @@ mod tests {
         };
         assert_eq!(
             kernel_entry(&info),
-            KernelBootStatus::DirectMapWindowExceeded
+            KernelBootStatus::InvalidMemoryMap
         );
     }
 
@@ -466,7 +470,7 @@ mod tests {
         };
         assert_eq!(
             kernel_entry(&info),
-            KernelBootStatus::DirectMapWindowExceeded
+            KernelBootStatus::InvalidMemoryMap
         );
     }
 }
