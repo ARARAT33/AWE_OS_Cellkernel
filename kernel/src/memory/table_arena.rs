@@ -445,7 +445,12 @@ mod live_probe {
         let mut index = built_frames.len();
         while index > 0 {
             index -= 1;
-            if pool.release(Frame { start: built_frames[index] }).is_err() {
+            if pool
+                .release(Frame {
+                    start: built_frames[index],
+                })
+                .is_err()
+            {
                 all_released = false;
             }
         }
