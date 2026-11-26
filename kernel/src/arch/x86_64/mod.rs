@@ -1,6 +1,7 @@
 #![no_std]
 
 pub mod boot;
+pub mod cr3_contract;
 pub mod entry;
 pub mod gdt;
 pub mod idt;

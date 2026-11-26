@@ -467,6 +467,46 @@ mod live_probe {
     }
 }
 
+
+    /// QEMU evidence probe (kernel-selftest builds only, production boot is
+    /// unchanged): read the live CR3 and validate the running bootstrap
+    /// root against the merged CR3/TLB activation contract. No CR3 write,
+    /// no TLB invalidation and no mapping change happens in this probe:
+    /// the contract structurally forbids activating a kernel-half-only
+    /// root while the kernel still executes at user-half identity
+    /// addresses, and this probe asserts exactly that.
+    pub fn boot_cr3_contract_probe() {
+        use crate::arch::x86_64::cr3_contract::{
+            cr3_low_flags, cr3_root_of, identity_image_can_activate_kernel_half_root,
+            validate_root_physical,
+        };
+        use crate::arch::x86_64::{read_cr3, serial_write_str, serial_write_u64};
+
+        let live = unsafe { read_cr3() };
+        let root = cr3_root_of(live);
+        let valid = validate_root_physical(root).is_ok();
+        let low_flags_clear = cr3_low_flags(live) == 0;
+        let activation_blocked = !identity_image_can_activate_kernel_half_root();
+
+        serial_write_str("AWEOS: [cell:cr3] live=0x");
+        serial_write_u64(live);
+        serial_write_str(" root=0x");
+        serial_write_u64(root);
+        serial_write_str("\n");
+        serial_write_str("AWEOS: [cell:cr3] root-valid=");
+        serial_write_u64(u64::from(valid));
+        serial_write_str(" low-flags-clear=");
+        serial_write_u64(u64::from(low_flags_clear));
+        serial_write_str(" activation-blocked-by-contract=");
+        serial_write_u64(u64::from(activation_blocked));
+        serial_write_str("\n");
+        if valid && low_flags_clear && activation_blocked {
+            serial_write_str("AWEOS: [cell:cr3] probe result: PASS\n");
+        } else {
+            serial_write_str("AWEOS: [cell:cr3] probe result: FAIL\n");
+        }
+    }
+
 #[cfg(all(
     feature = "kernel-selftest",
     target_arch = "x86_64",
@@ -480,6 +520,13 @@ pub use live_probe::boot_table_pool_probe;
     target_os = "none"
 ))]
 pub use live_probe::boot_kernel_root_probe;
+
+#[cfg(all(
+    feature = "kernel-selftest",
+    target_arch = "x86_64",
+    target_os = "none"
+))]
+pub use live_probe::boot_cr3_contract_probe;
 
 #[cfg(test)]
 mod tests {
