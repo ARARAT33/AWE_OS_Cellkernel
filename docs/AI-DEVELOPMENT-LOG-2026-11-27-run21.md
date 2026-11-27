@@ -18,3 +18,11 @@
 - The QEMU exception-injection feature build then exposed a separate E0432: `boot_cr3_contract_probe` is defined in the parent `table_arena` module, but was incorrectly re-exported from the nested `live_probe` module. The normal host build did not compile that `target_os = "none" + kernel-selftest` export path.
 - Fixed by gating the parent-module probe itself to the x86_64 bare-metal self-test configuration and removing the invalid nested-module re-export. `entry.rs` already calls the parent path directly, so no call-site or production boot behavior changes are needed.
 - The bootable ISO smoke job succeeded, but the separate exception-injection self-test compile step failed before QEMU execution. CI Diagnostics likewise failed because its all-target cargo check includes the same self-test configuration issue. Fresh exact-head CI is pending; no QEMU self-test pass is claimed.
+
+
+### Exact-head CI evidence and formatting reconciliation
+
+- On code head `dcf7242a25943bd33937346c1629980e6a8f2bda`, the **Bootable Image Pipeline passed**, including the exception-injection self-test feature build and the QEMU exception-injection run; the normal ISO smoke boot also passed. Multi-Architecture Images, CI Diagnostics, and all four AOSIN installer jobs passed.
+- Quality Gate and Cloud Security stopped only at their workspace formatting checks. VirtIO Runtime stopped at its formatting step, before storage/driver contract tests or its QEMU VirtIO boot step; therefore no VirtIO block runtime result is claimed from this head.
+- The rustfmt workflow `46027659497` generated formatting-only commit `8834463e52122759feb710d6b1a2d1f082e7e972`; its only diff removed one extra blank line from `kernel/src/memory/table_arena.rs`. The PR workflow runs for that bot-generated head returned `action_required` with no jobs, so they are not treated as validation.
+- A documentation-only follow-up commit is being added to trigger a fresh set of checks on a maintainer-authored exact head. Merge remains blocked until those checks are green.
