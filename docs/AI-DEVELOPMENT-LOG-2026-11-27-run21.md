@@ -10,3 +10,11 @@
 - **Validation after fix:** pending fresh GitHub Actions on the new exact head. This session has GitHub repository/CI access but no local Rust/QEMU execution environment; no passing result is claimed.
 - **Explicit non-claims:** no CR3 write, TLB invalidation, higher-half image, per-process address-space activation, Ring 3, or production process isolation. The identity-image activation gate remains false.
 - **Next priorities:** inspect all fresh exact-head workflow results; only after green checks, review and merge PR #90. Then design and validate a higher-half kernel loading/relocation path before any CR3 activation work. Keep durable VirtIO I/O, a live checked user-copy backend, and NIC-backed multi-node CellNet as separate unproven milestones.
+
+
+### Follow-up — QEMU self-test export repair
+
+- The first post-fix CI run validated the stable-Rust repair: Quality Gate and CI Pipeline passed, including formatting, workspace compilation, workspace tests and Clippy. The host diagnostics reported **476 kernel tests and 4 kernel-bin tests passed**.
+- The QEMU exception-injection feature build then exposed a separate E0432: `boot_cr3_contract_probe` is defined in the parent `table_arena` module, but was incorrectly re-exported from the nested `live_probe` module. The normal host build did not compile that `target_os = "none" + kernel-selftest` export path.
+- Fixed by gating the parent-module probe itself to the x86_64 bare-metal self-test configuration and removing the invalid nested-module re-export. `entry.rs` already calls the parent path directly, so no call-site or production boot behavior changes are needed.
+- The bootable ISO smoke job succeeded, but the separate exception-injection self-test compile step failed before QEMU execution. CI Diagnostics likewise failed because its all-target cargo check includes the same self-test configuration issue. Fresh exact-head CI is pending; no QEMU self-test pass is claimed.

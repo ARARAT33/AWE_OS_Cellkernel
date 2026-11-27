@@ -474,6 +474,11 @@ mod live_probe {
 /// the contract structurally forbids activating a kernel-half-only
 /// root while the kernel still executes at user-half identity
 /// addresses, and this probe asserts exactly that.
+#[cfg(all(
+    feature = "kernel-selftest",
+    target_arch = "x86_64",
+    target_os = "none"
+))]
 pub fn boot_cr3_contract_probe() {
     use crate::arch::x86_64::cr3_contract::{
         cr3_low_flags, cr3_root_of, identity_image_can_activate_kernel_half_root,
@@ -520,12 +525,6 @@ pub use live_probe::boot_table_pool_probe;
 ))]
 pub use live_probe::boot_kernel_root_probe;
 
-#[cfg(all(
-    feature = "kernel-selftest",
-    target_arch = "x86_64",
-    target_os = "none"
-))]
-pub use live_probe::boot_cr3_contract_probe;
 
 #[cfg(test)]
 mod tests {
