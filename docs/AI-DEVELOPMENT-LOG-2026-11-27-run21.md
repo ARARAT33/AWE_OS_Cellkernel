@@ -26,3 +26,17 @@
 - Quality Gate and Cloud Security stopped only at their workspace formatting checks. VirtIO Runtime stopped at its formatting step, before storage/driver contract tests or its QEMU VirtIO boot step; therefore no VirtIO block runtime result is claimed from this head.
 - The rustfmt workflow `46027659497` generated formatting-only commit `8834463e52122759feb710d6b1a2d1f082e7e972`; its only diff removed one extra blank line from `kernel/src/memory/table_arena.rs`. The PR workflow runs for that bot-generated head returned `action_required` with no jobs, so they are not treated as validation.
 - A documentation-only follow-up commit is being added to trigger a fresh set of checks on a maintainer-authored exact head. Merge remains blocked until those checks are green.
+
+
+## Final validation — exact PR head `53b502270511e5194306235db6e0930af0e60109`
+
+All **9 substantive PR workflow families** and the rustfmt workflow completed successfully:
+
+- Quality Gate: formatting, workspace check, workspace tests, product-core tests and Clippy passed.
+- CI Diagnostics: `CLIPPY_SELFTEST_EXIT=0`, `CHECK_SELFTEST_EXIT=0`, `TEST_ALL_TARGETS_EXIT=0`; **476 `aweos-kernel` tests + 4 `kernel-bin` tests** passed.
+- Product-core compatibility acceptance: **11/11** passed.
+- Bootable Image Pipeline: kernel build, Multiboot2 validation, ISO/GPT image creation, QEMU ISO smoke boot, and exception-injection QEMU self-test (**1/1**) passed.
+- VirtIO Runtime: formatting, storage/driver contract tests (**4/4**), kernel build/ELF validation, QEMU VirtIO PCI device exposure, and QEMU boot to `AWEOS: kernel state = RUNNING` passed.
+- Multi-Architecture Images, Cloud Security/Release Contract, Clippy, and all four Linux/Windows AOSIN GUI/CLI installer builds passed.
+
+**Evidence boundary:** the VirtIO workflow proves PCI device exposure and kernel boot with a VirtIO block device, not block read/write, flush, or durable filesystem persistence. Cross-architecture image builds are not ARM64/RISC-V runtime evidence. The CR3 contract remains fail-closed; no CR3 write, TLB switch, Ring 3 or process-isolation claim is made. PR #90 remains open for review and was not merged.
