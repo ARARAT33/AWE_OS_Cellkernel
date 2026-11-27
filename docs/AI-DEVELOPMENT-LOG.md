@@ -1,3 +1,15 @@
+## 2026-11-27 — Run 21: repair PR #90 const-evaluation regression
+
+- **Baseline:** continued on the existing open PR #90 branch `feat/cr3-tlb-activation-contract-2026-11-26` at `ecc3a354b6d5b011cd2084f44ae7462547241d18`; main remains unchanged.
+- **CI diagnosis:** all substantive failures on the initial PR #90 head shared Rust E0658 in `cr3_contract.rs:117`: `Result::map_err` and `?` were used inside a `const fn`, unsupported by the stable toolchain. This prevented workspace tests, Clippy, boot/QEMU, VirtIO, multi-architecture and cloud-security jobs from reaching their later gates. UEFI loader and AOSIN installers passed.
+- **Code fix:** replaced the const `map_err/?` expression with explicit `match`, preserving the fail-closed error mapping. Corrected `cr3_low_flags` to return only CR3 bits 0..11 and added a regression assertion that reserved high bits are excluded.
+- **Files changed:** `kernel/src/arch/x86_64/cr3_contract.rs`; `PROJECT_STATUS.md`; this log; new dated Run 21 log.
+- **Validation:** the pre-fix exact head `ecc3a354b6d5b011cd2084f44ae7462547241d18` failed with E0658. Fresh CI for the new head is pending. No local Rust/QEMU runtime was available, and no green result is claimed.
+- **Safety:** PR #90 remains open for review; no force push, merge, branch deletion, CR3 write, TLB switch or Ring 3 change.
+- **Next:** validate all checks on the exact new head; only then review/merge. Higher-half kernel loading remains the prerequisite for a future CR3 activation milestone.
+
+---
+
 ## 2026-11-26 — Run 20: repair Run 19 boot direct-map gate compilation
 
 - **Baseline:** continued on the existing open PR #89 branch `feat/boot-direct-map-gate-2026-11-25`, head `703f59752036fde42a2d825fb9b0ea0e70c97d9d`. The PR was left open; no main-branch changes, merges, force pushes, or branch deletions were made.

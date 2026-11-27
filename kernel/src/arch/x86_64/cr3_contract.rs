@@ -76,7 +76,7 @@ pub const fn cr3_root_of(value: u64) -> u64 {
 /// The CR3 control bits below bit 12. They are legal for the hardware but
 /// change cache/write policy, so probes report them explicitly.
 pub const fn cr3_low_flags(value: u64) -> u64 {
-    value & !CR3_PHYSICAL_MASK
+    value & 0x0fff
 }
 
 /// Failure modes of the activation precondition check.
@@ -114,7 +114,12 @@ pub const fn check_activation_preconditions(
     current_root: u64,
     target_root: u64,
 ) -> Result<(), ActivationPreconditionError> {
-    validate_root_physical(target_root).map_err(ActivationPreconditionError::InvalidTargetRoot)?;
+    match validate_root_physical(target_root) {
+        Ok(()) => {}
+        Err(error) => {
+            return Err(ActivationPreconditionError::InvalidTargetRoot(error));
+        }
+    }
     if target_root == cr3_root_of(current_root) {
         return Err(ActivationPreconditionError::TargetEqualsCurrent);
     }
@@ -168,6 +173,8 @@ mod tests {
         assert_eq!(cr3_root_of(0x1000 | 0x8), 0x1000);
         assert_eq!(cr3_low_flags(0x1000 | 0x8), 0x8);
         assert_eq!(cr3_low_flags(0x1000), 0);
+        // Reserved high bits are not part of the low CR3 control/PCID field.
+        assert_eq!(cr3_low_flags(0x1000 | 0x8 | (1 << 60)), 0x8);
     }
 
     #[test]
