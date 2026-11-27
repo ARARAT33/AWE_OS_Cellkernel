@@ -525,7 +525,6 @@ pub use live_probe::boot_table_pool_probe;
 ))]
 pub use live_probe::boot_kernel_root_probe;
 
-
 #[cfg(test)]
 mod tests {
     use super::super::frame::{BitmapFrameAllocator, PhysicalFrameAllocator};
