@@ -239,7 +239,7 @@ mod tests {
     use super::*;
     use crate::memory::kernel_map::{KERNEL_HEAP_BASE, KERNEL_MAP_BASE, KERNEL_TEXT_BASE};
     use crate::memory::kernel_page_table_build::{KernelMapping, KernelPageTableBuilder};
-    use crate::memory::paging::{PageTable, indices, pml4_index as _};
+    use crate::memory::paging::{PageTable, indices};
 
     const FAKE_TABLES: usize = 64;
 
@@ -284,19 +284,6 @@ mod tests {
             self.live[self.used] = true;
             self.used += 1;
             Some(phys)
-        }
-
-        fn insert_table_at(&mut self, physical: u64) {
-            match self.slot(physical) {
-                Some(slot) => self.live[slot] = true,
-                None => {
-                    assert!(self.used < FAKE_TABLES, "fake backend full");
-                    self.phys[self.used] = physical;
-                    self.tables[self.used] = PageTable::new();
-                    self.live[self.used] = true;
-                    self.used += 1;
-                }
-            }
         }
 
         fn set_entry(&mut self, table_phys: u64, index: usize, entry: PageTableEntry) {
