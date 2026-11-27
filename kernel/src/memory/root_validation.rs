@@ -330,7 +330,12 @@ mod tests {
         .union(PageFlags::WRITABLE)
         .union(PageFlags::NO_EXECUTE);
 
-    fn vm(virtual_start: u64, physical_start: u64, page_count: u64, flags: PageFlags) -> KernelMapping {
+    fn vm(
+        virtual_start: u64,
+        physical_start: u64,
+        page_count: u64,
+        flags: PageFlags,
+    ) -> KernelMapping {
         KernelMapping {
             virtual_start,
             physical_start,
@@ -424,7 +429,9 @@ mod tests {
             256,
             PageTableEntry::new(
                 0x20_0000,
-                PageFlags::PRESENT.union(PageFlags::WRITABLE).union(PageFlags::HUGE),
+                PageFlags::PRESENT
+                    .union(PageFlags::WRITABLE)
+                    .union(PageFlags::HUGE),
             ),
         );
         assert_eq!(
@@ -469,7 +476,8 @@ mod tests {
         let idx = indices(KERNEL_HEAP_BASE);
         let pt = {
             // Recover the PT frame installed by install_chain at idx[2].
-            let pd = memory.table(memory.table(root).unwrap().get(idx[0]).unwrap().address())
+            let pd = memory
+                .table(memory.table(root).unwrap().get(idx[0]).unwrap().address())
                 .unwrap()
                 .get(idx[1])
                 .unwrap()
@@ -479,10 +487,7 @@ mod tests {
         memory.set_entry(
             pt,
             idx[3],
-            PageTableEntry::new(
-                0x50_0000,
-                PageFlags::PRESENT.union(PageFlags::WRITABLE),
-            ),
+            PageTableEntry::new(0x50_0000, PageFlags::PRESENT.union(PageFlags::WRITABLE)),
         );
         assert_eq!(
             RootValidator::with_default_budget().validate(root, &memory),
@@ -507,10 +512,7 @@ mod tests {
         memory.set_entry(
             pt,
             idx[3],
-            PageTableEntry::new(
-                0x40_0000,
-                PageFlags::PRESENT.union(PageFlags::WRITABLE),
-            ),
+            PageTableEntry::new(0x40_0000, PageFlags::PRESENT.union(PageFlags::WRITABLE)),
         );
         assert_eq!(
             RootValidator::with_default_budget().validate(root, &memory),
@@ -536,7 +538,9 @@ mod tests {
         memory.set_entry(pt, idx[3], PageTableEntry::new(0x50_0000, RNX));
         assert_eq!(
             RootValidator::with_default_budget().validate(root, &memory),
-            Err(RootValidationError::LeafOutsidePlannedRegion { virtual_address: gap })
+            Err(RootValidationError::LeafOutsidePlannedRegion {
+                virtual_address: gap
+            })
         );
     }
 
