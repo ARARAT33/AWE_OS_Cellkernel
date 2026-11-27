@@ -102,6 +102,17 @@ pub fn kernel_entry(info: &BootInfo) -> KernelBootStatus {
     ))]
     crate::memory::table_arena::boot_kernel_root_probe(&mut frames);
 
+    // CR3/TLB activation-contract probe (kernel-selftest builds only):
+    // validates the live bootstrap root against the merged activation
+    // contract and proves the contract structurally blocks a CR3 switch
+    // from the identity image. No CR3 write occurs.
+    #[cfg(all(
+        feature = "kernel-selftest",
+        target_arch = "x86_64",
+        target_os = "none"
+    ))]
+    crate::memory::table_arena::boot_cr3_contract_probe();
+
     if frames.allocate().is_none() {
         return KernelBootStatus::NoUsableMemory;
     }
