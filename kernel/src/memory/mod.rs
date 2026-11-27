@@ -15,6 +15,7 @@ pub mod paging;
 pub mod physical;
 pub mod physical_tables;
 pub mod region;
+pub mod root_validation;
 pub mod table_arena;
 pub mod table_frames;
 pub mod user_copy;
@@ -56,6 +57,10 @@ pub use physical_tables::{
     PhysicalTablePool,
 };
 pub use region::{Region, RegionKind};
+pub use root_validation::{
+    DEFAULT_ROOT_VALIDATION_TABLE_BUDGET, MAX_ROOT_VALIDATION_TABLES, RootValidationError,
+    RootValidationReport, RootValidator,
+};
 pub use table_arena::{
     BOOT_TABLE_ARENA_FRAMES, TableArena, TableArenaError, TableArenaReserveError,
     reserve_table_arena,
